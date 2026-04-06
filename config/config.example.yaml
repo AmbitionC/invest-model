@@ -1,0 +1,80 @@
+# invest-model 配置文件
+
+# 数据源配置
+data:
+  sources:
+    tushare:
+      enabled: true
+      api_token: "${TUSHARE_TOKEN}"  # 从环境变量读取
+      retry_times: 3
+      retry_delay: 1
+    
+    akshare:
+      enabled: true
+      retry_times: 3
+      retry_delay: 1
+  
+  storage:
+    db_path: "./data/invest.db"
+    backup_enabled: true
+    backup_dir: "./data/backups"
+  
+  cache:
+    enabled: true
+    cache_dir: "./data/cache"
+    ttl_hours: 24
+  
+  update_schedule:
+    stock_daily: "15:30"
+    etf_daily: "15:30"
+    fundamentals: "quarterly"
+    holder_reduce: "daily"
+
+# 因子配置
+factors:
+  technical:
+    weight: 0.30
+    lookback_days: 250
+    sub_factors:
+      bollinger: 0.05
+      macd: 0.05
+      rsi: 0.05
+      momentum: 0.05
+      volume: 0.05
+      volatility: 0.05
+      deviation: 0.05
+  
+  fundamental:
+    weight: 0.40
+    lookback_years: 5
+    sub_factors:
+      valuation: 0.15
+      growth: 0.15
+      profitability: 0.10
+  
+  event:
+    weight: 0.30
+    sub_factors:
+      holder_reduce: 0.15
+      lockup_release: 0.10
+
+# 信号配置
+signals:
+  thresholds:
+    strong_buy: 0.75
+    buy: 0.65
+    watch_upper: 0.55
+    watch_lower: 0.45
+    sell: 0.35
+    strong_sell: 0.0
+  
+  filters:
+    min_confidence: 0.6
+    cooldown_days: 15
+    max_position: 0.2
+
+# 日志配置
+logging:
+  level: INFO
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
+  file: "./logs/invest.log"
