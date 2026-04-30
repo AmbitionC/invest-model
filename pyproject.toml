@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "invest-model"
+version = "0.2.0"
+description = "A股量化交易系统 - 数据层"
+requires-python = ">=3.10"
+dependencies = [
+    "tushare>=1.2.89",
+    "baostock>=0.8.8",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "sqlalchemy>=2.0.0",
+    "pymysql>=1.1.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+    "loguru>=0.7.0",
+    "plotly>=5.14.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4.0", "jupyter>=1.0.0", "notebook>=7.0.0", "ipywidgets>=8.0.0"]
+
+[tool.setuptools.packages.find]
+include = ["invest_model*"]

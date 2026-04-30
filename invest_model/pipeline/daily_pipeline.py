@@ -1,0 +1,289 @@
+"""
+每日增量更新管线
+
+支持两个时段：
+  - morning  (早盘后 11:35)：行情快照 + 实时数据
+  - afternoon(午盘后 15:05)：全量增量 + 财务/事件 + 校验
+
+使用方式：
+    python3 -m invest_model.pipeline.daily_pipeline              # 完整管线
+    python3 -m invest_model.pipeline.daily_pipeline morning      # 早盘管线
+    python3 -m invest_model.pipeline.daily_pipeline afternoon    # 午盘管线
+
+cron 配置：
+    35 11 * * 1-5  cd /home/admin/Code/invest-journey/invest-model && python3 -m invest_model.pipeline.daily_pipeline morning   >> logs/cron.log 2>&1
+     5 15 * * 1-5  cd /home/admin/Code/invest-journey/invest-model && python3 -m invest_model.pipeline.daily_pipeline afternoon >> logs/cron.log 2>&1
+"""
+
+import sys
+import time
+from datetime import datetime
+
+from invest_model.config import load_config
+from invest_model.db import get_engine
+from invest_model.logger import get_logger
+from invest_model.sources.tushare_client import TushareClient
+from invest_model.collectors.calendar_collector import CalendarCollector
+from invest_model.collectors.stock_list_collector import StockListCollector
+from invest_model.collectors.stock_daily_collector import StockDailyCollector
+from invest_model.collectors.etf_collector import ETFCollector
+from invest_model.collectors.fundamental_collector import FundamentalCollector
+from invest_model.collectors.event_collector import EventCollector
+from invest_model.collectors.market_collector import MarketCollector
+from invest_model.collectors.technical_collector import TechnicalCollector
+from invest_model.repositories.base import BaseRepository
+from invest_model.repositories.stock_pool_repo import StockPoolRepository
+from invest_model.validators.data_validator import DataValidator
+
+logger = get_logger()
+
+# ── 两个时段各自执行的步骤 ──
+# morning:   早盘收盘后，拉行情快照（日线/指数此时为半日数据，午盘会覆盖更新）
+# afternoon: 午盘收盘后，拉完整日数据 + 财务/事件/融资融券 + 校验
+MORNING_STEPS = [
+    "calendar",
+    "stock_daily",
+    "etf_daily",
+    "index_daily",
+]
+
+AFTERNOON_STEPS = [
+    "calendar",
+    "stock_list",
+    "stock_daily",
+    "etf_daily",
+    "index_daily",
+    "daily_basic",
+    "technical",
+    "margin",
+    "cashflow",
+    "holder_trade",
+    "holder_count",
+    "signal_generation",
+    "validation",
+]
+
+
+class DailyPipeline:
+    """每日增量更新管线"""
+
+    def __init__(self):
+        self.engine = get_engine()
+        self.source = TushareClient()
+        self.pool_repo = StockPoolRepository(self.engine)
+        self._base_repo = BaseRepository(self.engine)
+
+        self._step_registry = {
+            "calendar":          ("交易日历",     self._sync_calendar),
+            "stock_list":        ("股票列表",     self._sync_stock_list),
+            "stock_daily":       ("个股日线",     self._sync_stock_daily),
+            "etf_daily":         ("ETF日线",      self._sync_etf_daily),
+            "index_daily":       ("指数日线",     self._sync_index_daily),
+            "daily_basic":       ("每日估值",     self._sync_daily_basic),
+            "technical":         ("技术指标",     self._sync_technical),
+            "margin":            ("融资融券",     self._sync_margin),
+            "cashflow":          ("资金流向",     self._sync_cashflow),
+            "holder_trade":      ("股东增减持",   self._sync_holder_trade),
+            "holder_count":      ("股东户数",     self._sync_holder_count),
+            "signal_generation": ("综合评分",     self._run_signal_generation),
+            "validation":        ("数据校验",     self._run_validation),
+        }
+
+    def run(self, session: str = "full") -> dict:
+        """
+        运行管线。
+
+        Args:
+            session: "morning" / "afternoon" / "full"（全量）
+        """
+        if session == "morning":
+            steps = MORNING_STEPS
+        elif session == "afternoon":
+            steps = AFTERNOON_STEPS
+        else:
+            steps = list(self._step_registry.keys())
+
+        start_time = time.time()
+        results = {}
+
+        logger.info("=" * 60)
+        logger.info(f"每日管线启动 [{session}]: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"执行步骤: {steps}")
+        logger.info("=" * 60)
+
+        for key in steps:
+            if key not in self._step_registry:
+                logger.warning(f"未知步骤: {key}, 跳过")
+                continue
+            label, func = self._step_registry[key]
+            results[key] = self._run_step(label, func)
+
+        elapsed = time.time() - start_time
+        logger.info("=" * 60)
+        logger.info(f"每日管线完成 [{session}]，耗时 {elapsed:.1f}s")
+        for name, status in results.items():
+            logger.info(f"  {name}: {status}")
+        logger.info("=" * 60)
+
+        return results
+
+    def _run_step(self, name: str, func) -> str:
+        """执行单个步骤，捕获异常"""
+        try:
+            logger.info(f"--- [{name}] 开始 ---")
+            result = func()
+            logger.info(f"--- [{name}] 完成: {result} ---")
+            return f"OK ({result})"
+        except Exception as e:
+            logger.error(f"--- [{name}] 失败: {e} ---")
+            return f"FAILED ({e})"
+
+    # ── 各步骤实现 ──
+
+    def _sync_calendar(self):
+        c = CalendarCollector(self.source, self.engine)
+        return c.collect()
+
+    def _sync_stock_list(self):
+        c = StockListCollector(self.source, self.engine)
+        stocks = c.collect_stock_list()
+        etfs = c.collect_etf_list()
+        return f"stocks={len(stocks)}, etfs={len(etfs)}"
+
+    def _get_all_tracked_stock_codes(self) -> list[str]:
+        """获取需要维护日线数据的完整股票列表：pool 中的 + stock_daily 中已有数据的。"""
+        pool_codes = set(self.pool_repo.get_pool_codes("core"))
+        existing = self._base_repo.read_sql(
+            "SELECT DISTINCT code FROM stock_daily"
+        )
+        all_codes = pool_codes | set(existing["code"].tolist())
+        return sorted(all_codes)
+
+    def _sync_stock_daily(self):
+        codes = self._get_all_tracked_stock_codes()
+        if not codes:
+            return "无个股标的"
+        c = StockDailyCollector(self.source, self.engine)
+        results = c.collect_incremental(codes)
+        total = sum(v for v in results.values() if v > 0)
+        return f"{len(codes)} 只, 新增 {total} 条"
+
+    def _sync_etf_daily(self):
+        codes = self.pool_repo.get_pool_codes("etf")
+        if not codes:
+            return "无ETF标的"
+        c = ETFCollector(self.source, self.engine)
+        results = c.collect_daily_incremental(codes)
+        total = sum(v for v in results.values() if v > 0)
+        return f"{len(codes)} 只, 新增 {total} 条"
+
+    def _sync_index_daily(self):
+        c = MarketCollector(self.source, self.engine)
+        results = c.collect_index_incremental()
+        total = sum(v for v in results.values() if v > 0)
+        return f"{len(results)} 指数, 新增 {total} 条"
+
+    def _sync_daily_basic(self):
+        c = FundamentalCollector(self.source, self.engine)
+        return c.collect_daily_basic_incremental()
+
+    def _sync_technical(self):
+        codes = self._get_all_tracked_stock_codes()
+        if not codes:
+            return "无个股标的"
+        c = TechnicalCollector(engine=self.engine)
+        results = c.collect_incremental(codes)
+        total = sum(v for v in results.values() if v > 0)
+        return f"{len(codes)} 只, 新增 {total} 条"
+
+    def _sync_margin(self):
+        c = MarketCollector(self.source, self.engine)
+        return c.collect_margin_incremental()
+
+    def _sync_cashflow(self):
+        codes = self.pool_repo.get_pool_codes("core")
+        if not codes:
+            return "无标的"
+        c = FundamentalCollector(self.source, self.engine)
+        total = c.collect_cashflow_incremental(codes)
+        return f"{len(codes)} 只, 新增 {total} 条"
+
+    def _sync_holder_trade(self):
+        codes = self.pool_repo.get_pool_codes("core")
+        if not codes:
+            return "无标的"
+        c = EventCollector(self.source, self.engine)
+        return c.collect_holder_trade(codes)
+
+    def _sync_holder_count(self):
+        codes = self.pool_repo.get_pool_codes("core")
+        if not codes:
+            return "无标的"
+        c = EventCollector(self.source, self.engine)
+        return c.collect_holder_count(codes)
+
+    def _run_validation(self):
+        codes = self.pool_repo.get_pool_codes("core")
+        if not codes:
+            return "无标的"
+        v = DataValidator(self.engine)
+        report = v.validate_stock_daily(codes)
+        return f"checks={report.total_checks}, passed={report.passed}, warnings={report.warnings}"
+
+    def _run_signal_generation(self):
+        """生成综合评分 + 逐票操作建议并落库。"""
+        from invest_model.repositories.stock_daily_repo import StockDailyRepository
+        from invest_model.scoring import (
+            CompositeScorer,
+            save_composite_scores,
+            save_signal_snapshots,
+        )
+        from invest_model.advisor import StockAdvisor
+        from invest_model.advisor.persistence import save_advisor_signals
+
+        codes = self.pool_repo.get_pool_codes("core")
+        if not codes:
+            return "无标的"
+
+        daily_repo = StockDailyRepository(self.engine)
+        latest_dates = [
+            d for d in (daily_repo.get_latest_date(code=c) for c in codes) if d
+        ]
+        if not latest_dates:
+            return "无日线数据"
+        trade_date = max(latest_dates)
+
+        # 1) 综合评分（保留原有落库逻辑）
+        scorer = CompositeScorer(self.engine)
+        df, snapshots = scorer.score_batch(codes, trade_date)
+        n_sigs = 0
+        n_comp = 0
+        if not df.empty:
+            n_sigs = save_signal_snapshots(self.engine, snapshots)
+            n_comp = save_composite_scores(self.engine, df)
+
+        # 2) 逐票操作建议
+        pool_df = self.pool_repo.get_pool("core")
+        code_name_map = dict(zip(pool_df["code"], pool_df["name"]))
+        advisor = StockAdvisor(self.engine)
+        signals = advisor.advise_batch(codes, trade_date, code_name_map)
+        n_adv = save_advisor_signals(self.engine, signals)
+
+        return (
+            f"date={trade_date}, codes={len(codes)}, "
+            f"signals={n_sigs}, composite={n_comp}, advisor={n_adv}"
+        )
+
+
+def main():
+    session = sys.argv[1] if len(sys.argv) > 1 else "full"
+    if session not in ("morning", "afternoon", "full"):
+        print(f"用法: python3 -m invest_model.pipeline.daily_pipeline [morning|afternoon|full]")
+        sys.exit(1)
+
+    pipeline = DailyPipeline()
+    pipeline.run(session)
+
+
+if __name__ == "__main__":
+    main()

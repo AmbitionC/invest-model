@@ -1,80 +1,55 @@
-# invest-model 配置文件
+# invest-model 数据层配置
 
-# 数据源配置
-data:
-  sources:
-    tushare:
-      enabled: true
-      api_token: "${TUSHARE_TOKEN}"  # 从环境变量读取
-      retry_times: 3
-      retry_delay: 1
-    
-    akshare:
-      enabled: true
-      retry_times: 3
-      retry_delay: 1
-  
-  storage:
-    db_path: "./data/invest.db"
-    backup_enabled: true
-    backup_dir: "./data/backups"
-  
-  cache:
+# 数据源
+sources:
+  tushare:
     enabled: true
-    cache_dir: "./data/cache"
-    ttl_hours: 24
-  
-  update_schedule:
-    stock_daily: "15:30"
-    etf_daily: "15:30"
-    fundamentals: "quarterly"
-    holder_reduce: "daily"
+    retry_times: 3
+    retry_delay: 2
+    rate_limit_per_min: 480
+    # 与 tushare.pro 文档一致的数据服务基地址；留空则走库默认 HTTPS 接口。
+    # 若报「token不对」而 token 无误，可设为文档给出的镜像，或由环境变量 TUSHARE_HTTP_URL 覆盖。
+    http_url: "http://118.89.66.41:8010/"
+  baostock:
+    enabled: true
+    retry_times: 3
 
-# 因子配置
-factors:
-  technical:
-    weight: 0.30
-    lookback_days: 250
-    sub_factors:
-      bollinger: 0.05
-      macd: 0.05
-      rsi: 0.05
-      momentum: 0.05
-      volume: 0.05
-      volatility: 0.05
-      deviation: 0.05
-  
-  fundamental:
-    weight: 0.40
-    lookback_years: 5
-    sub_factors:
-      valuation: 0.15
-      growth: 0.15
-      profitability: 0.10
-  
-  event:
-    weight: 0.30
-    sub_factors:
-      holder_reduce: 0.15
-      lockup_release: 0.10
+# 数据库（连接信息从 .env 读取）
+database:
+  pool_size: 5
+  max_overflow: 10
+  echo: false
 
-# 信号配置
-signals:
-  thresholds:
-    strong_buy: 0.75
-    buy: 0.65
-    watch_upper: 0.55
-    watch_lower: 0.45
-    sell: 0.35
-    strong_sell: 0.0
-  
-  filters:
-    min_confidence: 0.6
-    cooldown_days: 15
-    max_position: 0.2
+# 采集配置
+collection:
+  history_years: 5
+  batch_size: 50
+  schedule:
+    morning: "11:35"     # 早盘收盘后：行情快照（日线/指数/ETF）
+    afternoon: "15:05"   # 午盘收盘后：全量增量 + 财务/事件 + 校验
 
-# 日志配置
+# 数据校验
+validation:
+  max_pct_chg: 22.0
+  min_volume_warn: 100
+  max_missing_days: 5
+  check_continuity: true
+
+# 日志
 logging:
   level: INFO
-  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
-  file: "./logs/invest.log"
+  dir: ./logs
+
+# 综合评分
+scoring:
+  category_weights:
+    technical: 0.45
+    fundamental: 0.15
+    money_flow: 0.25
+    sentiment: 0.15
+
+# 回测
+backtest:
+  default_rebalance_days: 5
+  default_top_k: 10
+  universe: core   # 对应 stock_pool.pool_group
