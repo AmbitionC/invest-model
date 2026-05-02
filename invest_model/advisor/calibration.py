@@ -98,8 +98,8 @@ def calibrate_batch(
 def find_threshold_for_frequency(
     profile: CalibrationProfile,
     target_actions_per_year: int = 17,
-    consistency_bonus_avg: float = 12.0,
-    trigger_bonus_avg: float = 5.0,
+    consistency_bonus_avg: float = 18.0,
+    trigger_bonus_avg: float = 4.0,
     base_max: float = 60.0,
 ) -> int:
     """根据目标出手频率反推 confidence 阈值。
@@ -115,21 +115,16 @@ def find_threshold_for_frequency(
 
     avg_bonus = consistency_bonus_avg + trigger_bonus_avg
 
-    # 对每个候选阈值，计算有多少天 confidence >= threshold
+    # 预计算所有 estimated confidence
+    arr = np.array(profile.abs_values)
+    pct_ranks = np.searchsorted(arr, arr, side="right") / len(arr)
+    estimated_confidences = pct_ranks * base_max + avg_bonus
+
     best_threshold = 60
     best_diff = float("inf")
 
-    for threshold in range(45, 86, 5):
-        count = 0
-        for abs_c in profile.abs_values:
-            pct_rank = float(np.searchsorted(
-                np.array(profile.abs_values), abs_c, side="right"
-            ) / len(profile.abs_values))
-            base = pct_rank * base_max
-            estimated_confidence = base + avg_bonus
-            if estimated_confidence >= threshold:
-                count += 1
-
+    for threshold in range(50, 96):
+        count = int(np.sum(estimated_confidences >= threshold))
         actions_per_year = count / years if years > 0 else 0
         diff = abs(actions_per_year - target_actions_per_year)
         if diff < best_diff:
