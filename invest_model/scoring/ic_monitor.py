@@ -223,6 +223,43 @@ class ICMonitor:
         report.rolling_ic = rolling_df
         return report
 
+    def check_health(
+        self,
+        codes: list[str],
+        version: str = "v1_oos",
+        window: int = 30,
+        ic_warn_threshold: float = 0.03,
+    ) -> dict[str, str]:
+        """检查模型健康状态，返回 {code: "ok" | "degraded" | "missing"}。
+
+        从 ml_model_registry 读取 cv_avg_ic；低于 ic_warn_threshold 视为 degraded。
+        window 参数保留作未来接入滚动 OOS IC 时使用。
+        """
+        from invest_model.ml.persistence import list_registry
+
+        result: dict[str, str] = {}
+        if not codes:
+            return result
+
+        try:
+            registry = list_registry(self.engine, codes=codes, version=version)
+        except Exception as e:
+            logger.warning(f"[IC监控] 读取模型注册表失败: {e}")
+            return {code: "missing" for code in codes}
+
+        for code in codes:
+            if registry.empty:
+                result[code] = "missing"
+                continue
+            rows = registry[registry["code"] == code]
+            if rows.empty:
+                result[code] = "missing"
+                continue
+            avg_ic = float(rows["cv_avg_ic"].mean())
+            result[code] = "ok" if avg_ic >= ic_warn_threshold else "degraded"
+
+        return result
+
     @staticmethod
     def _compute_forward_returns(
         daily_df: pd.DataFrame, forward_days: int

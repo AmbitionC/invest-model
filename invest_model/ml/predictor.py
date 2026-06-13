@@ -115,12 +115,27 @@ class MLPredictor:
 
     # ── horizon 加权 ───────────────────────────────────
 
+    def _model_quality_score(self, cv_avg_ic: float, cv_hit_rate: float) -> float:
+        """质量门控：同时满足 IC 和方向命中率才有效。
+
+        - IC ≤ 0 → 无预测力，返回 0
+        - hit_rate < 0.49 且 IC > 0 → 方向系统性反转，返回 0
+        - 通过门控 → 返回原始 IC（保持权重量级不变，floor 逻辑在调用处）
+        """
+        if cv_avg_ic <= 0.0:
+            return 0.0
+        if cv_hit_rate < 0.49:
+            return 0.0
+        return cv_avg_ic
+
     def _effective_weights(
         self, code: str, horizons
     ) -> dict[int, float]:
         """根据 ic_weighting 配置返回最终 horizon 权重 dict。
 
-        ic_weighting=True：用 max(0, cv_avg_ic - ic_floor) 作为权重；若全 0 则退回静态权重。
+        ic_weighting=True：用 max(0, quality_score - ic_floor) 作为权重；
+          quality_score 为 0 当 IC ≤ 0 或方向命中率 < 49%（反转信号）。
+          若全 horizon 权重均为 0，返回零权重（不产生信号），而非回退静态权重。
         ic_weighting=False：使用 self.horizon_weights。
         """
         horizons = list(horizons)
@@ -132,10 +147,12 @@ class MLPredictor:
         for h in horizons:
             art = models.get(h)
             ic = float(getattr(art, "cv_avg_ic", 0.0) or 0.0) if art is not None else 0.0
-            ic_w[h] = max(0.0, ic - self.ic_floor)
+            hit = float(getattr(art, "cv_hit_rate", 0.5) or 0.5) if art is not None else 0.5
+            effective_ic = self._model_quality_score(ic, hit)
+            ic_w[h] = max(0.0, effective_ic - self.ic_floor)
 
         if sum(ic_w.values()) < 1e-9:
-            return {h: self.horizon_weights.get(h, 0.0) for h in horizons}
+            return {h: 0.0 for h in horizons}
         return ic_w
 
     def effective_weights_for(self, code: str) -> dict[int, float]:

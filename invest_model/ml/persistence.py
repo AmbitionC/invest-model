@@ -58,6 +58,7 @@ class ModelArtifact:
     feature_cols: list[str]
     train_end: str
     cv_avg_ic: float = 0.0
+    cv_hit_rate: float = 0.5
 
 
 # ── 路径 ──────────────────────────────────────────
@@ -253,6 +254,7 @@ def load_artifact(
         feature_cols=feature_cols,
         train_end=str(row.get("train_end", "")),
         cv_avg_ic=float(row.get("cv_avg_ic", 0.0) or 0.0),
+        cv_hit_rate=float(row.get("cv_hit_rate", 0.5) or 0.5),
     )
 
 

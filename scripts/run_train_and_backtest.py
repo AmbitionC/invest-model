@@ -34,7 +34,9 @@ pool_repo = StockPoolRepository(engine)
 _core = pool_repo.get_pool('core')
 _etf = pool_repo.get_pool('etf')
 all_pool = pd.concat([_core, _etf], ignore_index=True)
+# 严格限定为 core/etf 组，防止孤儿标的（曾入池后被移除）污染训练集
 all_codes = all_pool['code'].tolist()
+_valid_pool_codes = set(all_codes)
 code_name_map = dict(zip(all_pool['code'], all_pool['name']))
 
 TRAIN_START = '20210101'
@@ -92,6 +94,9 @@ etf_repo = ETFRepository(engine)
 
 stock_data = {}
 for code in all_codes:
+    if code not in _valid_pool_codes:
+        print(f'  [skip] {code}: 不在当前 core/etf 池中，跳过（幽灵标的防护）')
+        continue
     X = builder.build_history(code, TRAIN_START, TRAIN_END)
     if X.empty:
         print(f'  [skip] {code}: 特征矩阵为空')

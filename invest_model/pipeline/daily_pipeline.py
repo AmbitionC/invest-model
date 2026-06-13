@@ -61,6 +61,7 @@ AFTERNOON_STEPS = [
     "holder_trade",
     "holder_count",
     "signal_generation",
+    "model_health_check",
     "validation",
 ]
 
@@ -88,6 +89,7 @@ class DailyPipeline:
             "holder_trade":      ("股东增减持",   self._sync_holder_trade),
             "holder_count":      ("股东户数",     self._sync_holder_count),
             "signal_generation": ("综合评分",     self._run_signal_generation),
+            "model_health_check":("模型健康检查", self._check_model_health),
             "validation":        ("数据校验",     self._run_validation),
         }
 
@@ -227,6 +229,31 @@ class DailyPipeline:
             return "无标的"
         c = EventCollector(self.source, self.engine)
         return c.collect_holder_count(codes)
+
+    def _check_model_health(self):
+        """检查 ML 模型 OOS IC，低于阈值发出警告。"""
+        from invest_model.scoring.ic_monitor import ICMonitor
+
+        codes = self.pool_repo.get_pool_codes("core")
+        if not codes:
+            return "无标的"
+
+        monitor = ICMonitor(self.engine)
+        report = monitor.check_health(
+            codes=codes,
+            version="v1_oos",
+            ic_warn_threshold=0.03,
+        )
+        degraded = [c for c, s in report.items() if s == "degraded"]
+        missing = [c for c, s in report.items() if s == "missing"]
+        for code in degraded:
+            logger.warning(f"[IC监控] {code} 模型质量下降，rolling cv_avg_ic < 0.03，建议重训")
+        for code in missing:
+            logger.warning(f"[IC监控] {code} 无已训练模型（version=v1_oos），建议训练")
+        return (
+            f"ok={len(codes) - len(degraded) - len(missing)}, "
+            f"degraded={len(degraded)}, missing={len(missing)}"
+        )
 
     def _run_validation(self):
         codes = self.pool_repo.get_pool_codes("core")
