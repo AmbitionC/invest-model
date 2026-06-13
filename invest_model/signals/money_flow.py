@@ -1,11 +1,13 @@
 """资金流信号生成器。
 
-三类信号：
+四类信号：
     main_inflow_5d    (buy_lg+buy_elg-sell_lg-sell_elg) 5 日累计 / 流通市值
     elg_ratio         超大单近 5 日净占比
     margin_delta_5d   融资余额 5 日变化率
+    northbound_net_5d 北向资金 5 日累计净流入（沪股通+深股通，亿元）
 
 数据依赖：stock_cashflow（moneyflow） + stock_margin + stock_fundamental（取流通市值）
+         + stock_northbound_flow（沪深港通资金流向）
 scope: history（需拿最近 5~10 个交易日的历史窗口）
 
 说明：
@@ -84,7 +86,7 @@ class MoneyFlowSignalGenerator(CategorizedSignalGenerator):
     scope = "history"
     required_tables = ("stock_cashflow", "stock_margin", "stock_fundamental")
 
-    SIGNAL_NAMES = ("main_inflow_5d", "elg_ratio", "margin_delta_5d")
+    SIGNAL_NAMES = ("main_inflow_5d", "elg_ratio", "margin_delta_5d", "northbound_net_5d")
 
     def required_columns(self) -> list[str]:
         return [
@@ -105,12 +107,14 @@ class MoneyFlowSignalGenerator(CategorizedSignalGenerator):
             self._main_inflow(data),
             self._elg_ratio(data),
             self._margin_delta(data),
+            _neutral("northbound_net_5d", "北向资金需通过 context 加载", {}),
         ]
 
     def generate_for_date(self, code: str, trade_date: str, context: dict) -> list[Signal]:
         cf_map: dict[str, pd.DataFrame] = context.get("cashflow_history", {}) or {}
         margin_map: dict[str, pd.DataFrame] = context.get("margin_history", {}) or {}
         circ_mv_map: dict[str, float] = context.get("circ_mv", {}) or {}
+        nb_df: pd.DataFrame = context.get("northbound_history", pd.DataFrame())
 
         cf = cf_map.get(code)
         margin = margin_map.get(code)
@@ -118,22 +122,28 @@ class MoneyFlowSignalGenerator(CategorizedSignalGenerator):
 
         has_any = (cf is not None and not cf.empty) or (margin is not None and not margin.empty)
         if not has_any:
-            return [_neutral(n, f"{n} 资金流数据缺失", {}) for n in self.SIGNAL_NAMES]
-
-        df_pieces = []
-        if cf is not None and not cf.empty:
-            df_pieces.append(cf.set_index("trade_date"))
-        if margin is not None and not margin.empty:
-            df_pieces.append(margin.set_index("trade_date")[["rzye"]])
-        if df_pieces:
-            merged = pd.concat(df_pieces, axis=1).sort_index()
-            merged = merged.reset_index().rename(columns={"index": "trade_date"})
+            signals = [_neutral(n, f"{n} 资金流数据缺失", {}) for n in ("main_inflow_5d", "elg_ratio", "margin_delta_5d")]
         else:
-            merged = pd.DataFrame()
-        if circ_mv is not None and np.isfinite(circ_mv):
-            merged["circ_mv"] = circ_mv
+            df_pieces = []
+            if cf is not None and not cf.empty:
+                df_pieces.append(cf.set_index("trade_date"))
+            if margin is not None and not margin.empty:
+                df_pieces.append(margin.set_index("trade_date")[["rzye"]])
+            if df_pieces:
+                merged = pd.concat(df_pieces, axis=1).sort_index()
+                merged = merged.reset_index().rename(columns={"index": "trade_date"})
+            else:
+                merged = pd.DataFrame()
+            if circ_mv is not None and np.isfinite(circ_mv):
+                merged["circ_mv"] = circ_mv
+            signals = [
+                self._main_inflow(merged),
+                self._elg_ratio(merged),
+                self._margin_delta(merged),
+            ]
 
-        return self.generate(code, merged)
+        signals.append(self._northbound_signal(nb_df))
+        return signals
 
     # ── 单信号实现 ──────────────────────────────────────────
 
@@ -254,6 +264,54 @@ class MoneyFlowSignalGenerator(CategorizedSignalGenerator):
             indicator_values={"rzye_latest": latest, "rzye_delta_5d": float(delta)},
         )
 
+    @staticmethod
+    def _northbound_signal(nb_df: pd.DataFrame) -> Signal:
+        """北向资金 5 日累计净流入信号。
+
+        north_money 字段来自 tushare moneyflow_hsgt，单位为万元。
+        内部转换为亿元后做阈值判断。
+        这是一个市场级别信号（非个股级别），对全部股票相同。
+        """
+        if nb_df is None or nb_df.empty or "north_money" not in nb_df.columns:
+            return _neutral("northbound_net_5d", "北向资金数据缺失", {})
+
+        s = pd.to_numeric(nb_df["north_money"], errors="coerce").dropna()
+        if len(s) < 2:
+            return _neutral("northbound_net_5d", "北向资金窗口不足", {})
+
+        # 万元 → 亿元
+        s_yi = s / 10000.0
+        tail = s_yi.tail(5)
+        net_5d = float(tail.sum())
+        latest = float(s_yi.iloc[-1])
+
+        # 阈值设计（亿元）：5日合计 >100亿 强看多, <-100亿 强看空
+        thresholds = [
+            (-200.0, -0.8), (-100.0, -0.5), (-30.0, -0.2),
+            (30.0, 0.0), (100.0, 0.3), (200.0, 0.6), (1e6, 0.9),
+        ]
+        score = value_to_score(net_5d, thresholds, default=0.0)
+
+        if net_5d > 100:
+            label = f"北向资金 5 日累计净流入 {net_5d:.1f} 亿，外资大幅加仓"
+        elif net_5d > 30:
+            label = f"北向资金 5 日小幅净流入 {net_5d:.1f} 亿"
+        elif net_5d < -100:
+            label = f"北向资金 5 日累计净流出 {-net_5d:.1f} 亿，外资撤离"
+        elif net_5d < -30:
+            label = f"北向资金 5 日小幅净流出 {-net_5d:.1f} 亿"
+        else:
+            label = f"北向资金 5 日流向平衡 ({net_5d:+.1f} 亿)"
+
+        return Signal(
+            name="northbound_net_5d",
+            direction=_direction_of(score),
+            score=score,
+            strength=score_to_strength(score),
+            label=label,
+            indicator_values={"north_net_5d_yi": net_5d, "north_latest_yi": latest},
+        )
+
 
 # ── 预加载函数 ──────────────────────────────────────────
 
@@ -326,10 +384,22 @@ def prepare_money_flow_context(
             if pd.notna(r["circ_mv"]):
                 circ_mv_map[r["code"]] = float(r["circ_mv"])
 
+    # 北向资金（市场级别，所有股票共享）
+    nb_df = base.read_sql(
+        """
+        SELECT trade_date, north_money
+        FROM stock_northbound_flow
+        WHERE trade_date BETWEEN :start AND :end
+        ORDER BY trade_date
+        """,
+        {"start": start, "end": trade_date},
+    )
+
     return {
         "cashflow_history": cf_map,
         "margin_history": margin_map,
         "circ_mv": circ_mv_map,
+        "northbound_history": nb_df,
     }
 
 

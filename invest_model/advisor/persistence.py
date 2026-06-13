@@ -1,17 +1,21 @@
-"""顾问信号 + 校准画像持久化。"""
+"""ML 顾问信号持久化。
+
+兼容旧 schema（保留 composite/tech_score 等列），同时通过 ALTER TABLE 增加 ML 字段：
+- target_position / current_position / delta_position
+- horizon_score / safety_margin / take_profit
+- pred_3d / pred_5d / pred_10d
+"""
 
 from __future__ import annotations
 
 import json
 from typing import Sequence
 
-import numpy as np
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from invest_model.advisor.advisor import AdvisorSignal
-from invest_model.advisor.calibration import CalibrationProfile
 from invest_model.repositories.base import BaseRepository
 from invest_model.logger import get_logger
 
@@ -33,6 +37,15 @@ CREATE TABLE IF NOT EXISTS stock_advisor_signal (
     sent_score DECIMAL(8,5),
     triggers JSON,
     attribution TEXT,
+    target_position DECIMAL(6,4),
+    current_position DECIMAL(6,4),
+    delta_position DECIMAL(6,4),
+    horizon_score DECIMAL(10,6),
+    safety_margin DECIMAL(6,4),
+    take_profit TINYINT DEFAULT 0,
+    pred_3d DECIMAL(10,6),
+    pred_5d DECIMAL(10,6),
+    pred_10d DECIMAL(10,6),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (code, trade_date),
     INDEX idx_trade_date (trade_date),
@@ -40,14 +53,40 @@ CREATE TABLE IF NOT EXISTS stock_advisor_signal (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """
 
+_ML_COLUMN_ALTERS: list[str] = [
+    "ALTER TABLE stock_advisor_signal ADD COLUMN target_position DECIMAL(6,4)",
+    "ALTER TABLE stock_advisor_signal ADD COLUMN current_position DECIMAL(6,4)",
+    "ALTER TABLE stock_advisor_signal ADD COLUMN delta_position DECIMAL(6,4)",
+    "ALTER TABLE stock_advisor_signal ADD COLUMN horizon_score DECIMAL(10,6)",
+    "ALTER TABLE stock_advisor_signal ADD COLUMN safety_margin DECIMAL(6,4)",
+    "ALTER TABLE stock_advisor_signal ADD COLUMN take_profit TINYINT DEFAULT 0",
+    "ALTER TABLE stock_advisor_signal ADD COLUMN pred_3d DECIMAL(10,6)",
+    "ALTER TABLE stock_advisor_signal ADD COLUMN pred_5d DECIMAL(10,6)",
+    "ALTER TABLE stock_advisor_signal ADD COLUMN pred_10d DECIMAL(10,6)",
+]
+
+
+def _safe_alter(engine: Engine) -> None:
+    """逐条 ALTER，忽略已存在错误。"""
+    for sql in _ML_COLUMN_ALTERS:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(sql))
+        except Exception as e:
+            msg = str(e)
+            if "Duplicate column name" in msg or "exists" in msg.lower():
+                continue
+            logger.debug(f"ALTER 跳过: {sql} ({msg[:100]})")
+
 
 def ensure_table(engine: Engine) -> None:
-    """确保 stock_advisor_signal 表存在，不存在则创建。"""
+    """确保 stock_advisor_signal 表存在，并补齐 ML 字段。"""
     try:
         with engine.begin() as conn:
             conn.execute(text(_CREATE_TABLE_SQL))
     except Exception as e:
         logger.warning(f"ensure_table 异常(可能表已存在): {e}")
+    _safe_alter(engine)
 
 
 def _table_exists(engine: Engine) -> bool:
@@ -78,6 +117,15 @@ def save_advisor_signals(engine: Engine, signals: Sequence[AdvisorSignal]) -> in
             "sent_score": s.sub_scores.get("sent_score", 0),
             "triggers": json.dumps(s.triggers, ensure_ascii=False),
             "attribution": s.attribution,
+            "target_position": s.target_position,
+            "current_position": s.current_position,
+            "delta_position": s.delta_position,
+            "horizon_score": s.horizon_score,
+            "safety_margin": s.safety_margin,
+            "take_profit": int(bool(s.take_profit)),
+            "pred_3d": s.sub_scores.get("pred_3d"),
+            "pred_5d": s.sub_scores.get("pred_5d"),
+            "pred_10d": s.sub_scores.get("pred_10d"),
         })
     df = pd.DataFrame(rows)
     repo = BaseRepository(engine)
@@ -128,90 +176,5 @@ def get_latest_advisor_signals(engine: Engine, trade_date: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-# ── 校准表 ──
-
-_CALIBRATION_TABLE = "stock_advisor_calibration"
-
-_CREATE_CALIBRATION_SQL = """
-CREATE TABLE IF NOT EXISTS stock_advisor_calibration (
-    code VARCHAR(16) NOT NULL,
-    calibrated_at VARCHAR(8) NOT NULL,
-    window_days INT,
-    composite_mean DECIMAL(8,5),
-    composite_std DECIMAL(8,5),
-    composite_p75 DECIMAL(8,5),
-    composite_p90 DECIMAL(8,5),
-    composite_p95 DECIMAL(8,5),
-    abs_composite_values JSON,
-    action_threshold INT DEFAULT 60,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (code)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-"""
-
-
-def ensure_calibration_table(engine: Engine) -> None:
-    try:
-        with engine.begin() as conn:
-            conn.execute(text(_CREATE_CALIBRATION_SQL))
-    except Exception:
-        pass
-
-
-def save_calibration_profiles(
-    engine: Engine, profiles: dict[str, CalibrationProfile]
-) -> int:
-    if not profiles:
-        return 0
-    ensure_calibration_table(engine)
-    rows = []
-    for code, p in profiles.items():
-        rows.append({
-            "code": p.code,
-            "calibrated_at": p.calibrated_at,
-            "window_days": p.window_days,
-            "composite_mean": p.composite_mean,
-            "composite_std": p.composite_std,
-            "composite_p75": p.composite_p75,
-            "composite_p90": p.composite_p90,
-            "composite_p95": p.composite_p95,
-            "abs_composite_values": json.dumps(
-                [round(v, 5) for v in p.abs_values]
-            ),
-            "action_threshold": p.action_threshold,
-        })
-    df = pd.DataFrame(rows)
-    repo = BaseRepository(engine)
-    return repo.upsert(_CALIBRATION_TABLE, df, unique_keys=["code"])
-
-
-def load_calibration_profiles(engine: Engine) -> dict[str, CalibrationProfile]:
-    ensure_calibration_table(engine)
-    base = BaseRepository(engine)
-    try:
-        df = base.read_sql(f"SELECT * FROM {_CALIBRATION_TABLE}", {})
-    except Exception:
-        return {}
-    if df.empty:
-        return {}
-
-    profiles: dict[str, CalibrationProfile] = {}
-    for _, row in df.iterrows():
-        abs_vals_raw = row.get("abs_composite_values", "[]")
-        if isinstance(abs_vals_raw, str):
-            abs_vals = json.loads(abs_vals_raw)
-        else:
-            abs_vals = []
-        profiles[row["code"]] = CalibrationProfile(
-            code=row["code"],
-            calibrated_at=str(row["calibrated_at"]),
-            window_days=int(row.get("window_days", 0)),
-            composite_mean=float(row.get("composite_mean", 0)),
-            composite_std=float(row.get("composite_std", 0)),
-            composite_p75=float(row.get("composite_p75", 0)),
-            composite_p90=float(row.get("composite_p90", 0)),
-            composite_p95=float(row.get("composite_p95", 0)),
-            abs_values=abs_vals,
-            action_threshold=int(row.get("action_threshold", 60)),
-        )
-    return profiles
+# 注：旧的 stock_advisor_calibration 表与 CalibrationProfile 已废弃，
+# 由 ml_model_registry + xgb_*.json 模型文件取代（见 invest_model/ml/persistence.py）。

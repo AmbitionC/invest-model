@@ -115,6 +115,20 @@ DDL_STATEMENTS: dict[str, str] = {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='资金流向（moneyflow）'
     """,
 
+    "stock_northbound_flow": """
+        CREATE TABLE IF NOT EXISTS stock_northbound_flow (
+            trade_date VARCHAR(8) NOT NULL,
+            ggt_ss DECIMAL(16,4) COMMENT '港股通(上海)净流入(亿)',
+            ggt_sz DECIMAL(16,4) COMMENT '港股通(深圳)净流入(亿)',
+            hgt DECIMAL(16,4) COMMENT '沪股通净流入(亿)',
+            sgt DECIMAL(16,4) COMMENT '深股通净流入(亿)',
+            north_money DECIMAL(16,4) COMMENT '北向合计净流入(亿)',
+            south_money DECIMAL(16,4) COMMENT '南向合计净流入(亿)',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (trade_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='沪深港通每日资金流向'
+    """,
+
     "stock_holder_trade": """
         CREATE TABLE IF NOT EXISTS stock_holder_trade (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -290,6 +304,7 @@ DDL_STATEMENTS: dict[str, str] = {
             code VARCHAR(16) NOT NULL,
             trade_date VARCHAR(8) NOT NULL,
             tech_score DECIMAL(10,6),
+            tech_rev_score DECIMAL(10,6),
             fund_score DECIMAL(10,6),
             flow_score DECIMAL(10,6),
             sent_score DECIMAL(10,6),
@@ -382,7 +397,28 @@ DDL_STATEMENTS: dict[str, str] = {
             action_threshold INT DEFAULT 60,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (code)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='标的置信度校准画像'
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='[deprecated] 标的置信度校准画像（已被 ml_model_registry 替代）'
+    """,
+
+    "ml_model_registry": """
+        CREATE TABLE IF NOT EXISTS ml_model_registry (
+            code VARCHAR(16) NOT NULL,
+            horizon INT NOT NULL,
+            version VARCHAR(32) NOT NULL,
+            train_start VARCHAR(8) NOT NULL,
+            train_end VARCHAR(8) NOT NULL,
+            n_samples INT NOT NULL,
+            n_features INT NOT NULL,
+            feature_cols JSON,
+            cv_avg_ic DECIMAL(8,5),
+            cv_avg_rmse DECIMAL(8,5),
+            cv_hit_rate DECIMAL(6,4),
+            cv_metrics JSON,
+            model_path VARCHAR(255) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (code, horizon),
+            INDEX idx_version (version)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ML 模型注册表（XGBoost 多 horizon）'
     """,
 }
 

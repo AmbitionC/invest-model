@@ -29,7 +29,7 @@ class SignalRepository(BaseRepository):
     ]
     COMPOSITE_COLUMNS = [
         "code", "trade_date",
-        "tech_score", "fund_score", "flow_score", "sent_score",
+        "tech_score", "tech_rev_score", "fund_score", "flow_score", "sent_score",
         "composite", "rank_pct", "summary", "generated_at",
     ]
 

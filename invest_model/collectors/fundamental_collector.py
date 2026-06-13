@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta
 
+import pandas as pd
+
 from invest_model.collectors.base import BaseCollector, logger
 from invest_model.config import load_config
 from invest_model.repositories.calendar_repo import CalendarRepository
@@ -176,3 +178,72 @@ class FundamentalCollector(BaseCollector):
             f"资金流向增量完成: {len(codes)} 只, 共 {total} 条, 失败 {failed} 次"
         )
         return total
+
+    # ── 北向资金 ──────────────────────────────────────
+
+    def collect_northbound_flow(self, trade_dates: list[str]) -> int:
+        """按交易日拉取沪深港通资金流向"""
+        from invest_model.repositories.base import BaseRepository
+
+        base = BaseRepository(self.engine)
+        total = 0
+
+        for i, td in enumerate(trade_dates, 1):
+            try:
+                df = self.source.get_hsgt_flow(td)
+                if df is not None and not df.empty:
+                    n = base.upsert(
+                        "stock_northbound_flow", df,
+                        unique_keys=["trade_date"],
+                    )
+                    total += n
+            except Exception as e:
+                logger.warning(f"北向资金 {td} 失败: {e}")
+
+            if i % 20 == 0:
+                self._log_progress(i, len(trade_dates), "北向资金")
+
+        logger.info(f"北向资金采集完成: {len(trade_dates)} 天, 共 {total} 条")
+        return total
+
+    def collect_northbound_incremental(self) -> int:
+        """增量采集北向资金：找出缺失的交易日"""
+        from invest_model.repositories.base import BaseRepository
+
+        cal_repo = CalendarRepository(self.engine)
+        base = BaseRepository(self.engine)
+
+        latest_df = base.read_sql(
+            "SELECT MAX(trade_date) as max_date FROM stock_northbound_flow"
+        )
+        latest = (
+            latest_df["max_date"].iloc[0]
+            if not latest_df.empty and latest_df["max_date"].iloc[0]
+            else None
+        )
+
+        if latest is None:
+            start_dt = datetime.now() - timedelta(days=400)
+            start_date = start_dt.strftime("%Y%m%d")
+        else:
+            start_date = latest
+
+        end_date = datetime.now().strftime("%Y%m%d")
+        all_trade_dates = cal_repo.get_trade_dates(start_date, end_date)
+
+        if latest:
+            existing_df = base.read_sql(
+                "SELECT trade_date FROM stock_northbound_flow WHERE trade_date >= :s",
+                {"s": start_date},
+            )
+            existing_dates = set(existing_df["trade_date"].tolist())
+            missing = [d for d in all_trade_dates if d not in existing_dates]
+        else:
+            missing = all_trade_dates
+
+        if not missing:
+            logger.info("北向资金已是最新")
+            return 0
+
+        logger.info(f"北向资金缺失 {len(missing)} 天，开始增量采集")
+        return self.collect_northbound_flow(missing)

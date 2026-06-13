@@ -35,6 +35,9 @@ def _rate_limit(func):
 _TOKEN_ERROR_KEYWORDS = (
     "token不对", "token错误", "token无效", "请确认",
     "token invalid", "invalid token", "token error",
+    # tushare 返回 "token expired" / "token已过期" 时也走 token 错误分支，
+    # 避免被外层 _retry 当作普通异常重试 N 次再抛出（已过期重试不会成功）。
+    "token expired", "token已过期", "token expire", "expired token",
 )
 
 
@@ -59,9 +62,11 @@ def _retry(func):
             except Exception as e:
                 if _is_token_error(e):
                     raise RuntimeError(
-                        "Tushare Token 无效或未使用文档要求的接口地址：请核对 .env 中 TUSHARE_TOKEN，"
-                        "并在 config.yaml 的 sources.tushare.http_url 或环境变量 TUSHARE_HTTP_URL "
-                        "中配置与 tushare.pro 文档一致的 http 基地址（见官方示例）。"
+                        f"Tushare Token 无效/已过期或未使用文档要求的接口地址（原始报错: {e}）。"
+                        "请登录 https://tushare.pro → 用户中心 → Token，重新生成后写入 .env 的 "
+                        "TUSHARE_TOKEN；若 token 正确仍报错，请在 config.yaml 的 "
+                        "sources.tushare.http_url 或环境变量 TUSHARE_HTTP_URL 中配置与 tushare.pro "
+                        "文档一致的 http 基地址。"
                     ) from e
                 if attempt == retries:
                     logger.error(f"Tushare 调用失败（已重试 {retries} 次）: {e}")
@@ -108,9 +113,11 @@ class TushareClient(BaseSource):
         except Exception as e:
             if _is_token_error(e):
                 raise RuntimeError(
-                    "Tushare Token 校验失败：请登录 tushare.pro → 用户中心复制 Token 写入 .env；"
-                    "若 token 正确仍报错，请确认 config 中 sources.tushare.http_url 或 TUSHARE_HTTP_URL "
-                    "已按官网文档配置（部分环境须使用文档给出的 http 镜像地址）。"
+                    f"Tushare Token 校验失败（原始报错: {e}）。常见原因：\n"
+                    "  1. Token 已过期 → 登录 https://tushare.pro → 用户中心 → Token，重新生成后写入 .env\n"
+                    "  2. Token 错误 → 检查 .env 中 TUSHARE_TOKEN 是否被截断/带了引号/有多余空格\n"
+                    "  3. 接口地址不对 → 在 config.yaml 的 sources.tushare.http_url "
+                    "或环境变量 TUSHARE_HTTP_URL 中配置官方文档给出的 http 镜像地址"
                 ) from e
             raise
 
@@ -255,6 +262,26 @@ class TushareClient(BaseSource):
         """ETF 重仓股（fund_portfolio）"""
         df = self.pro.fund_portfolio(
             ts_code=code, end_date=report_date
+        )
+        if df is not None and not df.empty:
+            df = df.rename(columns={"ts_code": "code"})
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_hsgt_flow(self, trade_date: str) -> pd.DataFrame:
+        """沪深港通每日资金流向（北向+南向汇总）"""
+        df = self.pro.moneyflow_hsgt(trade_date=trade_date)
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_hsgt_top10(self, trade_date: str, market_type: str = "1") -> pd.DataFrame:
+        """沪深港通十大成交股（market_type: 1=沪股通 3=深股通）"""
+        df = self.pro.hsgt_top10(
+            trade_date=trade_date, market_type=market_type,
+            fields="trade_date,ts_code,name,close,change,rank,"
+                   "market_type,amount,net_amount,buy,sell"
         )
         if df is not None and not df.empty:
             df = df.rename(columns={"ts_code": "code"})

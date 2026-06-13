@@ -57,6 +57,7 @@ AFTERNOON_STEPS = [
     "technical",
     "margin",
     "cashflow",
+    "northbound",
     "holder_trade",
     "holder_count",
     "signal_generation",
@@ -83,6 +84,7 @@ class DailyPipeline:
             "technical":         ("技术指标",     self._sync_technical),
             "margin":            ("融资融券",     self._sync_margin),
             "cashflow":          ("资金流向",     self._sync_cashflow),
+            "northbound":        ("北向资金",     self._sync_northbound),
             "holder_trade":      ("股东增减持",   self._sync_holder_trade),
             "holder_count":      ("股东户数",     self._sync_holder_count),
             "signal_generation": ("综合评分",     self._run_signal_generation),
@@ -207,6 +209,10 @@ class DailyPipeline:
         c = FundamentalCollector(self.source, self.engine)
         total = c.collect_cashflow_incremental(codes)
         return f"{len(codes)} 只, 新增 {total} 条"
+
+    def _sync_northbound(self):
+        c = FundamentalCollector(self.source, self.engine)
+        return c.collect_northbound_incremental()
 
     def _sync_holder_trade(self):
         codes = self.pool_repo.get_pool_codes("core")

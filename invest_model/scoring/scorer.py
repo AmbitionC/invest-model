@@ -41,15 +41,17 @@ logger = get_logger()
 
 
 DEFAULT_CATEGORY_WEIGHTS: dict[str, float] = {
-    "technical": 0.45,
-    "fundamental": 0.15,
-    "money_flow": 0.25,
-    "sentiment": 0.15,
+    "tech_trend": 0.35,
+    "tech_reversal": 0.0,
+    "fundamental": 0.25,
+    "money_flow": 0.20,
+    "sentiment": 0.20,
 }
 
 
 CATEGORY_COLUMN: dict[str, str] = {
-    "technical": "tech_score",
+    "tech_trend": "tech_score",
+    "tech_reversal": "tech_rev_score",
     "fundamental": "fund_score",
     "money_flow": "flow_score",
     "sentiment": "sent_score",
@@ -286,19 +288,18 @@ class CompositeScorer:
 
     def _aggregate(self, signals: list[Signal]) -> tuple[dict[str, float], float]:
         cat_scores: dict[str, list[float]] = {c: [] for c in DEFAULT_CATEGORY_WEIGHTS.keys()}
-        cat_hit: dict[str, list[Signal]] = {c: [] for c in DEFAULT_CATEGORY_WEIGHTS.keys()}
 
         for sig in signals:
             cat = _category_of(sig)
             if cat in cat_scores:
+                # 跳过数据缺失的信号（score=0 且 label 含"缺失"）
+                if sig.score == 0.0 and "缺失" in (sig.label or ""):
+                    continue
                 cat_scores[cat].append(sig.score)
-                cat_hit[cat].append(sig)
 
         avg_per_cat: dict[str, float] = {}
         for cat, scores in cat_scores.items():
-            if cat == "technical" and cat_hit.get(cat):
-                avg_per_cat[cat] = _tech_grouped_average(cat_hit[cat])
-            elif scores:
+            if scores:
                 avg_per_cat[cat] = sum(scores) / len(scores)
             else:
                 avg_per_cat[cat] = 0.0
@@ -306,7 +307,7 @@ class CompositeScorer:
         weighted = 0.0
         total_w = 0.0
         for cat, w in self.weights.items():
-            if cat_hit.get(cat):
+            if w > 0 and cat_scores.get(cat):
                 weighted += avg_per_cat.get(cat, 0.0) * w
                 total_w += w
         composite = weighted / total_w if total_w > 0 else 0.0
@@ -316,39 +317,30 @@ class CompositeScorer:
 
 # ── helpers ──────────────────────────────────────────
 
-# 技术信号分组权重：趋势组 > 反转/风险组 > 量/波动组
-_TECH_GROUPS: dict[str, tuple[list[str], float]] = {
-    "trend": (["macd_trend", "momentum_20"], 0.50),
-    "reversal": (["rsi_extreme", "boll_position", "ma_bias"], 0.35),
-    "volume": (["vol_ratio", "volatility_20"], 0.15),
-}
-
-
-def _tech_grouped_average(signals: list) -> float:
-    """对技术子信号按趋势/反转/量价分组加权，而非简单等权平均。"""
-    name_to_score: dict[str, float] = {s.name: s.score for s in signals}
-    weighted_sum = 0.0
-    weight_sum = 0.0
-    for _group_name, (members, group_weight) in _TECH_GROUPS.items():
-        group_scores = [name_to_score[m] for m in members if m in name_to_score]
-        if group_scores:
-            group_avg = sum(group_scores) / len(group_scores)
-            weighted_sum += group_avg * group_weight
-            weight_sum += group_weight
-    if weight_sum == 0:
-        return 0.0
-    return weighted_sum / weight_sum
-
 
 _SIGNAL_TO_CATEGORY: dict[str, str] = {
-    # technical
-    "macd_trend": "technical",
-    "rsi_extreme": "technical",
-    "boll_position": "technical",
-    "ma_bias": "technical",
-    "vol_ratio": "technical",
-    "momentum_20": "technical",
-    "volatility_20": "technical",
+    # tech_trend: 趋势跟随信号
+    "macd_trend": "tech_trend",
+    "macd_hist_direction": "tech_trend",
+    "macd_momentum_decay": "tech_trend",
+    "momentum_20": "tech_trend",
+    "vol_ratio": "tech_trend",
+    "price_momentum_5d": "tech_trend",
+    "price_momentum_20d": "tech_trend",
+    # 量价关系信号（归入 tech_trend，因为背离信号具有方向预测性）
+    "macd_bottom_divergence": "tech_trend",
+    "macd_top_divergence": "tech_trend",
+    "rsi_bottom_divergence": "tech_trend",
+    "rsi_top_divergence": "tech_trend",
+    "volume_breakout": "tech_trend",
+    "volume_pullback": "tech_trend",
+    "volume_dry_up": "tech_trend",
+    "volume_climax": "tech_trend",
+    # tech_reversal: 均值回归信号（默认零权重，保留观测）
+    "rsi_extreme": "tech_reversal",
+    "boll_position": "tech_reversal",
+    "ma_bias": "tech_reversal",
+    "volatility_20": "tech_reversal",
     # fundamental
     "pe_rank": "fundamental",
     "pb_rank": "fundamental",
@@ -359,6 +351,7 @@ _SIGNAL_TO_CATEGORY: dict[str, str] = {
     "main_inflow_5d": "money_flow",
     "elg_ratio": "money_flow",
     "margin_delta_5d": "money_flow",
+    "northbound_net_5d": "money_flow",
     # sentiment
     "turnover_extreme": "sentiment",
     "holder_count_trend": "sentiment",

@@ -1,7 +1,7 @@
 """情绪与事件信号生成器。
 
 三类信号：
-    turnover_extreme       换手率 20 日分位（极端放量偏空，极端缩量偏空）
+    turnover_extreme       换手率 20 日分位（放量=动量确认，看多为主；缩量偏空）
     holder_count_trend     股东户数环比（下降→筹码集中→看多）
     insider_net_30d        最近 30 天大股东净增减持股数
 
@@ -115,29 +115,32 @@ class SentimentSignalGenerator(CategorizedSignalGenerator):
         latest = float(s.iloc[-1])
         rank = float(s.rank(pct=True, method="average").iloc[-1])
 
-        # 结合涨跌方向判断：放量上涨 vs 放量下跌含义完全不同
+        # 放量 = 动量确认：A股放量通常看多（资金涌入），除非伴随明显下跌
         if rank >= 0.90:
             if pct_chg > 1.0:
-                score = 0.1
-                label = f"放量上涨 ({latest:.2%}, 涨{pct_chg:+.1f}%)，可能突破"
-            elif pct_chg < -1.0:
-                score = -0.5
+                score = 0.5
+                label = f"放量上涨 ({latest:.2%}, 涨{pct_chg:+.1f}%)，动量强劲"
+            elif pct_chg < -1.5:
+                score = -0.4
                 label = f"放量下跌 ({latest:.2%}, 跌{pct_chg:+.1f}%)，警惕出货"
             else:
-                score = -0.2
-                label = f"换手率极高 ({latest:.2%})，方向不明"
+                score = 0.15
+                label = f"换手率极高 ({latest:.2%})，资金活跃"
         elif rank >= 0.80:
-            if pct_chg < -1.0:
-                score = -0.3
+            if pct_chg > 1.0:
+                score = 0.3
+                label = f"温和放量上涨 ({latest:.2%})，量价配合"
+            elif pct_chg < -1.5:
+                score = -0.2
                 label = f"换手率偏高 ({latest:.2%})，伴随下跌"
             else:
-                score = 0.0
-                label = f"换手率偏高 ({latest:.2%})，涨跌平衡"
+                score = 0.1
+                label = f"换手率偏高 ({latest:.2%})，关注度提升"
         elif rank <= 0.05:
-            score = -0.25
+            score = -0.15
             label = f"换手率极度萎缩 ({latest:.2%})，交投清淡"
         elif rank <= 0.15:
-            score = -0.1
+            score = -0.05
             label = f"换手率偏低 ({latest:.2%})"
         elif 0.4 <= rank <= 0.7:
             score = 0.1
