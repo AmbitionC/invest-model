@@ -28,5 +28,8 @@ Thumbs.db
 # Data backups
 data/backups/
 data/cache/
-models/
 *.bak
+
+# Keep these out of git
+logs/*.log
+__pycache__/
