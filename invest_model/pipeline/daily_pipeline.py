@@ -271,6 +271,7 @@ class DailyPipeline:
             save_composite_scores,
             save_signal_snapshots,
         )
+        from invest_model.scoring.market_regime import MarketRegimeDetector
         from invest_model.advisor import StockAdvisor
         from invest_model.advisor.persistence import save_advisor_signals
 
@@ -286,6 +287,11 @@ class DailyPipeline:
             return "无日线数据"
         trade_date = max(latest_dates)
 
+        # 0) 组合回撤熔断检查（超过 -15% 时屏蔽新开仓）
+        circuit_break = self._check_portfolio_drawdown(threshold=-0.15)
+        if circuit_break:
+            logger.warning("[熔断] 组合近期回撤超 -15%，本次信号生成将屏蔽买入操作")
+
         # 1) 综合评分（保留原有落库逻辑）
         scorer = CompositeScorer(self.engine)
         df, snapshots = scorer.score_batch(codes, trade_date)
@@ -295,17 +301,59 @@ class DailyPipeline:
             n_sigs = save_signal_snapshots(self.engine, snapshots)
             n_comp = save_composite_scores(self.engine, df)
 
-        # 2) 逐票操作建议
+        # 2) 市场状态检测，获取仓位乘数
+        try:
+            regime_detector = MarketRegimeDetector(self.engine)
+            regime_info = regime_detector.detect(trade_date)
+            regime = regime_info["regime"]
+            multiplier = regime_info["multiplier"]
+        except Exception as e:
+            logger.warning(f"[MarketRegime] 检测失败，使用默认乘数 1.0: {e}")
+            regime = "NEUTRAL"
+            multiplier = 1.0
+
+        # 熔断时进一步压低乘数（屏蔽开仓）
+        if circuit_break:
+            multiplier = min(multiplier, 0.0)
+
+        # 3) 逐票操作建议（透传 regime_multiplier 给 advisor）
         pool_df = self.pool_repo.get_pool("core")
         code_name_map = dict(zip(pool_df["code"], pool_df["name"]))
         advisor = StockAdvisor(self.engine)
-        signals = advisor.advise_batch(codes, trade_date, code_name_map)
+        signals = advisor.advise_batch(
+            codes, trade_date, code_name_map,
+            regime_multiplier=multiplier,
+        )
         n_adv = save_advisor_signals(self.engine, signals)
 
         return (
             f"date={trade_date}, codes={len(codes)}, "
+            f"regime={regime}(×{multiplier:.2f}), "
             f"signals={n_sigs}, composite={n_comp}, advisor={n_adv}"
         )
+
+    def _check_portfolio_drawdown(self, threshold: float = -0.15) -> bool:
+        """检查最近 backtest_nav 记录中的组合回撤是否超过阈值。"""
+        try:
+            nav_df = self._base_repo.read_sql(
+                """
+                SELECT trade_date, nav
+                FROM backtest_nav
+                ORDER BY trade_date DESC
+                LIMIT 90
+                """
+            )
+            if nav_df.empty or len(nav_df) < 5:
+                return False
+            nav = nav_df.sort_values("trade_date")["nav"].astype(float)
+            rolling_max = nav.expanding().max()
+            drawdown = float((nav / rolling_max - 1).min())
+            if drawdown < threshold:
+                logger.warning(f"[熔断] 组合最大回撤={drawdown:.1%} < 阈值={threshold:.1%}")
+                return True
+        except Exception as e:
+            logger.debug(f"[熔断] 回撤检查失败: {e}")
+        return False
 
 
 def main():

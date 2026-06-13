@@ -43,13 +43,20 @@ logging:
 # 综合评分
 scoring:
   category_weights:
-    technical: 0.45
-    fundamental: 0.15
-    money_flow: 0.25
-    sentiment: 0.15
+    technical: 0.50     # A股技术趋势信号有效性最高
+    fundamental: 0.10   # PE/PB季报滞后，估值锚点弱
+    money_flow: 0.30    # 大单净流入是领先信号，提升权重
+    sentiment: 0.10     # 股东户数变化延迟，降权
 
 # 回测
 backtest:
-  default_rebalance_days: 5
+  default_rebalance_days: 10  # 两周换仓一次（原5天），降低换手率约50%
   default_top_k: 10
   universe: core   # 对应 stock_pool.pool_group
+
+# 风控参数
+risk_management:
+  max_single_position: 0.20       # 单票最大仓位 20%
+  stop_loss_threshold: -0.10      # 单票止损线 -10%
+  portfolio_drawdown_halt: -0.15  # 组合回撤熔断 -15%
+  min_trade_size: 0.05            # 最小调仓幅度 5%（低于此不操作）

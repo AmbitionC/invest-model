@@ -30,6 +30,7 @@ from invest_model.advisor.decision import (
     DecisionConfig,
     DecisionResult,
     make_decision,
+    target_to_action,
 )
 from invest_model.logger import get_logger
 from invest_model.ml.features import FeatureBuilder, FEATURE_COLUMNS
@@ -167,6 +168,7 @@ class StockAdvisor:
         current_positions: dict[str, float] | None = None,
         last_action_dates: dict[str, dict[str, str | None]] | None = None,
         trade_dates: list[str] | None = None,
+        regime_multiplier: float = 1.0,
     ) -> list[AdvisorSignal]:
         """对一批标的在某交易日生成 ML 操作建议。
 
@@ -177,6 +179,11 @@ class StockAdvisor:
             缺失或 None 时退化为不启用冷却（与旧行为兼容）。
         trade_dates : list[str] | None
             交易日历升序列表，用于精确计算冷却天数。
+        regime_multiplier : float
+            市场状态仓位乘数（由 MarketRegimeDetector 提供）。
+            < 1.0 时压缩目标仓位（如 TECH_DOMINANT/BEAR）；
+            > 1.0 时放大（如 VALUE_ROTATION/BROAD_BULL），但最终仍受 max_single_position 约束。
+            = 0.0 时屏蔽所有新开仓（熔断场景）。
         """
         if not codes:
             return []
@@ -198,10 +205,36 @@ class StockAdvisor:
                 last_clear_date=la.get("clear"),
                 trade_dates=trade_dates,
             )
+            # 应用市场状态仓位乘数
+            if regime_multiplier != 1.0:
+                sig = self._apply_regime(sig, regime_multiplier)
             results.append(sig)
 
         results.sort(key=lambda s: abs(s.horizon_score), reverse=True)
         return results
+
+    def _apply_regime(self, sig: "AdvisorSignal", multiplier: float) -> "AdvisorSignal":
+        """对单票信号应用市场状态乘数，调整目标仓位并重新映射操作。"""
+        max_pos = self.decision_config.max_single_position
+        new_target = float(min(sig.target_position * multiplier, max_pos))
+        new_target = round(max(new_target, 0.0), 4)
+        new_delta = round(new_target - sig.current_position, 4)
+        new_action, _ = target_to_action(
+            new_target, sig.current_position,
+            take_profit=sig.take_profit,
+            cfg=self.decision_config,
+        )
+        # 仓位被压缩时在归因中注明
+        if abs(new_target - sig.target_position) > 0.005:
+            regime_note = (
+                f"[Regime×{multiplier:.2f}] target: {sig.target_position:.0%}→{new_target:.0%}"
+            )
+            sig.attribution = f"{regime_note} | {sig.attribution}"
+        sig.action = new_action
+        sig.target_position = new_target
+        sig.delta_position = new_delta
+        sig.position_pct = round(abs(new_delta), 4)
+        return sig
 
     def advise_single(
         self, code: str, trade_date: str, name: str = "",

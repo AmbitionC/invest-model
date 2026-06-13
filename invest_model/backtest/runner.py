@@ -179,6 +179,19 @@ class BacktestRunner:
             if date in rebalance_set:
                 day_signals = signal_pivot.get(date, {})
                 target = self._build_target_weights(day_signals, top_k)
+
+                # 持仓惯性：仓位变动 < 5% 则跳过，减少不必要换手
+                _INERTIA = 0.05
+                inertia_target: dict[str, float] = {}
+                for _c in set(target) | set(positions):
+                    _t = target.get(_c, 0)
+                    _p = positions.get(_c, 0)
+                    if _p > 0 and abs(_t - _p) < _INERTIA:
+                        inertia_target[_c] = _p   # 保持现有权重
+                    else:
+                        inertia_target[_c] = _t
+                target = {c: w for c, w in inertia_target.items() if w > 0.001}
+
                 all_codes = set(target) | set(positions)
                 turnover = sum(abs(target.get(c, 0) - positions.get(c, 0)) for c in all_codes)
                 nav *= max(0, 1 - turnover * (self.commission + self.slippage))
@@ -243,8 +256,9 @@ class BacktestRunner:
     def _build_target_weights(
         day_signals: dict[str, str],
         top_k: int | None,
+        max_single_weight: float = 0.20,
     ) -> dict[str, float]:
-        """根据操作信号构建目标权重（等权 / top_k）。"""
+        """根据操作信号构建目标权重（等权 / top_k），并限制单票最大占比。"""
         bullish = {
             code: (1.0 if action == "strong_buy" else 0.6)
             for code, action in day_signals.items()
@@ -255,7 +269,18 @@ class BacktestRunner:
         if top_k and len(bullish) > top_k:
             bullish = dict(sorted(bullish.items(), key=lambda x: x[1], reverse=True)[:top_k])
         total = sum(bullish.values())
-        return {c: w / total for c, w in bullish.items()}
+        weights = {c: w / total for c, w in bullish.items()}
+
+        # 单票上限截断（迭代归一化直到全部满足约束）
+        for _ in range(10):
+            capped = {c: min(w, max_single_weight) for c, w in weights.items()}
+            t = sum(capped.values())
+            if t <= 0:
+                break
+            weights = {c: w / t for c, w in capped.items()}
+            if all(w <= max_single_weight + 1e-6 for w in weights.values()):
+                break
+        return weights
 
     @staticmethod
     def _calc_metrics(nav_series: pd.Series) -> dict:

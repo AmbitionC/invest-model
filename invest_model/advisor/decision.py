@@ -89,6 +89,8 @@ class DecisionConfig:
     min_flat_days: int = 2
     take_profit_min_conditions: int = 3
     buy_threshold: float = 0.005
+    max_single_position: float = 0.20    # 单票最大仓位上限（20%）
+    stop_loss_threshold: float = -0.10   # 持仓期间跌幅触发止损（-10%）
 
     def __post_init__(self) -> None:
         if self.execution_tier not in ("normal", "confident", "strict"):
@@ -230,8 +232,9 @@ def score_to_target_position(
     asymmetric: bool = True,
     buy_threshold: float = 0.005,
     score_scale: float = SCORE_TO_POSITION_SCALE,
+    max_position: float = MAX_POSITION,
 ) -> float:
-    """把 score(log return) 映射为目标仓位 (0 ~ MAX_POSITION)。
+    """把 score(log return) 映射为目标仓位 (0 ~ max_position)。
 
     - score > 0：看多，仓位与 score 成 tanh 关系，并乘 safety_margin
     - score < 0：目标仓位为 0（不持有看空）
@@ -241,6 +244,8 @@ def score_to_target_position(
     ----------
     score_scale : float
         tanh 灵敏度，越大越早饱和。DecisionConfig.score_to_position_scale 透传。
+    max_position : float
+        单票最大仓位上限，由 DecisionConfig.max_single_position 透传。
     """
     if asymmetric:
         eff_threshold = buy_threshold * BUY_THRESHOLD_MULT
@@ -252,8 +257,8 @@ def score_to_target_position(
 
     excess = score - eff_threshold
     raw = float(np.tanh(excess * score_scale))
-    target = raw * MAX_POSITION * safety_margin
-    return float(np.clip(target, 0.0, MAX_POSITION))
+    target = raw * max_position * safety_margin
+    return float(np.clip(target, 0.0, max_position))
 
 
 # ── 操作映射 ──────────────────────────────────────────
@@ -426,6 +431,33 @@ def make_decision(
     cfg = cfg or DEFAULT_DECISION_CONFIG
     notes: list[str] = []
 
+    # ── 止损检查（优先于所有其他逻辑）──
+    # 使用 pct_chg 累乘计算持仓期间收益，避免除权日用收盘价对比产生误触发
+    if (
+        current_position > 0
+        and last_open_date
+        and cfg.stop_loss_threshold is not None
+        and df_ts is not None
+        and not df_ts.empty
+        and "pct_chg" in df_ts.columns
+    ):
+        ts_sorted = df_ts.sort_values("trade_date")
+        since_open = ts_sorted[ts_sorted["trade_date"] > last_open_date]
+        if not since_open.empty:
+            pnl = (since_open["pct_chg"].fillna(0) / 100 + 1).prod() - 1
+            if pnl < cfg.stop_loss_threshold:
+                return DecisionResult(
+                    action="clear",
+                    target_position=0.0,
+                    current_position=round(current_position, 4),
+                    delta_position=round(-current_position, 4),
+                    horizon_score=0.0,
+                    safety_margin=0.0,
+                    take_profit_triggered=False,
+                    take_profit_reason="",
+                    notes=[f"止损: 持仓跌幅 {pnl:.1%} < {cfg.stop_loss_threshold:.0%}"],
+                )
+
     score = horizon_weighted_score(predictions, horizon_weights)
 
     direction_sign = 1 if score > 0 else (-1 if score < 0 else 0)
@@ -440,6 +472,7 @@ def make_decision(
         safety_margin=safety,
         buy_threshold=cfg.buy_threshold,
         score_scale=cfg.score_to_position_scale,
+        max_position=cfg.max_single_position,
     )
 
     # 死区：score 在 (sell_threshold, buy_threshold * BUY_THRESHOLD_MULT] 之间时，
@@ -455,7 +488,7 @@ def make_decision(
                 )
 
     if take_profit and current_position > 0:
-        forced_target = min(target, current_position * 0.5)
+        forced_target = min(target, current_position * 0.5, cfg.max_single_position)
         target = forced_target
         notes.append(f"止盈覆盖({tp_reason}): 目标仓位降至 {target:.0%}")
 
