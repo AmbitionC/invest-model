@@ -9,7 +9,7 @@ sources:
     rate_limit_per_min: 480
     # 与 tushare.pro 文档一致的数据服务基地址；留空则走库默认 HTTPS 接口。
     # 若报「token不对」而 token 无误，可设为文档给出的镜像，或由环境变量 TUSHARE_HTTP_URL 覆盖。
-    http_url: "http://118.89.66.41:8010/"
+    http_url: ""  # 留空走官方 HTTPS 接口
   baostock:
     enabled: true
     retry_times: 3
