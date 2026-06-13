@@ -420,6 +420,20 @@ DDL_STATEMENTS: dict[str, str] = {
             INDEX idx_version (version)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ML 模型注册表（XGBoost 多 horizon）'
     """,
+
+    "model_health_log": """
+        CREATE TABLE IF NOT EXISTS model_health_log (
+            id          INT AUTO_INCREMENT PRIMARY KEY,
+            code        VARCHAR(16)  NOT NULL,
+            version     VARCHAR(32)  NOT NULL,
+            check_date  VARCHAR(8)   NOT NULL,
+            status      ENUM('ok','degraded','missing') NOT NULL,
+            cv_avg_ic   DECIMAL(8,5),
+            checked_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_code_version_date (code, version, check_date),
+            INDEX idx_code_version (code, version, check_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='模型健康状态日志（每日 IC 检查记录）'
+    """,
 }
 
 ALL_TABLES = list(DDL_STATEMENTS.keys())

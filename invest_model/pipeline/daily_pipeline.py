@@ -231,28 +231,56 @@ class DailyPipeline:
         return c.collect_holder_count(codes)
 
     def _check_model_health(self):
-        """检查 ML 模型 OOS IC，低于阈值发出警告。"""
+        """检查 ML 模型 OOS IC，低于阈值发出警告，并持久化健康日志。
+
+        - 每日将检查结果写入 model_health_log 表
+        - 若某标的连续 >= 10 天 degraded，升级为 error 级别告警并注明"强烈建议重训"
+        """
         from invest_model.scoring.ic_monitor import ICMonitor
+        from invest_model.repositories.stock_daily_repo import StockDailyRepository
 
         codes = self.pool_repo.get_pool_codes("core")
         if not codes:
             return "无标的"
 
+        VERSION = "v1_oos"
+        RETRAIN_THRESHOLD = 10   # 连续 N 天 degraded → 强警告
+
         monitor = ICMonitor(self.engine)
         report = monitor.check_health(
             codes=codes,
-            version="v1_oos",
+            version=VERSION,
             ic_warn_threshold=0.03,
         )
+
+        # 取今日检查日期（用最新交易日）
+        daily_repo = StockDailyRepository(self.engine)
+        latest_dates = [d for d in (daily_repo.get_latest_date(code=c) for c in codes) if d]
+        check_date = max(latest_dates) if latest_dates else datetime.now().strftime("%Y%m%d")
+
+        # 持久化健康日志
+        monitor.log_health_check(report, version=VERSION, check_date=check_date)
+
         degraded = [c for c, s in report.items() if s == "degraded"]
-        missing = [c for c, s in report.items() if s == "missing"]
+        missing  = [c for c, s in report.items() if s == "missing"]
+
         for code in degraded:
-            logger.warning(f"[IC监控] {code} 模型质量下降，rolling cv_avg_ic < 0.03，建议重训")
+            consecutive = monitor.get_consecutive_degraded_days(code, version=VERSION)
+            if consecutive >= RETRAIN_THRESHOLD:
+                logger.error(
+                    f"[IC监控] {code} 连续 {consecutive} 天质量下降 (IC < 0.03)，强烈建议重训"
+                )
+            else:
+                logger.warning(
+                    f"[IC监控] {code} 模型质量下降 (IC < 0.03)，已持续 {consecutive} 天，建议重训"
+                )
         for code in missing:
-            logger.warning(f"[IC监控] {code} 无已训练模型（version=v1_oos），建议训练")
+            logger.warning(f"[IC监控] {code} 无已训练模型（version={VERSION}），建议训练")
+
         return (
             f"ok={len(codes) - len(degraded) - len(missing)}, "
-            f"degraded={len(degraded)}, missing={len(missing)}"
+            f"degraded={len(degraded)}, missing={len(missing)}, "
+            f"check_date={check_date}"
         )
 
     def _run_validation(self):

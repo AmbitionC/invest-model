@@ -260,6 +260,101 @@ class ICMonitor:
 
         return result
 
+    # ── 健康日志持久化 ────────────────────────────────────────
+
+    def _ensure_health_log_table(self) -> None:
+        """确保 model_health_log 表存在。"""
+        from sqlalchemy import text
+        sql = """
+        CREATE TABLE IF NOT EXISTS model_health_log (
+            id          INT AUTO_INCREMENT PRIMARY KEY,
+            code        VARCHAR(16)  NOT NULL,
+            version     VARCHAR(32)  NOT NULL,
+            check_date  VARCHAR(8)   NOT NULL,
+            status      ENUM('ok','degraded','missing') NOT NULL,
+            cv_avg_ic   DECIMAL(8,5),
+            checked_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_code_version_date (code, version, check_date),
+            INDEX idx_code_version (code, version, check_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(text(sql))
+        except Exception as e:
+            logger.debug(f"[ICMonitor] ensure_health_log_table: {e}")
+
+    def log_health_check(
+        self,
+        results: dict[str, str],
+        version: str,
+        check_date: str,
+        ic_map: dict[str, float] | None = None,
+    ) -> None:
+        """将 check_health 结果批量写入 model_health_log（upsert）。
+
+        Parameters
+        ----------
+        results    : {code: "ok"|"degraded"|"missing"}，来自 check_health()
+        version    : 模型版本，与 check_health() 使用的保持一致
+        check_date : 检查日期 YYYYMMDD
+        ic_map     : 可选 {code: cv_avg_ic}，写入 cv_avg_ic 列；缺省写 None
+        """
+        if not results:
+            return
+        self._ensure_health_log_table()
+        ic_map = ic_map or {}
+        rows = [
+            {
+                "code": code,
+                "version": version,
+                "check_date": check_date,
+                "status": status,
+                "cv_avg_ic": ic_map.get(code),
+            }
+            for code, status in results.items()
+        ]
+        df = pd.DataFrame(rows)
+        try:
+            from invest_model.repositories.base import BaseRepository
+            repo = BaseRepository(self.engine)
+            repo.upsert("model_health_log", df, unique_keys=["code", "version", "check_date"])
+        except Exception as e:
+            logger.warning(f"[ICMonitor] log_health_check 写入失败: {e}")
+
+    def get_consecutive_degraded_days(
+        self, code: str, version: str
+    ) -> int:
+        """查询该 code 当前连续 degraded 天数（从最新记录向前计数，遇 ok 停止）。
+
+        Returns 0 如果最近状态为 ok 或 missing，或无记录。
+        """
+        try:
+            from invest_model.repositories.base import BaseRepository
+            repo = BaseRepository(self.engine)
+            df = repo.read_sql(
+                """
+                SELECT check_date, status
+                FROM model_health_log
+                WHERE code = :code AND version = :ver
+                ORDER BY check_date DESC
+                LIMIT 60
+                """,
+                {"code": code, "ver": version},
+            )
+            if df.empty:
+                return 0
+            count = 0
+            for status in df["status"]:
+                if status == "degraded":
+                    count += 1
+                else:
+                    break
+            return count
+        except Exception as e:
+            logger.debug(f"[ICMonitor] get_consecutive_degraded_days 查询失败: {e}")
+            return 0
+
     @staticmethod
     def _compute_forward_returns(
         daily_df: pd.DataFrame, forward_days: int
