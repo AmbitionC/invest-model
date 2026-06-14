@@ -65,6 +65,7 @@ AFTERNOON_STEPS = [
     "data_freshness",      # 数据新鲜度检查（在信号生成前最后把关）
     "signal_generation",
     "model_health_check",
+    "stock_discovery",     # 标的发现（大单异动扫描）
     "validation",
 ]
 
@@ -95,6 +96,7 @@ class DailyPipeline:
             "data_freshness":    ("数据新鲜度",   self._check_data_freshness),
             "signal_generation": ("综合评分",     self._run_signal_generation),
             "model_health_check":("模型健康检查", self._check_model_health),
+            "stock_discovery":   ("标的发现",     self._run_stock_discovery),
             "validation":        ("数据校验",     self._run_validation),
         }
 
@@ -455,6 +457,35 @@ class DailyPipeline:
             f"regime={regime}(×{multiplier:.2f}), "
             f"signals={n_sigs}, composite={n_comp}, advisor={n_adv}"
         )
+
+    def _run_stock_discovery(self):
+        """标的发现：通道 A 大单异动扫描（日频），写入 discovery_candidates 表。"""
+        try:
+            from invest_model.repositories.stock_daily_repo import StockDailyRepository
+            from invest_model.discovery.stock_screener import StockScreener
+            from invest_model.discovery.report import save_candidates
+            import pandas as pd
+
+            core_pool = self.pool_repo.get_pool("core")
+            etf_pool  = self.pool_repo.get_pool("etf")
+            all_pool  = pd.concat([core_pool, etf_pool], ignore_index=True)
+            exclude_codes = all_pool["code"].tolist() if not all_pool.empty else []
+
+            daily_repo = StockDailyRepository(self.engine)
+            latest_dates = [
+                d for d in (daily_repo.get_latest_date(code=c) for c in exclude_codes) if d
+            ]
+            trade_date = max(latest_dates) if latest_dates else ""
+            if not trade_date:
+                return "无法确定扫描日期"
+
+            screener = StockScreener(self.engine)
+            candidates = screener.scan_daily(trade_date, exclude_codes=exclude_codes)
+            n = save_candidates(candidates, self.engine)
+            return f"date={trade_date}, found={len(candidates)}, new={n}"
+        except Exception as e:
+            logger.warning(f"[标的发现] 扫描失败（不影响主流程）: {e}")
+            return f"failed: {e}"
 
     def _check_portfolio_drawdown(self, threshold: float = -0.15) -> bool:
         """检查最近 backtest_nav 记录中的组合回撤是否超过阈值。"""

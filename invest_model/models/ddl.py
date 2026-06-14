@@ -502,6 +502,24 @@ DDL_STATEMENTS: dict[str, str] = {
             PRIMARY KEY (trade_date, market_type, code)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='北向资金每日十大成交股'
     """,
+
+    "discovery_candidates": """
+        CREATE TABLE IF NOT EXISTS discovery_candidates (
+            id          INT AUTO_INCREMENT PRIMARY KEY,
+            code        VARCHAR(16)  NOT NULL,
+            name        VARCHAR(64),
+            source      VARCHAR(32)  NOT NULL COMMENT 'cashflow_spike/sector_laggard/etf_rotation',
+            score       DECIMAL(8,4) NULL,
+            reason      TEXT,
+            status      ENUM('pending','promoted','dismissed') NOT NULL DEFAULT 'pending',
+            expire_date VARCHAR(8)   NOT NULL COMMENT '有效截止日期 YYYYMMDD',
+            scan_date   VARCHAR(8)   NOT NULL COMMENT '扫描日期 YYYYMMDD',
+            created_at  TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_status (status, expire_date),
+            INDEX idx_code (code, scan_date),
+            INDEX idx_scan_date (scan_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='标的发现候选池'
+    """,
 }
 
 ALL_TABLES = list(DDL_STATEMENTS.keys())
