@@ -444,6 +444,12 @@ def make_decision(
         ts_sorted = df_ts.sort_values("trade_date")
         since_open = ts_sorted[ts_sorted["trade_date"] > last_open_date]
         if not since_open.empty:
+            null_pct = since_open["pct_chg"].isna().mean()
+            if null_pct > 0.2:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    f"止损计算: pct_chg 缺失率 {null_pct:.0%}（>{last_open_date}），结果可能低估实际亏损"
+                )
             pnl = (since_open["pct_chg"].fillna(0) / 100 + 1).prod() - 1
             if pnl < cfg.stop_loss_threshold:
                 return DecisionResult(

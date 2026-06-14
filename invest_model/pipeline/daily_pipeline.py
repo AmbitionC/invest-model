@@ -60,6 +60,7 @@ AFTERNOON_STEPS = [
     "northbound",
     "holder_trade",
     "holder_count",
+    "data_freshness",      # 数据新鲜度检查（在信号生成前最后把关）
     "signal_generation",
     "model_health_check",
     "validation",
@@ -88,6 +89,7 @@ class DailyPipeline:
             "northbound":        ("北向资金",     self._sync_northbound),
             "holder_trade":      ("股东增减持",   self._sync_holder_trade),
             "holder_count":      ("股东户数",     self._sync_holder_count),
+            "data_freshness":    ("数据新鲜度",   self._check_data_freshness),
             "signal_generation": ("综合评分",     self._run_signal_generation),
             "model_health_check":("模型健康检查", self._check_model_health),
             "validation":        ("数据校验",     self._run_validation),
@@ -282,6 +284,78 @@ class DailyPipeline:
             f"degraded={len(degraded)}, missing={len(missing)}, "
             f"check_date={check_date}"
         )
+
+    def _check_data_freshness(self) -> str:
+        """在信号生成前检查核心数据表的新鲜度，数据过旧时发出警告。
+
+        检查项：
+        - stock_daily   最新日期 ≤ 今日前 2 个交易日 → WARNING
+        - stock_cashflow 最新日期 ≤ 今日前 5 个交易日 → WARNING（资金流数据允许略有延迟）
+        - index_daily   3 个核心指数（沪深300/创业板/中证500）有数据 → ERROR 若缺
+        """
+        from invest_model.repositories.calendar_repo import CalendarRepository
+
+        today = datetime.now().strftime("%Y%m%d")
+        cal_repo = CalendarRepository(self.engine)
+        recent_trade_dates = cal_repo.get_trade_dates(
+            (datetime.now().replace(day=1)).strftime("%Y%m01"), today
+        )
+        # 取最近 5 个交易日备用
+        recent_5 = recent_trade_dates[-5:] if len(recent_trade_dates) >= 5 else recent_trade_dates
+
+        issues: list[str] = []
+
+        # 1. stock_daily 新鲜度
+        try:
+            df = self._base_repo.read_sql(
+                "SELECT MAX(trade_date) AS d FROM stock_daily"
+            )
+            latest_daily = str(df["d"].iloc[0]) if not df.empty and df["d"].iloc[0] else None
+            if latest_daily and recent_5:
+                threshold = recent_5[-2] if len(recent_5) >= 2 else recent_5[-1]
+                if latest_daily < threshold:
+                    msg = f"stock_daily 最新日期={latest_daily}，落后于 {threshold}"
+                    logger.warning(f"[数据新鲜度] {msg}")
+                    issues.append(f"daily_stale({latest_daily})")
+        except Exception as e:
+            logger.debug(f"[数据新鲜度] stock_daily 查询失败: {e}")
+
+        # 2. stock_cashflow 新鲜度（允许最多落后 5 个交易日）
+        try:
+            df = self._base_repo.read_sql(
+                "SELECT MAX(trade_date) AS d FROM stock_cashflow"
+            )
+            latest_cf = str(df["d"].iloc[0]) if not df.empty and df["d"].iloc[0] else None
+            if latest_cf and recent_5:
+                threshold = recent_5[0]  # 5 个交易日前
+                if latest_cf < threshold:
+                    msg = f"stock_cashflow 最新日期={latest_cf}，落后超过5个交易日"
+                    logger.warning(f"[数据新鲜度] {msg}")
+                    issues.append(f"cashflow_stale({latest_cf})")
+        except Exception as e:
+            logger.debug(f"[数据新鲜度] stock_cashflow 查询失败: {e}")
+
+        # 3. 关键指数数据检查（MarketRegimeDetector 依赖）
+        REQUIRED_INDICES = ["000300.SH", "399006.SZ", "000905.SH"]
+        try:
+            for idx_code in REQUIRED_INDICES:
+                df = self._base_repo.read_sql(
+                    "SELECT MAX(trade_date) AS d FROM index_daily WHERE code = :c",
+                    {"c": idx_code},
+                )
+                latest_idx = str(df["d"].iloc[0]) if not df.empty and df["d"].iloc[0] else None
+                if not latest_idx:
+                    logger.error(f"[数据新鲜度] 指数 {idx_code} 无数据，市场状态检测将失效")
+                    issues.append(f"index_missing({idx_code})")
+                elif recent_5 and latest_idx < recent_5[-2]:
+                    logger.warning(f"[数据新鲜度] 指数 {idx_code} 数据过旧={latest_idx}")
+                    issues.append(f"index_stale({idx_code})")
+        except Exception as e:
+            logger.debug(f"[数据新鲜度] index_daily 查询失败: {e}")
+
+        if not issues:
+            return f"OK，所有核心数据新鲜"
+        return f"警告: {', '.join(issues)}"
 
     def _run_validation(self):
         codes = self.pool_repo.get_pool_codes("core")

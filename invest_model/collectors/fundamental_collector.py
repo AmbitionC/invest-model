@@ -132,13 +132,12 @@ class FundamentalCollector(BaseCollector):
     def collect_cashflow_incremental(
         self,
         codes: list[str],
-        recent_days: int = 15,
+        recent_days: int = 30,
     ) -> int:
         """增量采集资金流向：对每只股票，找出最近 recent_days 个交易日中
         stock_cashflow 里缺失的日期，再逐个补齐。
 
-        recent_days 默认 15 交易日，足以覆盖连续几天跑失败后的补数窗口，
-        又不至于太大影响接口限流。
+        recent_days 默认 30 交易日（约6周），足以覆盖长假或连续失败后的补数窗口。
         """
         repo = FundamentalRepository(self.engine)
         cal_repo = CalendarRepository(self.engine)
