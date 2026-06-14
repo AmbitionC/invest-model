@@ -494,7 +494,7 @@ DDL_STATEMENTS: dict[str, str] = {
             code         VARCHAR(16)  NOT NULL,
             name         VARCHAR(32),
             close        DECIMAL(10,2),
-            rank         INT,
+            `rank`       INT,
             net_amount   DECIMAL(16,2) COMMENT '净买入额（万元）',
             buy          DECIMAL(16,2),
             sell         DECIMAL(16,2),

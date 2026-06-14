@@ -1,7 +1,7 @@
 """个股标的发现 — 两条并行通道。
 
 通道 A（日频）：大单异动追踪
-  从 stock_cashflow 取主力净流入 / 流通市值 > 1.5% 的标的，
+  从 stock_cashflow 取超大单净流入 / 流通市值 > 1.5% 的标的，
   叠加量价突破验证（价格 > MA20 且成交量 > 60日均量 1.3 倍）。
 
 通道 B（周频）：板块补涨发现
@@ -51,7 +51,7 @@ class StockScreener:
         # 通道 B 参数
         sector_top_n: int = 5,               # 取涨幅最大的前 N 个行业
         sector_laggard_pct: float = 0.30,    # 行业内涨幅最低的 30% 视为补涨候选
-        min_circ_mv: float = 30.0,           # 流通市值最低 30 亿（万元存储 → 换算）
+        min_circ_mv: float = 30.0,           # 流通市值最低 30 亿元
         margin_confirm_pct: float = 0.05,    # 融资余额环比增加 5% 为机构认可信号
     ):
         self.engine = engine
@@ -111,18 +111,21 @@ class StockScreener:
         exclude: set[str],
         expire: str,
     ) -> list[StockCandidate]:
-        # 近 5 日主力净流入汇总
+        # 近 5 日超大单净流入汇总（buy_elg_vol - sell_elg_vol）
+        # JOIN daily_basic 取 circ_mv（流通市值，万元）
         cf = self.repo.read_sql(
             """
-            SELECT c.code, SUM(c.main_net) AS net5d, MAX(s.circ_mv) AS circ_mv
+            SELECT c.code,
+                   SUM(c.buy_elg_vol - c.sell_elg_vol) AS net5d,
+                   MAX(b.circ_mv) AS circ_mv
             FROM stock_cashflow c
-            JOIN stock_daily s ON s.code = c.code AND s.trade_date = c.trade_date
+            LEFT JOIN stock_fundamental b ON b.code = c.code AND b.trade_date = c.trade_date
             WHERE c.trade_date <= :td
               AND c.trade_date >= DATE_FORMAT(
                     DATE_SUB(STR_TO_DATE(:td,'%%Y%%m%%d'), INTERVAL 7 DAY),
                     '%%Y%%m%%d')
             GROUP BY c.code
-            HAVING SUM(c.main_net) IS NOT NULL
+            HAVING SUM(c.buy_elg_vol - c.sell_elg_vol) IS NOT NULL
             """,
             {"td": trade_date},
         )
@@ -139,8 +142,8 @@ class StockScreener:
         # 过滤已在池内
         cf = cf[~cf["code"].isin(exclude)]
 
-        # 净流入 / 流通市值 > 阈值
-        cf["flow_ratio"] = cf["net5d"] / (cf["circ_mv"] * 10_000 + 1e-6)  # 万元单位
+        # 净流入 / 流通市值 > 阈值（net5d 单位为手×100，circ_mv 为万元，需对齐）
+        cf["flow_ratio"] = cf["net5d"].abs() / (cf["circ_mv"] + 1e-6)
         hot = cf[cf["flow_ratio"] > self.cashflow_min_ratio].copy()
         if hot.empty:
             return []
@@ -155,7 +158,7 @@ class StockScreener:
 
             score = float(min(row["flow_ratio"] / 0.03, 1.0))  # 归一到 [0,1]
             reason = (
-                f"主力5日净流入占比{row['flow_ratio']:.1%}>{self.cashflow_min_ratio:.1%}; "
+                f"超大单5日净流入占比{row['flow_ratio']:.1%}>{self.cashflow_min_ratio:.1%}; "
                 + reason_tech
             )
             results.append(
@@ -219,12 +222,13 @@ class StockScreener:
         exclude: set[str],
         expire: str,
     ) -> list[StockCandidate]:
-        # 取各行业近 5 日涨幅（用 stock_daily.industry 分组）
+        # 取各行业近 5 日涨幅：JOIN stock_info 取 industry
         sector_perf = self.repo.read_sql(
             """
-            SELECT s.industry,
+            SELECT si.industry,
                    AVG((s.close / s2.close) - 1) AS ret5d
             FROM stock_daily s
+            JOIN stock_info si ON si.ts_code = s.code
             JOIN stock_daily s2 ON s2.code = s.code
             WHERE s.trade_date = :td
               AND s2.trade_date = (
@@ -235,8 +239,8 @@ class StockScreener:
                             DATE_SUB(STR_TO_DATE(:td,'%%Y%%m%%d'), INTERVAL 5 DAY),
                             '%%Y%%m%%d')
                   )
-              AND s.industry IS NOT NULL AND s.industry != ''
-            GROUP BY s.industry
+              AND si.industry IS NOT NULL AND si.industry != ''
+            GROUP BY si.industry
             ORDER BY ret5d DESC
             """,
             {"td": trade_date},
@@ -276,10 +280,13 @@ class StockScreener:
         try:
             df = self.repo.read_sql(
                 """
-                SELECT s.code, s.close, s.circ_mv,
-                       (s.close / s2.close - 1) AS ret5d
+                SELECT s.code, s.close,
+                       (s.close / s2.close - 1) AS ret5d,
+                       b.circ_mv
                 FROM stock_daily s
+                JOIN stock_info si ON si.ts_code = s.code
                 JOIN stock_daily s2 ON s2.code = s.code
+                LEFT JOIN daily_basic b ON b.code = s.code AND b.trade_date = s.trade_date
                 WHERE s.trade_date = :td
                   AND s2.trade_date = (
                         SELECT MAX(d2.trade_date)
@@ -289,7 +296,7 @@ class StockScreener:
                                 DATE_SUB(STR_TO_DATE(:td,'%%Y%%m%%d'), INTERVAL 5 DAY),
                                 '%%Y%%m%%d')
                       )
-                  AND s.industry = :sector
+                  AND si.industry = :sector
                 ORDER BY ret5d ASC
                 """,
                 {"td": trade_date, "sector": sector},
@@ -322,7 +329,8 @@ class StockScreener:
             if not margin_ok:
                 continue
 
-            score = round(0.5 + (1 - laggards.index.get_loc(row.name) / len(laggards)) * 0.5, 4)
+            idx = laggards.index.get_loc(row.name)
+            score = round(0.5 + (1 - idx / len(laggards)) * 0.5, 4)
             reason = (
                 f"行业[{sector}]热点补涨候选; 5日涨幅{row['ret5d']:.1%}偏低; "
                 + margin_reason
@@ -347,7 +355,7 @@ class StockScreener:
             df = self.repo.read_sql(
                 """
                 SELECT trade_date, rzye
-                FROM stock_margin
+                FROM margin_detail
                 WHERE code = :code AND trade_date <= :td
                 ORDER BY trade_date DESC
                 LIMIT 12
@@ -377,6 +385,5 @@ class StockScreener:
     def _expire_date(trade_date: str, days: int) -> str:
         """从 trade_date 向后推 days 个自然日（近似20个交易日 ≈ 28个自然日）。"""
         dt = datetime.strptime(trade_date, "%Y%m%d")
-        # 20个交易日大约等于28个自然日
         expire_dt = dt + timedelta(days=int(days * 1.4))
         return expire_dt.strftime("%Y%m%d")

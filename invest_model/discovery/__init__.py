@@ -2,6 +2,18 @@
 
 from invest_model.discovery.stock_screener import StockScreener
 from invest_model.discovery.etf_rotator import ETFDiscoveryScanner
-from invest_model.discovery.report import DiscoveryReport
+from invest_model.discovery.report import (
+    save_candidates,
+    promote_candidate,
+    dismiss_candidate,
+    list_pending,
+)
 
-__all__ = ["StockScreener", "ETFDiscoveryScanner", "DiscoveryReport"]
+__all__ = [
+    "StockScreener",
+    "ETFDiscoveryScanner",
+    "save_candidates",
+    "promote_candidate",
+    "dismiss_candidate",
+    "list_pending",
+]
