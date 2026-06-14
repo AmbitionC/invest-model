@@ -219,7 +219,8 @@ print('  STEP 5: 回测 (normal / confident / strict)')
 print('=' * 70)
 t0 = time.time()
 
-from invest_model.backtest import BacktestConfig, BacktestEngine, save_backtest_result
+from invest_model.backtest.engine import BacktestEngine, BacktestConfig
+from invest_model.backtest.persistence import save_backtest_result
 from invest_model.advisor import StockAdvisor, DecisionConfig
 
 EXEC_TIERS = ['normal', 'confident', 'strict']

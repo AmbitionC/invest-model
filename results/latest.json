@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-13T20:47:08.251554",
+  "generated_at": "2026-06-14T09:48:29.840086",
   "stock_pool": [
     {
       "id": 17,
@@ -84,6 +84,81 @@
   ],
   "backtest_results": [
     {
+      "run_id": 45,
+      "name": "ml_advisor_v1_oos_strict",
+      "strategy": "ml_target_position",
+      "start_date": "20250101",
+      "end_date": "20260614",
+      "metrics": {
+        "beta": 0.08744,
+        "alpha": 0.005433,
+        "calmar": 0.712167,
+        "n_days": 348,
+        "sharpe": 0.516129,
+        "sortino": 0.683601,
+        "win_rate": 0.531532,
+        "annual_vol": 0.040036,
+        "max_drawdown": 0.029015,
+        "total_return": 0.02888,
+        "annual_return": 0.020664,
+        "turnover_total": 4.069278,
+        "avg_position_count": 3.126437,
+        "benchmark_total_return": 0.250476,
+        "benchmark_annual_return": 0.174189
+      },
+      "created_at": "2026-06-14 09:47:57"
+    },
+    {
+      "run_id": 44,
+      "name": "ml_advisor_v1_oos_confident",
+      "strategy": "ml_target_position",
+      "start_date": "20250101",
+      "end_date": "20260614",
+      "metrics": {
+        "beta": 0.086906,
+        "alpha": 0.006595,
+        "calmar": 0.749045,
+        "n_days": 348,
+        "sharpe": 0.550117,
+        "sortino": 0.726633,
+        "win_rate": 0.534535,
+        "annual_vol": 0.039507,
+        "max_drawdown": 0.029015,
+        "total_return": 0.030381,
+        "annual_return": 0.021733,
+        "turnover_total": 4.008676,
+        "avg_position_count": 3.12069,
+        "benchmark_total_return": 0.250476,
+        "benchmark_annual_return": 0.174189
+      },
+      "created_at": "2026-06-14 09:46:51"
+    },
+    {
+      "run_id": 43,
+      "name": "ml_advisor_v1_oos_normal",
+      "strategy": "ml_target_position",
+      "start_date": "20250101",
+      "end_date": "20260614",
+      "metrics": {
+        "beta": 0.084558,
+        "alpha": 0.016804,
+        "calmar": 1.117184,
+        "n_days": 348,
+        "sharpe": 0.82438,
+        "sortino": 1.140421,
+        "win_rate": 0.542169,
+        "annual_vol": 0.038251,
+        "max_drawdown": 0.028226,
+        "total_return": 0.044164,
+        "annual_return": 0.031533,
+        "turnover_total": 3.718807,
+        "avg_position_count": 3.218391,
+        "benchmark_total_return": 0.250476,
+        "benchmark_annual_return": 0.174189
+      },
+      "created_at": "2026-06-14 09:45:43"
+    },
+    {
       "run_id": 42,
       "name": "ml_advisor_v1_oos_strict",
       "strategy": "ml_target_position",
@@ -157,81 +232,6 @@
         "benchmark_annual_return": 0.174189
       },
       "created_at": "2026-06-13 20:39:53"
-    },
-    {
-      "run_id": 39,
-      "name": "ml_advisor_v1_oos_strict",
-      "strategy": "ml_target_position",
-      "start_date": "20250101",
-      "end_date": "20260613",
-      "metrics": {
-        "beta": 0.413387,
-        "alpha": 0.260339,
-        "calmar": 3.983559,
-        "n_days": 348,
-        "sharpe": 2.381832,
-        "sortino": 3.911569,
-        "win_rate": 0.554572,
-        "annual_vol": 0.139534,
-        "max_drawdown": 0.08343,
-        "total_return": 0.490964,
-        "annual_return": 0.332347,
-        "turnover_total": 23.071758,
-        "avg_position_count": 5.965517,
-        "benchmark_total_return": 0.250476,
-        "benchmark_annual_return": 0.174189
-      },
-      "created_at": "2026-06-13 20:36:45"
-    },
-    {
-      "run_id": 38,
-      "name": "ml_advisor_v1_oos_confident",
-      "strategy": "ml_target_position",
-      "start_date": "20250101",
-      "end_date": "20260613",
-      "metrics": {
-        "beta": 0.412523,
-        "alpha": 0.266932,
-        "calmar": 4.060744,
-        "n_days": 348,
-        "sharpe": 2.42668,
-        "sortino": 3.977776,
-        "win_rate": 0.554572,
-        "annual_vol": 0.13961,
-        "max_drawdown": 0.08343,
-        "total_return": 0.501009,
-        "annual_return": 0.338789,
-        "turnover_total": 22.679888,
-        "avg_position_count": 5.956897,
-        "benchmark_total_return": 0.250476,
-        "benchmark_annual_return": 0.174189
-      },
-      "created_at": "2026-06-13 20:35:29"
-    },
-    {
-      "run_id": 37,
-      "name": "ml_advisor_v1_oos_normal",
-      "strategy": "ml_target_position",
-      "start_date": "20250101",
-      "end_date": "20260613",
-      "metrics": {
-        "beta": 0.412423,
-        "alpha": 0.266933,
-        "calmar": 4.060526,
-        "n_days": 348,
-        "sharpe": 2.415174,
-        "sortino": 3.938595,
-        "win_rate": 0.551622,
-        "annual_vol": 0.140268,
-        "max_drawdown": 0.083431,
-        "total_return": 0.500983,
-        "annual_return": 0.338772,
-        "turnover_total": 22.456225,
-        "avg_position_count": 5.956897,
-        "benchmark_total_return": 0.250476,
-        "benchmark_annual_return": 0.174189
-      },
-      "created_at": "2026-06-13 20:34:20"
     }
   ],
   "latest_signals": [
