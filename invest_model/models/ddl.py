@@ -434,6 +434,74 @@ DDL_STATEMENTS: dict[str, str] = {
             INDEX idx_code_version (code, version, check_date)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='模型健康状态日志（每日 IC 检查记录）'
     """,
+
+    "macro_money_supply": """
+        CREATE TABLE IF NOT EXISTS macro_money_supply (
+            period_month VARCHAR(6)   NOT NULL PRIMARY KEY COMMENT 'YYYYMM',
+            m0           DECIMAL(16,2) COMMENT 'M0余额（亿元）',
+            m1           DECIMAL(16,2) COMMENT 'M1余额（亿元）',
+            m2           DECIMAL(16,2) COMMENT 'M2余额（亿元）',
+            m0_yoy       DECIMAL(8,4)  COMMENT 'M0同比增速(%)',
+            m1_yoy       DECIMAL(8,4)  COMMENT 'M1同比增速(%)',
+            m2_yoy       DECIMAL(8,4)  COMMENT 'M2同比增速(%)',
+            m0_mom       DECIMAL(8,4),
+            m1_mom       DECIMAL(8,4),
+            m2_mom       DECIMAL(8,4),
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='货币供应量M0/M1/M2月度数据'
+    """,
+
+    "macro_pmi": """
+        CREATE TABLE IF NOT EXISTS macro_pmi (
+            period_month       VARCHAR(6)  NOT NULL PRIMARY KEY COMMENT 'YYYYMM',
+            pmi_mfg            DECIMAL(6,1) COMMENT '制造业PMI',
+            pmi_mfg_new_orders DECIMAL(6,1),
+            pmi_mfg_output     DECIMAL(6,1),
+            pmi_mfg_emp        DECIMAL(6,1),
+            pmi_mfg_input_price DECIMAL(6,1),
+            pmi_service        DECIMAL(6,1) COMMENT '服务业PMI（非制造业）',
+            pmi_composite      DECIMAL(6,1) COMMENT '综合PMI',
+            created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='PMI月度数据'
+    """,
+
+    "macro_cpi_ppi": """
+        CREATE TABLE IF NOT EXISTS macro_cpi_ppi (
+            period_month VARCHAR(6)  NOT NULL PRIMARY KEY COMMENT 'YYYYMM',
+            cpi_yoy      DECIMAL(6,2) COMMENT 'CPI同比(%)',
+            cpi_mom      DECIMAL(6,2) COMMENT 'CPI环比(%)',
+            cpi_nt_yoy   DECIMAL(6,2) COMMENT '全国CPI同比',
+            ppi_yoy      DECIMAL(6,2) COMMENT 'PPI:工业品出厂同比(%)',
+            ppi_mp_yoy   DECIMAL(6,2) COMMENT 'PPI:生产资料同比',
+            ppi_raw_yoy  DECIMAL(6,2) COMMENT 'PPI:采掘工业同比',
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='CPI/PPI月度数据'
+    """,
+
+    "macro_interest_rate": """
+        CREATE TABLE IF NOT EXISTS macro_interest_rate (
+            pub_date    VARCHAR(8)  NOT NULL PRIMARY KEY COMMENT 'YYYYMMDD',
+            lpr_1y      DECIMAL(6,4) COMMENT '1年期LPR(%)',
+            lpr_5y      DECIMAL(6,4) COMMENT '5年期LPR(%)',
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='LPR利率'
+    """,
+
+    "northbound_top10": """
+        CREATE TABLE IF NOT EXISTS northbound_top10 (
+            trade_date   VARCHAR(8)   NOT NULL,
+            market_type  VARCHAR(4)   NOT NULL COMMENT '1=沪股通 3=深股通',
+            code         VARCHAR(16)  NOT NULL,
+            name         VARCHAR(32),
+            close        DECIMAL(10,2),
+            rank         INT,
+            net_amount   DECIMAL(16,2) COMMENT '净买入额（万元）',
+            buy          DECIMAL(16,2),
+            sell         DECIMAL(16,2),
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (trade_date, market_type, code)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='北向资金每日十大成交股'
+    """,
 }
 
 ALL_TABLES = list(DDL_STATEMENTS.keys())

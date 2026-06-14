@@ -31,6 +31,7 @@ from invest_model.collectors.fundamental_collector import FundamentalCollector
 from invest_model.collectors.event_collector import EventCollector
 from invest_model.collectors.market_collector import MarketCollector
 from invest_model.collectors.technical_collector import TechnicalCollector
+from invest_model.collectors.macro_collector import MacroCollector
 from invest_model.repositories.base import BaseRepository
 from invest_model.repositories.stock_pool_repo import StockPoolRepository
 from invest_model.validators.data_validator import DataValidator
@@ -60,6 +61,7 @@ AFTERNOON_STEPS = [
     "northbound",
     "holder_trade",
     "holder_count",
+    "macro",               # 宏观数据（M1/M2/PMI/CPI/PPI/LPR/北向Top10）
     "data_freshness",      # 数据新鲜度检查（在信号生成前最后把关）
     "signal_generation",
     "model_health_check",
@@ -89,6 +91,7 @@ class DailyPipeline:
             "northbound":        ("北向资金",     self._sync_northbound),
             "holder_trade":      ("股东增减持",   self._sync_holder_trade),
             "holder_count":      ("股东户数",     self._sync_holder_count),
+            "macro":             ("宏观数据",     self._sync_macro),
             "data_freshness":    ("数据新鲜度",   self._check_data_freshness),
             "signal_generation": ("综合评分",     self._run_signal_generation),
             "model_health_check":("模型健康检查", self._check_model_health),
@@ -231,6 +234,12 @@ class DailyPipeline:
             return "无标的"
         c = EventCollector(self.source, self.engine)
         return c.collect_holder_count(codes)
+
+    def _sync_macro(self):
+        c = MacroCollector(self.source, self.engine)
+        results = c.collect_all_incremental()
+        total = sum(results.values())
+        return f"新增 {total} 条: {results}"
 
     def _check_model_health(self):
         """检查 ML 模型 OOS IC，低于阈值发出警告，并持久化健康日志。

@@ -286,3 +286,40 @@ class TushareClient(BaseSource):
         if df is not None and not df.empty:
             df = df.rename(columns={"ts_code": "code"})
         return df if df is not None else pd.DataFrame()
+
+    # ── 宏观经济数据 ──────────────────────────────────────
+
+    @_retry
+    @_rate_limit
+    def get_money_supply(self, start_m: str, end_m: str) -> pd.DataFrame:
+        """货币供应量 M0/M1/M2（月度，格式 YYYYMM）"""
+        df = self.pro.cn_m(start_m=start_m, end_m=end_m)
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_pmi(self, start_m: str, end_m: str) -> pd.DataFrame:
+        """PMI（月度）：制造业/非制造业/综合"""
+        df = self.pro.cn_pmi(start_m=start_m, end_m=end_m)
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_cpi(self, start_m: str, end_m: str) -> pd.DataFrame:
+        """CPI（月度）"""
+        df = self.pro.cn_cpi(start_m=start_m, end_m=end_m)
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_ppi(self, start_m: str, end_m: str) -> pd.DataFrame:
+        """PPI（月度）"""
+        df = self.pro.cn_ppi(start_m=start_m, end_m=end_m)
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_lpr(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """贷款市场报价利率 LPR（日度）"""
+        df = self.pro.cb_lpr(start_date=start_date, end_date=end_date)
+        return df if df is not None else pd.DataFrame()
