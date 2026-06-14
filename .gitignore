@@ -33,3 +33,10 @@ data/cache/
 # Keep these out of git
 logs/*.log
 __pycache__/
+
+# SQLite local/verification DBs
+*.db
+data/*.db
+
+# Generated pipeline outputs (synthetic/real run artifacts)
+results/*.json

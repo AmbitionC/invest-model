@@ -52,10 +52,14 @@ class BaseRepository:
         with self.engine.connect() as conn:
             return pd.read_sql(text(sql), conn, params=params)
 
+    @property
+    def _dialect(self) -> str:
+        return self.engine.dialect.name
+
     def upsert(self, table: str, df: pd.DataFrame, unique_keys: list[str]) -> int:
         """
-        批量 Upsert（INSERT ... ON DUPLICATE KEY UPDATE）。
-        要求表已存在对应的 UNIQUE 索引。
+        批量 Upsert。MySQL 走 ``ON DUPLICATE KEY UPDATE``，SQLite 走
+        ``ON CONFLICT(...) DO UPDATE``（dialect 感知，要求表已有对应唯一/主键约束）。
         返回写入行数。
         """
         if df.empty:
@@ -74,19 +78,34 @@ class BaseRepository:
         placeholders = ", ".join([f":{c}" for c in columns])
         col_list = ", ".join([f"`{c}`" for c in columns])
         update_cols = [c for c in columns if c not in unique_keys]
-        if update_cols:
-            update_clause = ", ".join([f"`{c}`=VALUES(`{c}`)" for c in update_cols])
-            sql = f"""
-                INSERT INTO {table} ({col_list})
-                VALUES ({placeholders})
-                ON DUPLICATE KEY UPDATE {update_clause}
-            """
+
+        if self._dialect == "sqlite":
+            conflict = ", ".join([f"`{c}`" for c in unique_keys])
+            if update_cols:
+                set_clause = ", ".join([f"`{c}`=excluded.`{c}`" for c in update_cols])
+                sql = (
+                    f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) "
+                    f"ON CONFLICT({conflict}) DO UPDATE SET {set_clause}"
+                )
+            else:
+                sql = (
+                    f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) "
+                    f"ON CONFLICT({conflict}) DO NOTHING"
+                )
         else:
-            # 无数据列可更新，改用 INSERT IGNORE
-            sql = f"""
-                INSERT IGNORE INTO {table} ({col_list})
-                VALUES ({placeholders})
-            """
+            if update_cols:
+                update_clause = ", ".join([f"`{c}`=VALUES(`{c}`)" for c in update_cols])
+                sql = f"""
+                    INSERT INTO {table} ({col_list})
+                    VALUES ({placeholders})
+                    ON DUPLICATE KEY UPDATE {update_clause}
+                """
+            else:
+                # 无数据列可更新，改用 INSERT IGNORE
+                sql = f"""
+                    INSERT IGNORE INTO {table} ({col_list})
+                    VALUES ({placeholders})
+                """
 
         records = df.to_dict("records")
         _records_coerce_nulls_for_mysql(records)
@@ -111,7 +130,8 @@ class BaseRepository:
         placeholders = ", ".join([f":{c}" for c in columns])
         col_list = ", ".join([f"`{c}`" for c in columns])
 
-        sql = f"INSERT IGNORE INTO {table} ({col_list}) VALUES ({placeholders})"
+        ignore = "OR IGNORE" if self._dialect == "sqlite" else "IGNORE"
+        sql = f"INSERT {ignore} INTO {table} ({col_list}) VALUES ({placeholders})"
 
         records = df.to_dict("records")
         _records_coerce_nulls_for_mysql(records)
@@ -140,7 +160,11 @@ class BaseRepository:
         return int(df["cnt"].iloc[0])
 
     def table_exists(self, table: str) -> bool:
-        """检查表是否存在"""
-        sql = "SELECT COUNT(*) as cnt FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = :tbl"
+        """检查表是否存在（dialect 感知）"""
+        if self._dialect == "sqlite":
+            sql = "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name = :tbl"
+        else:
+            sql = ("SELECT COUNT(*) as cnt FROM information_schema.tables "
+                   "WHERE table_schema = DATABASE() AND table_name = :tbl")
         df = self.read_sql(sql, {"tbl": table})
         return int(df["cnt"].iloc[0]) > 0

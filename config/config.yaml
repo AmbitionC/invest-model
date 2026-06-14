@@ -1,62 +1,43 @@
-# invest-model 数据层配置
+# invest-model 配置（截面多因子自主闭环）
 
-# 数据源
+# 数据源（仅生产数据更新 mode=update 使用）
 sources:
   tushare:
     enabled: true
     retry_times: 3
     retry_delay: 2
     rate_limit_per_min: 480
-    # 与 tushare.pro 文档一致的数据服务基地址；留空则走库默认 HTTPS 接口。
-    # 若报「token不对」而 token 无误，可设为文档给出的镜像，或由环境变量 TUSHARE_HTTP_URL 覆盖。
-    http_url: "https://minitick.top/"  # 留空走官方 HTTPS 接口
-  baostock:
-    enabled: true
-    retry_times: 3
+    # 与 tushare.pro 文档一致的数据服务基地址；留空走官方 HTTPS。
+    http_url: ""
 
-# 数据库（连接信息从 .env 读取）
+# 数据库（连接信息从 .env 读取；本地验证用 --db sqlite:///./data/local.db 覆盖）
 database:
   pool_size: 5
   max_overflow: 10
   echo: false
 
-# 采集配置
-collection:
-  history_years: 5
-  batch_size: 50
-  schedule:
-    morning: "11:35"     # 早盘收盘后：行情快照（日线/指数/ETF）
-    afternoon: "15:05"   # 午盘收盘后：全量增量 + 财务/事件 + 校验
+# 模型/策略默认值（命令行参数优先于此处；见 scripts/run_pipeline.py）
+model:
+  universe:
+    method: alla            # 全 A 流动性筛选
+    min_list_days: 365      # 上市满 1 年
+    liquidity_pct: 0.20     # 剔除流动性最差 20%
+    size_pct: 0.10          # 剔除市值最小 10%
+  factors:
+    ic_window: 12           # 滚动 IC 窗口（调仓期数）
+    ic_mode: icir           # icir | ic
+    neutralize: true        # 行业 + 市值中性化
+  portfolio:
+    top_n: 30
+    scheme: rank_weight     # equal | rank_weight | score_weight
+    max_weight: 0.08        # 单票上限
+    industry_cap: 0.30      # 单行业上限
+  timing:
+    enabled: true
+    floor: 0.5              # 总仓位下限（下限 0.5、线性、不连乘 —— 修复空仓陷阱）
+  rebalance: monthly        # monthly | biweekly
+  benchmark: "000300.SH"
 
-# 数据校验
-validation:
-  max_pct_chg: 22.0
-  min_volume_warn: 100
-  max_missing_days: 5
-  check_continuity: true
-
-# 日志
 logging:
   level: INFO
   dir: ./logs
-
-# 综合评分
-scoring:
-  category_weights:
-    technical: 0.50     # A股技术趋势信号有效性最高
-    fundamental: 0.10   # PE/PB季报滞后，估值锚点弱
-    money_flow: 0.30    # 大单净流入是领先信号，提升权重
-    sentiment: 0.10     # 股东户数变化延迟，降权
-
-# 回测
-backtest:
-  default_rebalance_days: 10  # 两周换仓一次（原5天），降低换手率约50%
-  default_top_k: 10
-  universe: core   # 对应 stock_pool.pool_group
-
-# 风控参数
-risk_management:
-  max_single_position: 0.20       # 单票最大仓位 20%
-  stop_loss_threshold: -0.10      # 单票止损线 -10%
-  portfolio_drawdown_halt: -0.15  # 组合回撤熔断 -15%
-  min_trade_size: 0.05            # 最小调仓幅度 5%（低于此不操作）

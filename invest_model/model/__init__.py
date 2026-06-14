@@ -1,19 +1,17 @@
-"""模型层入口 — 逐票信号顾问。
+"""选股模型层：调仓日历、前瞻标签、因子 IC、IC 加权合成与预测。"""
 
-旧的 TopK 换仓回测已移除，改为逐票置信度信号顾问模式。
-
-使用方式：
-    from invest_model.advisor import StockAdvisor, AdvisorSignal
-
-    advisor = StockAdvisor(engine)
-    signals = advisor.advise_batch(codes, trade_date)
-    for s in signals:
-        print(s.action_cn, s.confidence, s.attribution)
-"""
-
-from invest_model.advisor import AdvisorSignal, StockAdvisor
+from invest_model.model.combiner import ICCombiner
+from invest_model.model.dataset import (
+    forward_returns,
+    next_rebalance_map,
+    rebalance_dates,
+)
+from invest_model.model.predict import CSPredictor
 
 __all__ = [
-    "StockAdvisor",
-    "AdvisorSignal",
+    "ICCombiner",
+    "CSPredictor",
+    "rebalance_dates",
+    "next_rebalance_map",
+    "forward_returns",
 ]

@@ -153,6 +153,50 @@ class TushareClient(BaseSource):
 
     @_retry
     @_rate_limit
+    def get_daily_bulk(self, trade_date: str) -> pd.DataFrame:
+        """按交易日一次拉取全市场日线 OHLCV（1 次调用覆盖 ~5000 只）。"""
+        df = self.pro.daily(trade_date=trade_date)
+        if df is not None and not df.empty:
+            df = df.rename(columns={"ts_code": "code", "vol": "volume"})
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_fina_indicator_bulk(self, period: str) -> pd.DataFrame:
+        """按报告期一次拉取全市场财务指标（fina_indicator_vip，需 VIP 权限）。
+
+        period 形如 ``20240930``。无 VIP 权限时调用方应回退到逐票
+        :meth:`get_stock_fundamental`。
+        """
+        df = self.pro.fina_indicator_vip(
+            period=period,
+            fields="ts_code,ann_date,end_date,eps,bps,roe,roa,"
+                   "grossprofit_margin,debt_to_assets,or_yoy,netprofit_yoy",
+        )
+        if df is not None and not df.empty:
+            df = df.rename(columns={
+                "ts_code": "code",
+                "end_date": "report_date",
+                "grossprofit_margin": "gross_margin",
+                "debt_to_assets": "debt_to_asset",
+                "or_yoy": "revenue_yoy",
+                "netprofit_yoy": "profit_yoy",
+            })
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_index_weight(self, index_code: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """指数成分与权重（月度快照）。基准/可选 universe 用。"""
+        df = self.pro.index_weight(
+            index_code=index_code, start_date=start_date, end_date=end_date
+        )
+        if df is not None and not df.empty:
+            df = df.rename(columns={"con_code": "code", "index_code": "index_code"})
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
     def get_index_daily(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
         df = self.pro.index_daily(
             ts_code=code, start_date=start_date, end_date=end_date
