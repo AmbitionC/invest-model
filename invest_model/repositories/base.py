@@ -74,13 +74,19 @@ class BaseRepository:
         placeholders = ", ".join([f":{c}" for c in columns])
         col_list = ", ".join([f"`{c}`" for c in columns])
         update_cols = [c for c in columns if c not in unique_keys]
-        update_clause = ", ".join([f"`{c}`=VALUES(`{c}`)" for c in update_cols])
-
-        sql = f"""
-            INSERT INTO {table} ({col_list})
-            VALUES ({placeholders})
-            ON DUPLICATE KEY UPDATE {update_clause}
-        """
+        if update_cols:
+            update_clause = ", ".join([f"`{c}`=VALUES(`{c}`)" for c in update_cols])
+            sql = f"""
+                INSERT INTO {table} ({col_list})
+                VALUES ({placeholders})
+                ON DUPLICATE KEY UPDATE {update_clause}
+            """
+        else:
+            # 无数据列可更新，改用 INSERT IGNORE
+            sql = f"""
+                INSERT IGNORE INTO {table} ({col_list})
+                VALUES ({placeholders})
+            """
 
         records = df.to_dict("records")
         _records_coerce_nulls_for_mysql(records)

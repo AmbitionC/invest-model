@@ -3,28 +3,28 @@
     "trade_date": "20250117",
     "code": "000833.SZ",
     "action": "buy",
-    "weight": 0.0601,
+    "weight": 0.0657,
     "price": 11.76
   },
   {
-    "trade_date": "20250123",
+    "trade_date": "20250122",
     "code": "000833.SZ",
     "action": "clear",
     "weight": 0.0,
-    "price": 11.43
+    "price": 11.63
   },
   {
     "trade_date": "20250127",
     "code": "002851.SZ",
     "action": "buy",
-    "weight": 0.0749,
+    "weight": 0.0777,
     "price": 62.84
   },
   {
     "trade_date": "20250127",
     "code": "000833.SZ",
     "action": "buy",
-    "weight": 0.0503,
+    "weight": 0.0571,
     "price": 10.95
   },
   {
@@ -35,39 +35,32 @@
     "price": 55.85
   },
   {
-    "trade_date": "20250211",
+    "trade_date": "20250210",
+    "code": "002851.SZ",
+    "action": "buy",
+    "weight": 0.0502,
+    "price": 60.5
+  },
+  {
+    "trade_date": "20250220",
+    "code": "600160.SH",
+    "action": "buy",
+    "weight": 0.0516,
+    "price": 23.95
+  },
+  {
+    "trade_date": "20250225",
     "code": "000833.SZ",
     "action": "add",
-    "weight": 0.1084,
-    "price": 12.2
+    "weight": 0.1206,
+    "price": 13.04
   },
   {
-    "trade_date": "20250213",
-    "code": "002851.SZ",
-    "action": "buy",
-    "weight": 0.0664,
-    "price": 57.38
-  },
-  {
-    "trade_date": "20250228",
-    "code": "002851.SZ",
-    "action": "clear",
-    "weight": 0.0,
-    "price": 50.81
-  },
-  {
-    "trade_date": "20250303",
+    "trade_date": "20250227",
     "code": "000833.SZ",
     "action": "reduce",
-    "weight": 0.0791,
-    "price": 15.15
-  },
-  {
-    "trade_date": "20250304",
-    "code": "002851.SZ",
-    "action": "buy",
-    "weight": 0.0783,
-    "price": 50.2
+    "weight": 0.0766,
+    "price": 13.9
   },
   {
     "trade_date": "20250307",
@@ -77,46 +70,25 @@
     "price": 13.02
   },
   {
-    "trade_date": "20250307",
-    "code": "002851.SZ",
-    "action": "reduce",
-    "weight": 0.0,
-    "price": 57.82
-  },
-  {
-    "trade_date": "20250311",
-    "code": "002851.SZ",
+    "trade_date": "20250402",
+    "code": "600118.SH",
     "action": "buy",
-    "weight": 0.0548,
-    "price": 60.82
-  },
-  {
-    "trade_date": "20250324",
-    "code": "002851.SZ",
-    "action": "reduce",
-    "weight": 0.0025,
-    "price": 59.18
-  },
-  {
-    "trade_date": "20250325",
-    "code": "600160.SH",
-    "action": "buy",
-    "weight": 0.0505,
-    "price": 23.9
-  },
-  {
-    "trade_date": "20250401",
-    "code": "002851.SZ",
-    "action": "buy",
-    "weight": 0.0564,
-    "price": 60.07
+    "weight": 0.0501,
+    "price": 26.54
   },
   {
     "trade_date": "20250415",
     "code": "000833.SZ",
     "action": "buy",
-    "weight": 0.0999,
+    "weight": 0.1033,
     "price": 11.96
+  },
+  {
+    "trade_date": "20250418",
+    "code": "516120.SH",
+    "action": "buy",
+    "weight": 0.0517,
+    "price": 0.581
   },
   {
     "trade_date": "20250418",
@@ -126,17 +98,24 @@
     "price": 11.53
   },
   {
-    "trade_date": "20250509",
+    "trade_date": "20250429",
     "code": "600160.SH",
     "action": "reduce",
-    "weight": 0.005,
-    "price": 26.81
+    "weight": 0.002,
+    "price": 25.5
+  },
+  {
+    "trade_date": "20250508",
+    "code": "516120.SH",
+    "action": "clear",
+    "weight": 0.0,
+    "price": 0.604
   },
   {
     "trade_date": "20250512",
     "code": "000833.SZ",
     "action": "buy",
-    "weight": 0.0768,
+    "weight": 0.0778,
     "price": 13.17
   },
   {
@@ -150,7 +129,7 @@
     "trade_date": "20250530",
     "code": "002648.SZ",
     "action": "buy",
-    "weight": 0.0511,
+    "weight": 0.0582,
     "price": 16.73
   },
   {
@@ -161,39 +140,32 @@
     "price": 16.77
   },
   {
-    "trade_date": "20250715",
-    "code": "002851.SZ",
-    "action": "clear",
-    "weight": 0.0,
-    "price": 53.29
-  },
-  {
-    "trade_date": "20250722",
-    "code": "002851.SZ",
-    "action": "buy",
-    "weight": 0.0625,
-    "price": 54.94
-  },
-  {
     "trade_date": "20250731",
     "code": "300750.SZ",
     "action": "buy",
-    "weight": 0.0551,
+    "weight": 0.0608,
     "price": 264.62
-  },
-  {
-    "trade_date": "20250804",
-    "code": "002851.SZ",
-    "action": "reduce",
-    "weight": 0.0115,
-    "price": 64.39
   },
   {
     "trade_date": "20250805",
     "code": "300750.SZ",
     "action": "reduce",
-    "weight": 0.0025,
+    "weight": 0.01,
     "price": 265.7
+  },
+  {
+    "trade_date": "20250822",
+    "code": "600118.SH",
+    "action": "reduce",
+    "weight": 0.0055,
+    "price": 30.27
+  },
+  {
+    "trade_date": "20250828",
+    "code": "002851.SZ",
+    "action": "reduce",
+    "weight": 0.0207,
+    "price": 88.91
   },
   {
     "trade_date": "20250903",
@@ -201,20 +173,6 @@
     "action": "buy",
     "weight": 0.0728,
     "price": 14.0
-  },
-  {
-    "trade_date": "20250912",
-    "code": "000833.SZ",
-    "action": "reduce",
-    "weight": 0.0284,
-    "price": 15.38
-  },
-  {
-    "trade_date": "20250917",
-    "code": "000833.SZ",
-    "action": "buy",
-    "weight": 0.0836,
-    "price": 14.61
   },
   {
     "trade_date": "20250919",
@@ -227,29 +185,43 @@
     "trade_date": "20251014",
     "code": "000833.SZ",
     "action": "buy",
-    "weight": 0.0675,
+    "weight": 0.0688,
     "price": 14.87
   },
   {
-    "trade_date": "20251112",
-    "code": "000833.SZ",
-    "action": "reduce",
-    "weight": 0.032,
-    "price": 20.65
-  },
-  {
-    "trade_date": "20251121",
-    "code": "000833.SZ",
-    "action": "buy",
-    "weight": 0.0877,
-    "price": 20.14
-  },
-  {
-    "trade_date": "20251121",
+    "trade_date": "20251028",
     "code": "002648.SZ",
     "action": "buy",
-    "weight": 0.0659,
-    "price": 16.71
+    "weight": 0.0511,
+    "price": 17.73
+  },
+  {
+    "trade_date": "20251110",
+    "code": "000833.SZ",
+    "action": "reduce",
+    "weight": 0.034,
+    "price": 18.76
+  },
+  {
+    "trade_date": "20251111",
+    "code": "002648.SZ",
+    "action": "clear",
+    "weight": 0.0,
+    "price": 18.18
+  },
+  {
+    "trade_date": "20251118",
+    "code": "002648.SZ",
+    "action": "buy",
+    "weight": 0.0547,
+    "price": 17.36
+  },
+  {
+    "trade_date": "20251121",
+    "code": "000833.SZ",
+    "action": "buy",
+    "weight": 0.0882,
+    "price": 20.14
   },
   {
     "trade_date": "20251125",
@@ -259,18 +231,18 @@
     "price": 20.0
   },
   {
-    "trade_date": "20251223",
-    "code": "002648.SZ",
-    "action": "reduce",
-    "weight": 0.0121,
-    "price": 16.89
-  },
-  {
     "trade_date": "20260106",
     "code": "000833.SZ",
     "action": "buy",
-    "weight": 0.0754,
+    "weight": 0.076,
     "price": 21.09
+  },
+  {
+    "trade_date": "20260107",
+    "code": "002648.SZ",
+    "action": "reduce",
+    "weight": 0.0073,
+    "price": 18.65
   },
   {
     "trade_date": "20260113",
@@ -280,11 +252,11 @@
     "price": 19.78
   },
   {
-    "trade_date": "20260119",
+    "trade_date": "20260115",
     "code": "000833.SZ",
     "action": "buy",
-    "weight": 0.0575,
-    "price": 22.8
+    "weight": 0.0529,
+    "price": 21.31
   },
   {
     "trade_date": "20260130",
@@ -297,21 +269,21 @@
     "trade_date": "20260212",
     "code": "000833.SZ",
     "action": "buy",
-    "weight": 0.076,
+    "weight": 0.0761,
     "price": 22.46
   },
   {
     "trade_date": "20260227",
     "code": "000833.SZ",
     "action": "reduce",
-    "weight": 0.014,
+    "weight": 0.0193,
     "price": 22.87
   },
   {
     "trade_date": "20260420",
     "code": "000833.SZ",
     "action": "buy",
-    "weight": 0.0754,
+    "weight": 0.076,
     "price": 26.33
   },
   {
@@ -332,7 +304,7 @@
     "trade_date": "20260507",
     "code": "000833.SZ",
     "action": "buy",
-    "weight": 0.0982,
+    "weight": 0.0983,
     "price": 27.14
   },
   {
@@ -346,7 +318,7 @@
     "trade_date": "20260512",
     "code": "000833.SZ",
     "action": "buy",
-    "weight": 0.0649,
+    "weight": 0.0689,
     "price": 27.05
   },
   {
@@ -360,7 +332,7 @@
     "trade_date": "20260529",
     "code": "002648.SZ",
     "action": "buy",
-    "weight": 0.0724,
+    "weight": 0.0783,
     "price": 23.27
   },
   {
@@ -374,28 +346,28 @@
     "trade_date": "20260604",
     "code": "002648.SZ",
     "action": "buy",
-    "weight": 0.0824,
+    "weight": 0.0882,
     "price": 23.51
   },
   {
     "trade_date": "20260608",
     "code": "516120.SH",
     "action": "buy",
-    "weight": 0.07,
+    "weight": 0.0769,
     "price": 0.861
   },
   {
     "trade_date": "20260610",
     "code": "000833.SZ",
     "action": "buy",
-    "weight": 0.1023,
+    "weight": 0.1045,
     "price": 25.54
   },
   {
-    "trade_date": "20260612",
+    "trade_date": "20260611",
     "code": "516120.SH",
     "action": "reduce",
-    "weight": 0.0151,
-    "price": 0.918
+    "weight": 0.0012,
+    "price": 0.887
   }
 ]
