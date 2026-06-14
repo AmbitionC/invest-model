@@ -84,11 +84,11 @@ class DecisionConfig:
     execution_tier: str = "normal"
     min_trade_size: float = 0.05
     score_to_position_scale: float = 30.0
-    sell_score_threshold: float = -0.005
+    sell_score_threshold: float = -0.003
     min_holding_days: int = 3
     min_flat_days: int = 2
     take_profit_min_conditions: int = 3
-    buy_threshold: float = 0.005
+    buy_threshold: float = 0.003
     max_single_position: float = 0.20    # 单票最大仓位上限（20%）
     stop_loss_threshold: float = -0.10   # 持仓期间跌幅触发止损（-10%）
 

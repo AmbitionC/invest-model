@@ -116,16 +116,23 @@ class MLPredictor:
     # ── horizon 加权 ───────────────────────────────────
 
     def _model_quality_score(self, cv_avg_ic: float, cv_hit_rate: float) -> float:
-        """质量门控：同时满足 IC 和方向命中率才有效。
+        """质量门控：IC + 方向命中率双门限过滤。
 
-        - IC ≤ 0 → 无预测力，返回 0
-        - hit_rate < 0.49 且 IC > 0 → 方向系统性反转，返回 0
-        - 通过门控 → 返回原始 IC（保持权重量级不变，floor 逻辑在调用处）
+        - IC ≤ 0              → 无预测力，返回 0
+        - hit_rate < 0.47     → 方向系统性反转（>53% 时间预测错方向），返回 0
+        - 0.47 ≤ hit_rate < 0.50 → 稍差方向准确率，轻度打折：IC × (hit_rate / 0.50)
+        - hit_rate ≥ 0.50     → 方向准确率达标，返回原始 IC
+
+        0.49 → 0.47 降低阈值目的：避免把正 IC 但 hit_rate 仅在统计噪声区间的模型完全废弃。
+        floor 逻辑保留在 _effective_weights 中处理（ic_floor=0.05 截断）。
         """
         if cv_avg_ic <= 0.0:
             return 0.0
-        if cv_hit_rate < 0.49:
+        if cv_hit_rate < 0.47:
             return 0.0
+        if cv_hit_rate < 0.50:
+            # 轻度打折：hit_rate 从 0.47 到 0.50 的过渡区间
+            return cv_avg_ic * (cv_hit_rate / 0.50)
         return cv_avg_ic
 
     def _effective_weights(

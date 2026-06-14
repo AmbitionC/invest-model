@@ -250,7 +250,9 @@ class DailyPipeline:
         from invest_model.scoring.ic_monitor import ICMonitor
         from invest_model.repositories.stock_daily_repo import StockDailyRepository
 
-        codes = self.pool_repo.get_pool_codes("core")
+        core_codes = self.pool_repo.get_pool_codes("core")
+        etf_codes  = self.pool_repo.get_pool_codes("etf")
+        codes = core_codes + etf_codes
         if not codes:
             return "无标的"
 
@@ -264,9 +266,9 @@ class DailyPipeline:
             ic_warn_threshold=0.03,
         )
 
-        # 取今日检查日期（用最新交易日）
+        # 取今日检查日期（用个股最新交易日；ETF 与个股同市场，不单独查）
         daily_repo = StockDailyRepository(self.engine)
-        latest_dates = [d for d in (daily_repo.get_latest_date(code=c) for c in codes) if d]
+        latest_dates = [d for d in (daily_repo.get_latest_date(code=c) for c in core_codes) if d]
         check_date = max(latest_dates) if latest_dates else datetime.now().strftime("%Y%m%d")
 
         # 持久化健康日志
@@ -375,7 +377,11 @@ class DailyPipeline:
         return f"checks={report.total_checks}, passed={report.passed}, warnings={report.warnings}"
 
     def _run_signal_generation(self):
-        """生成综合评分 + 逐票操作建议并落库。"""
+        """生成综合评分 + 逐票操作建议并落库。
+
+        个股（core）参与规则评分 + ML advisor；
+        ETF（etf 组）仅参与 ML advisor（无基本面/资金流规则信号）。
+        """
         from invest_model.repositories.stock_daily_repo import StockDailyRepository
         from invest_model.scoring import (
             CompositeScorer,
@@ -385,14 +391,18 @@ class DailyPipeline:
         from invest_model.scoring.market_regime import MarketRegimeDetector
         from invest_model.advisor import StockAdvisor
         from invest_model.advisor.persistence import save_advisor_signals
+        import pandas as pd
 
-        codes = self.pool_repo.get_pool_codes("core")
-        if not codes:
+        core_codes = self.pool_repo.get_pool_codes("core")
+        etf_codes  = self.pool_repo.get_pool_codes("etf")
+        all_codes  = core_codes + etf_codes
+
+        if not core_codes:
             return "无标的"
 
         daily_repo = StockDailyRepository(self.engine)
         latest_dates = [
-            d for d in (daily_repo.get_latest_date(code=c) for c in codes) if d
+            d for d in (daily_repo.get_latest_date(code=c) for c in core_codes) if d
         ]
         if not latest_dates:
             return "无日线数据"
@@ -403,9 +413,9 @@ class DailyPipeline:
         if circuit_break:
             logger.warning("[熔断] 组合近期回撤超 -15%，本次信号生成将屏蔽买入操作")
 
-        # 1) 综合评分（保留原有落库逻辑）
+        # 1) 综合评分（仅个股；ETF 无基本面/资金流数据）
         scorer = CompositeScorer(self.engine)
-        df, snapshots = scorer.score_batch(codes, trade_date)
+        df, snapshots = scorer.score_batch(core_codes, trade_date)
         n_sigs = 0
         n_comp = 0
         if not df.empty:
@@ -427,18 +437,21 @@ class DailyPipeline:
         if circuit_break:
             multiplier = min(multiplier, 0.0)
 
-        # 3) 逐票操作建议（透传 regime_multiplier 给 advisor）
-        pool_df = self.pool_repo.get_pool("core")
-        code_name_map = dict(zip(pool_df["code"], pool_df["name"]))
+        # 3) 逐票操作建议（个股 + ETF 一起送入 advisor）
+        core_pool_df = self.pool_repo.get_pool("core")
+        etf_pool_df  = self.pool_repo.get_pool("etf")
+        all_pool_df  = pd.concat([core_pool_df, etf_pool_df], ignore_index=True)
+        code_name_map = dict(zip(all_pool_df["code"], all_pool_df["name"]))
+
         advisor = StockAdvisor(self.engine)
         signals = advisor.advise_batch(
-            codes, trade_date, code_name_map,
+            all_codes, trade_date, code_name_map,
             regime_multiplier=multiplier,
         )
         n_adv = save_advisor_signals(self.engine, signals)
 
         return (
-            f"date={trade_date}, codes={len(codes)}, "
+            f"date={trade_date}, core={len(core_codes)}, etf={len(etf_codes)}, "
             f"regime={regime}(×{multiplier:.2f}), "
             f"signals={n_sigs}, composite={n_comp}, advisor={n_adv}"
         )
