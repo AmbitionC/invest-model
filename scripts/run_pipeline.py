@@ -48,6 +48,8 @@ def main() -> None:
     ap.add_argument("--benchmark", default="000300.SH")
     ap.add_argument("--ic-window", type=int, default=12)
     ap.add_argument("--ic-mode", default="icir", choices=["icir", "ic"])
+    ap.add_argument("--model", default="ic", choices=["ic", "ranker"],
+                    help="ic=多因子IC加权合成（默认）；ranker=截面ML排序（需 xgboost）")
     ap.add_argument("--no-timing", action="store_true", help="关闭指数择时（恒满仓）")
     args = ap.parse_args()
 
@@ -58,6 +60,7 @@ def main() -> None:
         start=args.start, end=args.end, version=args.version,
         rebalance=args.rebalance, benchmark=args.benchmark,
         ic_window=args.ic_window, ic_mode=args.ic_mode,
+        model_kind=args.model,
         timing_enabled=not args.no_timing,
         universe=UniverseConfig(method=args.universe_method),
         portfolio=PortfolioConfig(top_n=args.top_n, max_weight=args.max_weight),

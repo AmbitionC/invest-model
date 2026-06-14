@@ -94,7 +94,19 @@ tests/           端到端冒烟测试
 pytest tests/ -q
 ```
 
-## 路线图（可选增强）
+## 可选：截面 ML 排序模型
 
-- 截面 ML 排序模型（LightGBM/XGBoost）作为合成器的替代/增强（`--model ranker`）。
+默认引擎是多因子 IC 加权合成（稳健、可解释）。另提供一个 XGBoost 截面排序模型作为
+增强，严格 walk-forward（预测日只用历史已实现样本，无未来函数），历史不足时自动回退
+到 IC 合成：
+
+```bash
+pip install "invest-model[ml]"      # 装 xgboost
+python scripts/run_pipeline.py --mode all --db sqlite:///./data/local.db \
+    --start 20210101 --end 20260613 --model ranker --version ranker_v1
+```
+
+## 路线图
+
 - 资金流因子（北向/大单/融资）接入（需对应数据采集）。
+- 多 universe 口径（沪深300/中证800 指数成分，已具备 `index_weight` 采集接口）。

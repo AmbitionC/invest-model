@@ -49,6 +49,7 @@ class LoopConfig:
     portfolio: PortfolioConfig = field(default_factory=PortfolioConfig)
     ic_window: int = 12
     ic_mode: str = "icir"            # icir | ic
+    model_kind: str = "ic"           # ic（多因子合成，默认） | ranker（ML 截面排序）
     timing_enabled: bool = True
     timing_floor: float = 0.5
 
@@ -72,6 +73,7 @@ class ClosedLoop:
         self.reg_repo = ModelRegistryRepository(engine)
         self._reb: list[str] = []
         self._ind_map: dict[str, str] = {}
+        self._ranker = None
 
     # ── 调仓日历 / 行业映射 ──
     def reb(self) -> list[str]:
@@ -113,13 +115,31 @@ class ClosedLoop:
             })
         return ic
 
+    def ranker(self):
+        if self._ranker is None:
+            from invest_model.model.ranker import CSRanker
+            self._ranker = CSRanker(self.engine, self.reb(), version=self.cfg.version,
+                                    min_train_periods=6)
+        return self._ranker
+
+    def _predict_one(self, dt: str) -> pd.DataFrame:
+        """ranker 模式优先用 ML 排序；历史不足时回退 IC 合成（同 version 落库）。"""
+        if self.cfg.model_kind == "ranker":
+            p = self.ranker().predict(dt, persist=True)
+            if not p.empty:
+                return p
+        return self.pred.predict(dt, persist=True)
+
     def predict_all(self) -> int:
-        return self.pred.predict_dates(self.reb())
+        n = sum(1 for d in self.reb() if not self._predict_one(d).empty)
+        logger.info(f"预测完成：{n}/{len(self.reb())} 个调仓日 "
+                    f"(version={self.cfg.version}, model={self.cfg.model_kind})")
+        return n
 
     def _target_provider(self, dt: str, _cur: dict[str, float]) -> dict[str, float]:
         p = self.pred_repo.get_predictions(dt, self.cfg.version)
         if p.empty:
-            p = self.pred.predict(dt, persist=True)
+            p = self._predict_one(dt)
         if p.empty:
             return {}
         u = set(self.uni_repo.get_universe(dt, self.cfg.universe.method))

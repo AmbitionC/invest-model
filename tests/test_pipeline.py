@@ -61,6 +61,21 @@ def test_full_loop_fixes_cash_trap(engine):
     assert m["alpha"] > 0, f"应有正 alpha，实际 {m['alpha']}"
 
 
+def test_ranker_mode_fixes_cash_trap(engine):
+    """可选 ML 排序模型同样应消除空仓陷阱（无 xgboost 则跳过）。"""
+    pytest.importorskip("xgboost")
+    cfg = LoopConfig(
+        start=START, end=END, version="rank_test",
+        model_kind="ranker",
+        universe=UniverseConfig(method="alla"),
+        portfolio=PortfolioConfig(top_n=30, max_weight=0.08),
+    )
+    m = ClosedLoop(engine, cfg).run("all")
+    assert m["beta"] > 0.5
+    assert m["avg_invested"] > 0.7
+    assert 20 <= m["avg_position_count"] <= 40
+
+
 def test_predictions_monotonic(engine):
     """合成分应单调：top 五分位前瞻收益 > bottom 五分位。"""
     import pandas as pd

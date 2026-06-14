@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4.0"]
+ml = ["xgboost>=2.0.0"]
 
 [tool.setuptools.packages.find]
 include = ["invest_model*"]
