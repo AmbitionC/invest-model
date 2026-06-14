@@ -230,11 +230,13 @@ BACKTEST_MODEL_VERSION = 'v1_oos'
 DECISION_BASE = DecisionConfig(
     min_trade_size=0.05,
     score_to_position_scale=30.0,
-    sell_score_threshold=-0.005,
+    sell_score_threshold=-0.003,   # Phase1: narrowed dead-zone
     min_holding_days=3,
     min_flat_days=2,
     take_profit_min_conditions=3,
-    buy_threshold=0.005,
+    buy_threshold=0.003,           # Phase1: narrowed dead-zone
+    max_single_position=0.20,      # Phase A: single-stock cap
+    stop_loss_threshold=-0.10,     # Phase A: hard stop-loss
 )
 
 def make_cfg(tier):
@@ -249,7 +251,7 @@ def make_cfg(tier):
         slippage=0.0005,
         rebalance_days=1,
         min_position_change=DECISION_BASE.min_trade_size,
-        max_position_per_stock=0.5,
+        max_position_per_stock=0.20,   # Phase A: single-stock cap matches DecisionConfig
         benchmark_code='000300.SH',
         decision_config=DECISION_BASE,
         execution_tier=tier,
