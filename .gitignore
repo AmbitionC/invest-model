@@ -39,4 +39,4 @@ __pycache__/
 data/*.db
 
 # Generated pipeline outputs (synthetic/real run artifacts)
-results/*.json
+# results/*.json  # 回测结果需要跟踪

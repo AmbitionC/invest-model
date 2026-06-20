@@ -1,0 +1,114 @@
+{
+  "generated_at": "2026-06-20T20:18:07.817918",
+  "version": "ic_v1",
+  "run_id": 49,
+  "metrics": {
+    "total_return": 0.793594,
+    "annual_return": 0.117283,
+    "annual_vol": 0.243163,
+    "sharpe": 0.482324,
+    "sortino": 0.652649,
+    "max_drawdown": 0.388241,
+    "calmar": 0.302089,
+    "win_rate": 0.525869,
+    "avg_position_count": 6.432043,
+    "turnover_total": 21.537611,
+    "n_days": 1317,
+    "benchmark_total_return": -0.065508,
+    "benchmark_annual_return": -0.013406,
+    "alpha": 0.128508,
+    "beta": 0.837282,
+    "avg_invested": 0.8048
+  },
+  "health": {
+    "recent_factor_ic": {
+      "low_turnover": 0.4909,
+      "mom_120": -0.4545,
+      "sp": 0.3818,
+      "mom_60": -0.3455,
+      "reversal_5": 0.3266,
+      "bp": 0.2606,
+      "small_size": -0.2485,
+      "ep": 0.1273,
+      "lowvol_20": 0.037
+    },
+    "factor_ic_full": {
+      "bp": 0.2606,
+      "ep": 0.1273,
+      "low_turnover": 0.4909,
+      "lowvol_20": 0.037,
+      "mom_120": -0.4545,
+      "mom_60": -0.3455,
+      "reversal_5": 0.3266,
+      "small_size": -0.2485,
+      "sp": 0.3818
+    },
+    "universe_avg_size": 6.5,
+    "universe_periods": 66,
+    "portfolio_avg_holdings": 6.6
+  },
+  "rebalance": "monthly",
+  "latest_rebalance_date": "20260601",
+  "latest_portfolio": [
+    {
+      "code": "000333.SZ",
+      "weight": 0.091224,
+      "rank": 2,
+      "gross_exposure": 0.8049
+    },
+    {
+      "code": "002156.SZ",
+      "weight": 0.091224,
+      "rank": 6,
+      "gross_exposure": 0.8049
+    },
+    {
+      "code": "002594.SZ",
+      "weight": 0.091224,
+      "rank": 3,
+      "gross_exposure": 0.8049
+    },
+    {
+      "code": "300750.SZ",
+      "weight": 0.091224,
+      "rank": 4,
+      "gross_exposure": 0.8049
+    },
+    {
+      "code": "600519.SH",
+      "weight": 0.091224,
+      "rank": 5,
+      "gross_exposure": 0.8049
+    },
+    {
+      "code": "601318.SH",
+      "weight": 0.091224,
+      "rank": 1,
+      "gross_exposure": 0.8049
+    },
+    {
+      "code": "000858.SZ",
+      "weight": 0.064393,
+      "rank": 10,
+      "gross_exposure": 0.8049
+    },
+    {
+      "code": "300442.SZ",
+      "weight": 0.064393,
+      "rank": 7,
+      "gross_exposure": 0.8049
+    },
+    {
+      "code": "600118.SH",
+      "weight": 0.064393,
+      "rank": 8,
+      "gross_exposure": 0.8049
+    },
+    {
+      "code": "600160.SH",
+      "weight": 0.064393,
+      "rank": 9,
+      "gross_exposure": 0.8049
+    }
+  ]
+}

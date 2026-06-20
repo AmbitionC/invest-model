@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from sqlalchemy import (
     Column,
+    DateTime,
     Integer,
     MetaData,
     Numeric,
@@ -31,7 +32,7 @@ _NOW = text("CURRENT_TIMESTAMP")
 
 
 def _created_at() -> Column:
-    return Column("created_at", String(32), server_default=_NOW)
+    return Column("created_at", DateTime, server_default=_NOW)
 
 
 # ── 行情底座 ────────────────────────────────────────────────
