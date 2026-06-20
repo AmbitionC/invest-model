@@ -37,6 +37,10 @@ __pycache__/
 # SQLite local/verification DBs
 *.db
 data/*.db
+# SQLite WAL/SHM 临时文件
+*.db-shm
+*.db-wal
+*.db-journal
 
 # Generated pipeline outputs (synthetic/real run artifacts)
 # results/*.json  # 回测结果需要跟踪
