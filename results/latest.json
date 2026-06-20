@@ -1,114 +1,247 @@
 {
-  "generated_at": "2026-06-20T20:18:07.817918",
+  "generated_at": "2026-06-20T17:32:18.414070",
   "version": "ic_v1",
-  "run_id": 49,
+  "run_id": 1,
   "metrics": {
-    "total_return": 0.793594,
-    "annual_return": 0.117283,
-    "annual_vol": 0.243163,
-    "sharpe": 0.482324,
-    "sortino": 0.652649,
-    "max_drawdown": 0.388241,
-    "calmar": 0.302089,
-    "win_rate": 0.525869,
-    "avg_position_count": 6.432043,
-    "turnover_total": 21.537611,
+    "total_return": 0.349774,
+    "annual_return": 0.058588,
+    "annual_vol": 0.182631,
+    "sharpe": 0.320798,
+    "sortino": 0.425893,
+    "max_drawdown": 0.368589,
+    "calmar": 0.158951,
+    "win_rate": 0.535361,
+    "avg_position_count": 36.072893,
+    "turnover_total": 67.858736,
     "n_days": 1317,
-    "benchmark_total_return": -0.065508,
-    "benchmark_annual_return": -0.013406,
-    "alpha": 0.128508,
-    "beta": 0.837282,
-    "avg_invested": 0.8048
+    "benchmark_total_return": -0.093095,
+    "benchmark_annual_return": -0.018378,
+    "alpha": 0.070489,
+    "beta": 0.647552,
+    "avg_invested": 0.844
   },
   "health": {
     "recent_factor_ic": {
-      "low_turnover": 0.4909,
-      "mom_120": -0.4545,
-      "sp": 0.3818,
-      "mom_60": -0.3455,
-      "reversal_5": 0.3266,
-      "bp": 0.2606,
-      "small_size": -0.2485,
-      "ep": 0.1273,
-      "lowvol_20": 0.037
+      "low_turnover": 0.0489,
+      "rev_yoy": 0.0454,
+      "roe": 0.0397,
+      "bp": 0.0395,
+      "roa": 0.038,
+      "lowvol_20": 0.0342,
+      "ep": 0.0332,
+      "profit_yoy": 0.0271,
+      "gross_margin": 0.0164,
+      "mom_120": 0.0139,
+      "sp": 0.0139,
+      "small_size": -0.0138,
+      "mom_60": -0.0071,
+      "reversal_5": 0.0063
     },
     "factor_ic_full": {
-      "bp": 0.2606,
-      "ep": 0.1273,
-      "low_turnover": 0.4909,
-      "lowvol_20": 0.037,
-      "mom_120": -0.4545,
-      "mom_60": -0.3455,
-      "reversal_5": 0.3266,
-      "small_size": -0.2485,
-      "sp": 0.3818
+      "bp": 0.063,
+      "ep": 0.0348,
+      "gross_margin": -0.0034,
+      "low_turnover": 0.0885,
+      "lowvol_20": 0.0858,
+      "mom_120": -0.0503,
+      "mom_60": -0.0562,
+      "profit_yoy": 0.0041,
+      "rev_yoy": 0.0007,
+      "reversal_5": 0.0382,
+      "roa": 0.0022,
+      "roe": 0.0028,
+      "small_size": 0.0245,
+      "sp": 0.0461
     },
-    "universe_avg_size": 6.5,
+    "universe_avg_size": 3263.8,
     "universe_periods": 66,
-    "portfolio_avg_holdings": 6.6
+    "universe_min_size": 2536,
+    "portfolio_avg_holdings": 30.0,
+    "warnings": [],
+    "trustworthy": true
   },
   "rebalance": "monthly",
   "latest_rebalance_date": "20260601",
   "latest_portfolio": [
     {
-      "code": "000333.SZ",
-      "weight": 0.091224,
-      "rank": 2,
-      "gross_exposure": 0.8049
-    },
-    {
-      "code": "002156.SZ",
-      "weight": 0.091224,
-      "rank": 6,
-      "gross_exposure": 0.8049
-    },
-    {
-      "code": "002594.SZ",
-      "weight": 0.091224,
-      "rank": 3,
-      "gross_exposure": 0.8049
-    },
-    {
-      "code": "300750.SZ",
-      "weight": 0.091224,
-      "rank": 4,
-      "gross_exposure": 0.8049
-    },
-    {
-      "code": "600519.SH",
-      "weight": 0.091224,
-      "rank": 5,
-      "gross_exposure": 0.8049
-    },
-    {
-      "code": "601318.SH",
-      "weight": 0.091224,
+      "code": "002073.SZ",
+      "weight": 0.052249266100533015,
       "rank": 1,
-      "gross_exposure": 0.8049
+      "gross_exposure": 0.8098636245582618
     },
     {
-      "code": "000858.SZ",
-      "weight": 0.064393,
-      "rank": 10,
-      "gross_exposure": 0.8049
+      "code": "603612.SH",
+      "weight": 0.050507623897181914,
+      "rank": 2,
+      "gross_exposure": 0.8098636245582618
     },
     {
-      "code": "300442.SZ",
-      "weight": 0.064393,
+      "code": "600582.SH",
+      "weight": 0.04876598169383082,
+      "rank": 3,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "601717.SH",
+      "weight": 0.04702433949047972,
+      "rank": 4,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "001298.SZ",
+      "weight": 0.045282697287128616,
+      "rank": 5,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "002483.SZ",
+      "weight": 0.043541055083777515,
+      "rank": 6,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "002841.SZ",
+      "weight": 0.04179941288042641,
       "rank": 7,
-      "gross_exposure": 0.8049
+      "gross_exposure": 0.8098636245582618
     },
     {
-      "code": "600118.SH",
-      "weight": 0.064393,
+      "code": "601865.SH",
+      "weight": 0.04005777067707531,
       "rank": 8,
-      "gross_exposure": 0.8049
+      "gross_exposure": 0.8098636245582618
     },
     {
-      "code": "600160.SH",
-      "weight": 0.064393,
+      "code": "688349.SH",
+      "weight": 0.03831612847372421,
       "rank": 9,
-      "gross_exposure": 0.8049
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "300389.SZ",
+      "weight": 0.03657448627037311,
+      "rank": 10,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "601311.SH",
+      "weight": 0.034832844067022015,
+      "rank": 11,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "002204.SZ",
+      "weight": 0.03309120186367091,
+      "rank": 12,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "603187.SH",
+      "weight": 0.03134955966031981,
+      "rank": 13,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "002701.SZ",
+      "weight": 0.02960791745696871,
+      "rank": 14,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "600273.SH",
+      "weight": 0.02786627525361761,
+      "rank": 15,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "600288.SH",
+      "weight": 0.026124633050266508,
+      "rank": 16,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "002765.SZ",
+      "weight": 0.02438299084691541,
+      "rank": 17,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "002296.SZ",
+      "weight": 0.022641348643564308,
+      "rank": 18,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "000885.SZ",
+      "weight": 0.020899706440213207,
+      "rank": 19,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "600210.SH",
+      "weight": 0.019158064236862105,
+      "rank": 20,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "000030.SZ",
+      "weight": 0.017416422033511007,
+      "rank": 21,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "600098.SH",
+      "weight": 0.015674779830159906,
+      "rank": 22,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "601163.SH",
+      "weight": 0.013933137626808804,
+      "rank": 23,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "600262.SH",
+      "weight": 0.012191495423457705,
+      "rank": 24,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "603508.SH",
+      "weight": 0.010449853220106603,
+      "rank": 25,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "002440.SZ",
+      "weight": 0.008708211016755504,
+      "rank": 26,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "002139.SZ",
+      "weight": 0.006966568813404402,
+      "rank": 27,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "601877.SH",
+      "weight": 0.005224926610053302,
+      "rank": 28,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "600618.SH",
+      "weight": 0.003483284406702201,
+      "rank": 29,
+      "gross_exposure": 0.8098636245582618
+    },
+    {
+      "code": "603855.SH",
+      "weight": 0.0017416422033511006,
+      "rank": 30,
+      "gross_exposure": 0.8098636245582618
     }
   ]
 }
