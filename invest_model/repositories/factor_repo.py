@@ -41,20 +41,6 @@ class FactorRepository(BaseRepository):
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
         return df.pivot(index="code", columns="factor", values="value")
 
-    def get_factor_dates(self) -> list[str]:
-        df = self.read_sql(f"SELECT DISTINCT trade_date FROM {self.TABLE} ORDER BY trade_date")
-        return df["trade_date"].tolist() if not df.empty else []
-
-    def get_factor_panel(self, factor: str) -> pd.DataFrame:
-        """单因子的 (trade_date, code, value) 长表。"""
-        df = self.read_sql(
-            f"SELECT trade_date, code, value FROM {self.TABLE} WHERE factor=:f",
-            {"f": factor},
-        )
-        if not df.empty:
-            df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        return df
-
     def save_ic_log(self, df: pd.DataFrame) -> int:
         """df 列：trade_date, factor_name, horizon, ic, rank_ic。"""
         return self.upsert(self.IC_TABLE, df, self.IC_KEYS)

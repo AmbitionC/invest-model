@@ -21,15 +21,3 @@ class UniverseRepository(BaseRepository):
         )
         return df["code"].tolist() if not df.empty else []
 
-    def get_snapshot(self, trade_date: str, method: str) -> pd.DataFrame:
-        return self.read_sql(
-            f"SELECT * FROM {self.TABLE} WHERE trade_date=:d AND method=:m",
-            {"d": trade_date, "m": method},
-        )
-
-    def get_dates(self, method: str) -> list[str]:
-        df = self.read_sql(
-            f"SELECT DISTINCT trade_date FROM {self.TABLE} WHERE method=:m ORDER BY trade_date",
-            {"m": method},
-        )
-        return df["trade_date"].tolist() if not df.empty else []

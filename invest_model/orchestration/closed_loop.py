@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
 
@@ -225,3 +224,5 @@ class ClosedLoop:
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         res.nav_df.to_json(out_dir / "backtest_nav_latest.json", orient="records", force_ascii=False)
         logger.info(f"已导出 results/latest.json（最新组合 {len(payload['latest_portfolio'])} 只）")
+        for w in health.get("warnings", []):
+            logger.warning(f"⚠️ 回测可信度告警：{w}")

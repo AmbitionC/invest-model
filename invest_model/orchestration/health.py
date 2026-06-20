@@ -8,11 +8,13 @@ from invest_model.repositories.base import BaseRepository
 from invest_model.repositories.factor_repo import FactorRepository
 
 
-def compute_health(engine, version: str, method: str = "alla", recent: int = 6) -> dict:
+def compute_health(engine, version: str, method: str = "alla", recent: int = 6,
+                   min_universe: int = 50) -> dict:
     repo = BaseRepository(engine)
     frepo = FactorRepository(engine)
 
     health: dict = {}
+    warnings: list[str] = []
 
     # 因子 IC（近 recent 期均值，按 |mean| 排序的前若干）
     ic = frepo.get_ic_log()
@@ -31,8 +33,15 @@ def compute_health(engine, version: str, method: str = "alla", recent: int = 6) 
         {"m": method},
     )
     if not uni.empty:
-        health["universe_avg_size"] = round(float(uni["n"].mean()), 1)
+        avg_size = round(float(uni["n"].mean()), 1)
+        health["universe_avg_size"] = avg_size
         health["universe_periods"] = int(len(uni))
+        health["universe_min_size"] = int(uni["n"].min())
+        if avg_size < min_universe:
+            warnings.append(
+                f"universe 平均仅 {avg_size} 只(<{min_universe})：截面过小，因子 IC 与回测"
+                f"结果不可信，组合退化为集中持仓。请先 `--mode update` 补全全市场行情后重跑。"
+            )
 
     # 组合覆盖
     pf = repo.read_sql(
@@ -42,4 +51,6 @@ def compute_health(engine, version: str, method: str = "alla", recent: int = 6) 
     if not pf.empty:
         health["portfolio_avg_holdings"] = round(float(pf["n"].mean()), 1)
 
+    health["warnings"] = warnings
+    health["trustworthy"] = len(warnings) == 0
     return health

@@ -24,6 +24,7 @@ class UniverseConfig:
     min_circ_mv: float = 0.0           # 绝对流通市值下限（万元，生产可设）
     amount_window: int = 20            # 流动性均额窗口（交易日）
     max_size: int | None = None        # 可选：仅保留市值最大的前 N 只
+    min_universe_warn: int = 50         # universe 小于此值时告警（截面太小→因子/回测失真）
 
 
 class UniverseBuilder:
@@ -52,7 +53,14 @@ class UniverseBuilder:
             cross = cross.nlargest(self.cfg.max_size, "circ_mv")
 
         codes = sorted(cross["code"].tolist())
-        logger.info(f"universe[{trade_date}]：{n0} → {len(codes)} 只 (method={self.cfg.method})")
+        if len(codes) < self.cfg.min_universe_warn:
+            logger.warning(
+                f"⚠️ universe[{trade_date}] 仅 {len(codes)} 只 (<{self.cfg.min_universe_warn})！"
+                f"截面过小会使因子 IC 失真、组合退化为集中持仓、回测不可信。"
+                f"通常是 stock_daily 未覆盖全市场——请先跑 `--mode update` 补全全 A 数据。"
+            )
+        else:
+            logger.info(f"universe[{trade_date}]：{n0} → {len(codes)} 只 (method={self.cfg.method})")
 
         if persist and codes:
             snap = cross[["code", "name", "industry", "circ_mv", "amount_20d"]].copy()

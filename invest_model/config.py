@@ -1,7 +1,6 @@
 """配置加载：合并 config.yaml + .env 环境变量"""
 
 from pathlib import Path
-from typing import Any
 from urllib.parse import quote_plus
 
 import yaml

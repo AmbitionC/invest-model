@@ -35,6 +35,7 @@ class CSBacktestConfig:
     min_trade: float = 0.01          # 换手带：权重变动 < 1% 跳过
     benchmark_code: str = "000300.SH"
     limit_pct: float = 9.8           # 涨跌停近似阈值（|pct_chg|）
+    exec_lag: int = 1                # 成交滞后：1=调仓日出信号、次一交易日收盘成交（避免同日前视）；0=同日收盘成交
 
 
 @dataclass
@@ -94,6 +95,7 @@ class CSBacktestEngine:
         nav = 1.0
         nav_rows, trades = [], []
         prev_close = {}
+        pending: dict[str, float] | None = None   # 待次日成交的目标权重
 
         for i, dt in enumerate(dates):
             day_ret = 0.0
@@ -116,27 +118,18 @@ class CSBacktestEngine:
                 if denom > 0:
                     weights = {c: v / denom for c, v in new_w.items()}
 
+            # 成交：exec_lag=1 时，调仓日只出信号（pending），次一交易日收盘成交，
+            # 杜绝「用当日收盘信号在当日收盘成交」的同日前视。
             turnover = 0.0
+            if pending is not None:
+                turnover, nav = self._apply_targets(pending, dt, weights, nav, trades)
+                pending = None
             if dt in self.reb_set:
-                targets = self.target_provider(dt, dict(weights)) or {}
-                codes = set(weights) | set(targets)
-                for c in codes:
-                    cur = weights.get(c, 0.0)
-                    tgt = targets.get(c, 0.0)
-                    delta = tgt - cur
-                    if abs(delta) < self.cfg.min_trade:
-                        continue
-                    if not self._tradable(c, dt, buying=delta > 0):
-                        continue
-                    fee = self.cfg.fee_rate + self.cfg.slippage + (self.cfg.stamp_tax if delta < 0 else 0.0)
-                    nav *= 1.0 - abs(delta) * fee
-                    turnover += abs(delta)
-                    weights[c] = tgt
-                    trades.append({"trade_date": dt, "code": c,
-                                   "action": "buy" if delta > 0 else "sell",
-                                   "weight": round(tgt, 6),
-                                   "price": float(self._close.at[dt, c])})
-                weights = {c: w for c, w in weights.items() if w > 1e-6}
+                signal = self.target_provider(dt, dict(weights)) or {}
+                if self.cfg.exec_lag <= 0:
+                    turnover, nav = self._apply_targets(signal, dt, weights, nav, trades)
+                else:
+                    pending = signal
 
             n_pos = sum(1 for w in weights.values() if w > 1e-4)
             invested = sum(weights.values())
@@ -156,6 +149,31 @@ class CSBacktestEngine:
         md = metrics.to_dict()
         md["avg_invested"] = round(float(nav_df["invested"].mean()), 4)
         return CSBacktestResult(self.cfg, nav_df, trades, md)
+
+    def _apply_targets(self, targets: dict[str, float], dt: str,
+                       weights: dict[str, float], nav: float, trades: list) -> tuple[float, float]:
+        """在 dt 收盘把组合调向 targets，扣成本、记录成交。返回 (turnover, nav)。"""
+        turnover = 0.0
+        for c in set(weights) | set(targets):
+            cur = weights.get(c, 0.0)
+            tgt = targets.get(c, 0.0)
+            delta = tgt - cur
+            if abs(delta) < self.cfg.min_trade:
+                continue
+            if not self._tradable(c, dt, buying=delta > 0):
+                continue
+            fee = self.cfg.fee_rate + self.cfg.slippage + (self.cfg.stamp_tax if delta < 0 else 0.0)
+            nav *= 1.0 - abs(delta) * fee
+            turnover += abs(delta)
+            weights[c] = tgt
+            trades.append({"trade_date": dt, "code": c,
+                           "action": "buy" if delta > 0 else "sell",
+                           "weight": round(tgt, 6),
+                           "price": float(self._close.at[dt, c])})
+        # 清理空仓
+        for c in [c for c, w in weights.items() if w <= 1e-6]:
+            weights.pop(c, None)
+        return turnover, nav
 
     def _benchmark_nav(self, dates: list[str]) -> pd.DataFrame | None:
         df = self.repo.read_sql(

@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -121,35 +121,3 @@ def compute_metrics(
                     m.alpha = m.annual_return - (m.beta * (m.benchmark_annual_return or 0.0))
 
     return m
-
-
-def compute_per_stock_contribution(
-    trades: list,
-    nav_df: pd.DataFrame,
-    price_lookup: dict[str, pd.DataFrame],
-) -> pd.DataFrame:
-    """按标的拆分组合收益贡献（基于交易记录粗略估算）。
-
-    返回 DataFrame: code, n_trades, gross_pnl, return_contribution
-    """
-    if not trades:
-        return pd.DataFrame()
-
-    rows: dict[str, dict] = {}
-    for t in trades:
-        rec = rows.setdefault(t.code, {
-            "code": t.code,
-            "n_trades": 0,
-            "buy_count": 0,
-            "sell_count": 0,
-            "gross_pnl": 0.0,
-            "total_cost": 0.0,
-        })
-        rec["n_trades"] += 1
-        if t.weight_delta > 0:
-            rec["buy_count"] += 1
-        elif t.weight_delta < 0:
-            rec["sell_count"] += 1
-        rec["total_cost"] += t.cost
-
-    return pd.DataFrame(list(rows.values())).sort_values("n_trades", ascending=False)

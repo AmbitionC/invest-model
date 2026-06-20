@@ -45,6 +45,3 @@ class ModelRegistryRepository(BaseRepository):
         if df.empty:
             return None
         return df.iloc[0].to_dict()
-
-    def list_all(self) -> pd.DataFrame:
-        return self.read_sql(f"SELECT * FROM {self.TABLE} ORDER BY created_at DESC")

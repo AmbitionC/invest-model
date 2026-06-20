@@ -19,10 +19,18 @@ def exclude_st(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def exclude_new_listings(df: pd.DataFrame, trade_date: str, min_calendar_days: int = 365) -> pd.DataFrame:
+    """剔除上市不足 N 个自然日的次新股。
+
+    注意防幸存者偏差：list_date 缺失（多为已退市、不在当前 stock_basic 列表中的票）
+    **不应**被当作次新剔除，否则会把历史上存在、后来退市的股票从回测中抹掉，
+    系统性地高估历史收益。这里仅剔除「明确知道上市日且不足 1 年」的票。
+    """
     if "list_date" not in df.columns:
         return df
     cutoff = (pd.to_datetime(trade_date) - pd.Timedelta(days=min_calendar_days)).strftime("%Y%m%d")
-    return df[df["list_date"].fillna("99999999") <= cutoff]
+    ld = df["list_date"]
+    too_new = ld.notna() & (ld > cutoff)
+    return df[~too_new]
 
 
 def exclude_suspended(df: pd.DataFrame) -> pd.DataFrame:

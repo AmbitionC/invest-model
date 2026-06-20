@@ -25,10 +25,3 @@ class PredictionRepository(BaseRepository):
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
         return df
-
-    def get_dates(self, version: str) -> list[str]:
-        df = self.read_sql(
-            f"SELECT DISTINCT trade_date FROM {self.TABLE} WHERE version=:v ORDER BY trade_date",
-            {"v": version},
-        )
-        return df["trade_date"].tolist() if not df.empty else []
