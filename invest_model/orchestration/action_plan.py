@@ -140,11 +140,15 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                 continue
             bp = bps.get(c)
             g = reco.loc[reco["code"] == c, "grade"].iloc[0] if not reco.empty else None
+            ma20 = getattr(bp, "ma20", float("nan")) if bp else float("nan")
+            brk = getattr(bp, "breakout", float("nan")) if bp else float("nan")
+            trig = (f"回踩≈{ma20} / 突破>{brk}" if np.isfinite(ma20) and np.isfinite(brk) else "—")
             watch_rows.append({
                 "plan_date": dt, "code": c, "name": wnames.get(c, ""), "action": "watch",
                 "cur_weight": 0.0, "tgt_weight": 0.0, "shares_delta": 0.0,
                 "reason": bp.reason if bp else "观察", "stop_price": None,
-                "ref_price": None, "grade": g})
+                "ref_price": round(bp.last, 2) if bp and np.isfinite(getattr(bp, "last", float("nan"))) else None,
+                "grade": g, "trigger": trig})
 
     # ── 逐票决策 ──
     all_codes = sorted(set(held_codes) | set(targets))
@@ -210,12 +214,13 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         else:
             shares_delta = _round_lot((tw - cw) * equity / px) if px and px > 0 else 0.0
 
+        trigger = (f"挂单≈{round(px, 2)}" if action in ("buy", "add") and px else "—")
         rows.append({
             "plan_date": dt, "code": c, "name": names.get(c, ""),
             "action": action, "cur_weight": round(cw, 4), "tgt_weight": round(tw, 4),
             "shares_delta": shares_delta, "reason": reason,
             "stop_price": round(stop_price, 3) if np.isfinite(stop_price) else None,
-            "ref_price": round(px, 3) if px else None, "grade": grade,
+            "ref_price": round(px, 3) if px else None, "grade": grade, "trigger": trigger,
         })
 
     # ── 账户层 ──
@@ -253,14 +258,14 @@ _ACTION_CN = {"buy": "买入", "add": "加仓", "trim": "减仓", "sell": "清�
 
 
 def _table(lines: list[str], rows: list[dict]) -> None:
-    lines.append("| 代码 | 名称 | 动作 | 现权重→目标 | 约股数 | 理由 | 止损价 | 参考价 | 分级 |")
-    lines.append("|---|---|---|---|---|---|---|---|---|")
+    lines.append("| 代码 | 名称 | 动作 | 现权重→目标 | 约股数 | 买点/挂单价 | 理由 | 止损价 | 现价 | 分级 |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for r in rows:
         sd = int(r["shares_delta"])
         sd_s = f"+{sd}" if sd > 0 else (str(sd) if sd < 0 else "—")
         lines.append(
             f"| {r['code']} | {r['name']} | {_ACTION_CN.get(r['action'], r['action'])} | "
-            f"{r['cur_weight']:.1%}→{r['tgt_weight']:.1%} | {sd_s} | {r['reason']} | "
+            f"{r['cur_weight']:.1%}→{r['tgt_weight']:.1%} | {sd_s} | {r.get('trigger', '—')} | {r['reason']} | "
             f"{r['stop_price'] if r['stop_price'] is not None else '—'} | "
             f"{r['ref_price'] if r['ref_price'] is not None else '—'} | {r['grade'] or '—'} |")
 

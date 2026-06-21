@@ -38,6 +38,9 @@ class BuyPoint:
     is_buy: bool
     kind: str        # "趋势中继" | "底部反转" | ""
     reason: str      # 触发或未触发的简述
+    last: float = float("nan")        # 最新收盘
+    ma20: float = float("nan")        # 回踩买点参考位
+    breakout: float = float("nan")    # 突破买点参考位（近 N 日最高收盘）
 
 
 def _ma(s: pd.Series, n: int) -> float:
@@ -88,11 +91,14 @@ def detect_buypoints(engine, dt: str, codes: list[str], gross: float,
         c0, o0, v0 = float(cl.iloc[-1]), float(o.iloc[-1]), float(vol.iloc[-1])
         pc, po = float(cl.iloc[-2]), float(o.iloc[-2])
         vma20 = float(vol.tail(20).mean()); vma5 = float(vol.tail(5).mean())
+        platform_high = float(cl.iloc[-(cfg.breakout_lookback + 1):-1].max())
+        px = dict(last=round(c0, 2), ma20=round(ma20, 2) if np.isfinite(ma20) else float("nan"),
+                  breakout=round(platform_high, 2))
 
         # 前置过滤：左侧下降趋势一律不看
         trend_up = np.isfinite(ma60) and c0 >= ma60 and _slope_up(cl, 60)
         if not trend_up:
-            out[c] = BuyPoint(c, False, "", "观察：MA60 未走平/上行（左侧趋势，不买）")
+            out[c] = BuyPoint(c, False, "", "观察：MA60 未走平/上行（左侧趋势，不买）", **px)
             continue
 
         # 买点2 趋势中继：MA20↑ + 回踩 MA20 贴合 + 阳线 + 放量
@@ -101,23 +107,22 @@ def detect_buypoints(engine, dt: str, codes: list[str], gross: float,
                    and float(low.tail(3).min()) <= ma20 * (1 + cfg.pullback_pct)
                    and c0 > o0 and v0 >= cfg.retrace_vol_mult * vma20)
         # 买点1 底部反转：阳线吞没昨阴 + 突破平台/20日新高 + 放量2倍
-        platform_high = float(cl.iloc[-(cfg.breakout_lookback + 1):-1].max())
         engulf = c0 > o0 and o0 <= min(po, pc) and c0 >= max(po, pc)
         breakout = engulf and c0 >= platform_high and v0 >= cfg.breakout_vol_mult * vma5
 
         kind = "趋势中继" if retrace else ("底部反转" if breakout else "")
         if not kind:
-            out[c] = BuyPoint(c, False, "", "观察：趋势在但未现买点（待回踩 MA20/放量突破）")
+            out[c] = BuyPoint(c, False, "", "观察：趋势在但未现买点（待回踩 MA20/放量突破）", **px)
             continue
 
         # 量化确认 + 环境
         rk = rank_map.get(c)
         quant_ok = (not cfg.use_quant) or rk is None or rk >= cfg.quant_min_rank
         if not quant_ok:
-            out[c] = BuyPoint(c, False, kind, f"观察：现{kind}买点但量化分偏弱(rank<{cfg.quant_min_rank:.0%})")
+            out[c] = BuyPoint(c, False, kind, f"观察：现{kind}买点但量化分偏弱(rank<{cfg.quant_min_rank:.0%})", **px)
             continue
         if not env_ok:
-            out[c] = BuyPoint(c, False, kind, f"观察：现{kind}买点但大盘环境差(gross<{cfg.min_gross:.0%})")
+            out[c] = BuyPoint(c, False, kind, f"观察：现{kind}买点但大盘环境差(gross<{cfg.min_gross:.0%})", **px)
             continue
-        out[c] = BuyPoint(c, True, kind, f"买点触发：{kind}（技术+量化+环境三重确认）")
+        out[c] = BuyPoint(c, True, kind, f"买点触发：{kind}（技术+量化+环境三重确认）", **px)
     return out
