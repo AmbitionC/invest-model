@@ -40,6 +40,10 @@ def main() -> None:
     ap.add_argument("--no-timing", action="store_true")
     ap.add_argument("--concentration", choices=["spread", "medium", "high"], default="spread",
                     help="集中度：spread=全量分散；medium=A重仓+精选B(纯投顾)；high=只A级重仓")
+    ap.add_argument("--no-buypoint", action="store_true",
+                    help="关闭观察池+复合买点（研报标的直接进目标，不等买点）")
+    ap.add_argument("--time-stop-days", type=int, default=8,
+                    help="时间止损：买入N日横盘未创新高→减半（0=关闭，需持仓有建仓日）")
     ap.add_argument("--out", default=None, help="输出 Markdown 路径（默认仅打印）")
     args = ap.parse_args()
 
@@ -62,12 +66,13 @@ def main() -> None:
         risk=RiskConfig(enabled=args.risk, hard_stop_pct=args.hard_stop,
                         account_dd_stop=args.account_dd_stop,
                         ma_trailing=not args.no_ma_trailing, trail_full=args.trail_full,
-                        trend_filter=args.trend_filter),
+                        trend_filter=args.trend_filter, time_stop_days=args.time_stop_days),
         universe=UniverseConfig(method=args.universe_method),
         portfolio=PortfolioConfig(top_n=args.top_n, max_weight=args.max_weight,
                                   advisor_led=args.advisor_led, **presets),
     )
-    plan = build_action_plan(engine, cfg, dt=args.date, cash=args.cash)
+    plan = build_action_plan(engine, cfg, dt=args.date, cash=args.cash,
+                             buypoint=not args.no_buypoint)
     md = plan.to_markdown()
     print(md)
     if args.out:

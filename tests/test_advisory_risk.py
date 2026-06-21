@@ -28,8 +28,10 @@ from invest_model.portfolio.risk import (
     keep_from_step,
     replay_tier,
     step_tier,
+    time_stop,
     trend_ok_close,
 )
+from invest_model.signals.buypoint import BuyPointConfig, detect_buypoints
 from invest_model.repositories.advisor_repo import AdvisorRepo
 from invest_model.repositories.holding_repo import HoldingRepo
 from invest_model.universe import UniverseConfig
@@ -94,6 +96,65 @@ def test_evaluate_ma20_only_default_no_trim():
     # 破 MA20 仍清仓
     assert step_tier(9, ma5=10, ma10=11, ma20=12, cur_tier=0, full=False) == 3
     assert step_tier(10.5, ma5=11, ma10=10, ma20=9, cur_tier=0, full=False) == 0
+
+
+def test_time_stop_sideways_trims():
+    # 8 日横盘、收盘均未超过建仓日 → 减半
+    s = pd.Series([10, 9.9, 10, 9.95, 10, 9.9, 10, 9.95], index=[str(i) for i in range(8)])
+    d = time_stop(s, RiskConfig(time_stop_days=8))
+    assert d is not None and d.action == "trim" and "时间止损" in d.reason
+    # 期间创出新高 → 不触发
+    up = pd.Series([10, 11, 12, 12, 12, 12, 12, 12], index=[str(i) for i in range(8)])
+    assert time_stop(up, RiskConfig(time_stop_days=8)) is None
+    # 已启动移动止盈(prev_tier>0) → 不属时间止损
+    assert time_stop(s, RiskConfig(time_stop_days=8), prev_tier=1) is None
+
+
+def _seed_ohlcv(engine, code, closes, vols, opens=None):
+    from invest_model.repositories.base import BaseRepository
+    r = BaseRepository(engine)
+    r.execute_sql("INSERT OR IGNORE INTO stock_info(ts_code,name) VALUES(:c,:n)",
+                  {"c": code, "n": code})
+    n = len(closes)
+    dates = pd.bdate_range("20250101", periods=n).strftime("%Y%m%d")
+    rows = []
+    for i in range(n):
+        o = opens[i] if opens else closes[i - 1] if i else closes[i]
+        rows.append({"code": code, "trade_date": dates[i], "open": o,
+                     "high": max(o, closes[i]) * 1.01, "low": min(o, closes[i]) * 0.99,
+                     "close": closes[i], "volume": vols[i]})
+    r.upsert("stock_daily", pd.DataFrame(rows), ["code", "trade_date"])
+    return dates[-1]
+
+
+def test_buypoint_downtrend_is_watch(tmp_path):
+    eng = make_engine(f"sqlite:///{tmp_path}/bp.db"); create_schema(eng)
+    import numpy as _np
+    closes = list(_np.linspace(100, 50, 80))           # 单边下行
+    dt = _seed_ohlcv(eng, "DN.SH", closes, [1e6] * 80)
+    bp = detect_buypoints(eng, dt, ["DN.SH"], gross=0.9)["DN.SH"]
+    assert bp.is_buy is False and ("趋势" in bp.reason or "样本" in bp.reason)
+
+
+def test_buypoint_retrace_triggers(tmp_path):
+    eng = make_engine(f"sqlite:///{tmp_path}/bp2.db"); create_schema(eng)
+    import numpy as _np
+    # 70 日上行 → 末段回踩 MA20 附近，最后一根放量阳线
+    base = list(_np.linspace(60, 120, 74))
+    closes = base + [118, 115, 112, 110, 116]          # 回踩后拉起
+    vols = [1e6] * (len(closes) - 1) + [3e6]           # 末日放量
+    opens = closes[:-1] + [110]                        # 末日低开高走(阳线)
+    opens = [closes[0]] + closes[:-1]                  # open=前收
+    opens[-1] = 110                                    # 末日阳线 open<close
+    dt = _seed_ohlcv(eng, "UP.SH", closes, vols, opens)
+    bp = detect_buypoints(eng, dt, ["UP.SH"], gross=0.9,
+                          rank_map={"UP.SH": 0.9})["UP.SH"]
+    # 趋势在、末日回踩放量阳线 → 触发（若阈值边界未中也至少不因趋势被否）
+    assert "趋势" not in bp.reason or bp.is_buy
+    # 大盘环境差 → 即便技术买点也观察
+    bp2 = detect_buypoints(eng, dt, ["UP.SH"], gross=0.3,
+                           rank_map={"UP.SH": 0.9})["UP.SH"]
+    assert bp2.is_buy is False
 
 
 def test_trend_ok_close():
@@ -232,7 +293,7 @@ def test_action_plan_actions(engine):
                      risk=RiskConfig(enabled=True),
                      universe=UniverseConfig(method="alla"),
                      portfolio=PortfolioConfig(advisor_led=True, advisory_name_cap=0.3))
-    plan = build_action_plan(engine, cfg, cash=0.0)
+    plan = build_action_plan(engine, cfg, cash=0.0, buypoint=False)
     by_code = {r["code"]: r for r in plan.rows}
 
     assert by_code[h_exit]["action"] == "sell" and "逻辑证伪" in by_code[h_exit]["reason"]

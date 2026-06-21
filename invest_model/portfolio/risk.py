@@ -30,6 +30,8 @@ class RiskConfig:
     trend_filter: bool = False           # 仅买 MA60 走平向上（左侧趋势过滤）
     trend_ma: int = 60
     intraday_valid_days: int = 3         # 早午盘信号默认有效交易日数
+    time_stop_days: int = 0              # 时间止损：买入 N 日横盘未创新高→减仓（0=关闭）
+    time_stop_keep: float = 0.5          # 触发时保留比例（0.5=减半，0=离场）
 
 
 def ma_tail(series: pd.Series, n: int) -> float:
@@ -131,6 +133,27 @@ def evaluate_holding(close_hist: pd.Series, cost: float, cfg: RiskConfig,
             label = {1: "破MA5减半", 2: "破MA10减至1/4"}.get(tier, "移动止盈减仓")
             return ExitDecision("trim", keep, label, **{**base, "new_tier": tier})
     return ExitDecision("hold", 1.0, "持有", **base)
+
+
+def time_stop(hold_hist: pd.Series, cfg: RiskConfig, prev_tier: int = 0) -> ExitDecision | None:
+    """时间止损（手册第3步）：买入后 N 日既未触发移动止盈、又未破位，且横盘未创新高
+    → 减仓/离场。仅在持仓未触发其它风控时检查。hold_hist 为自建仓日起的收盘序列。
+
+    返回 ExitDecision（trim/exit）或 None（不触发）。
+    """
+    if not cfg.time_stop_days:
+        return None
+    s = pd.to_numeric(hold_hist, errors="coerce").dropna()
+    if len(s) < cfg.time_stop_days:
+        return None
+    entry_close = float(s.iloc[0])
+    made_new_high = bool((s.iloc[1:] > entry_close).any())
+    if prev_tier == 0 and not made_new_high:           # 横盘、未启动、未减仓
+        keep = cfg.time_stop_keep
+        act = "exit" if keep <= 0 else "trim"
+        return ExitDecision(act, keep, f"时间止损({cfg.time_stop_days}日横盘未创新高)",
+                            new_tier=max(prev_tier, 1))
+    return None
 
 
 def trend_ok_close(close_hist: pd.Series, cfg: RiskConfig) -> bool:

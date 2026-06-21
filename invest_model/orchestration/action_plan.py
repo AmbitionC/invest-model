@@ -16,8 +16,9 @@ import pandas as pd
 
 from invest_model.logger import get_logger
 from invest_model.orchestration.closed_loop import ClosedLoop, LoopConfig
-from invest_model.portfolio.risk import evaluate_holding, replay_tier
+from invest_model.portfolio.risk import evaluate_holding, replay_tier, time_stop
 from invest_model.repositories.holding_repo import HoldingRepo
+from invest_model.signals.buypoint import BuyPointConfig, detect_buypoints
 
 logger = get_logger()
 
@@ -73,11 +74,13 @@ def _round_lot(shares: float) -> float:
 
 def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = None,
                       cash: float = 0.0, persist: bool = True,
-                      min_trade: float = 0.01) -> ActionPlan:
+                      min_trade: float = 0.01, buypoint: bool = True,
+                      bp_cfg: BuyPointConfig | None = None) -> ActionPlan:
     """生成操作计划。
 
     engine：数据库引擎；cfg：LoopConfig（含 risk / portfolio / version）；
-    dt：决策日（默认最新数据日）；cash：账户现金（用于折算总权益与股数）。
+    dt：决策日（默认最新数据日）；cash：账户现金（用于折算总权益与股数）；
+    buypoint：True=研报标的先进观察池、仅买点触发才建议买入（手册第1-2步）。
     """
     loop = ClosedLoop(engine, cfg)
     dt = dt or _latest_data_date(loop)
@@ -113,6 +116,35 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     gross = loop.mt.gross_exposure(dt, list(u) if u else None)
     targets, meta = loop._build_targets(dt, preds, gross)
     exit_codes = loop.adv_repo.get_exit_codes(dt)
+
+    # ── 观察池 + 复合买点（手册第1-2步）：研报标的先观察，仅买点触发才建议买入 ──
+    watch_rows: list[dict] = []
+    if buypoint:
+        reco = loop.adv_repo.get_active_reco(dt)
+        pool = reco[(reco["direction"] == "long")
+                    & (reco["grade"].isin({"A", "B"}))
+                    & (~reco["code"].isin(exit_codes))]["code"].tolist() if not reco.empty else []
+        rank_map = (dict(zip(preds["code"], pd.to_numeric(preds["rank_pct"], errors="coerce")))
+                    if not preds.empty else {})
+        bps = detect_buypoints(engine, dt, pool, gross, rank_map, bp_cfg)
+        buy_codes = {c for c, bp in bps.items() if bp.is_buy}
+        # 目标里：投顾票未触发买点的 → 移出建议买入、转观察池（持仓的不动，交风控管）
+        for c in list(targets):
+            if (meta.get(c, {}) or {}).get("source") == "advisor" \
+                    and c not in buy_codes and c not in held_codes:
+                targets.pop(c, None)
+        # 观察池清单（含趋势未过/未现买点等原因），持仓中的不再列观察
+        wnames = _name_map(loop, [c for c in pool if c not in held_codes])
+        for c in pool:
+            if c in buy_codes or c in held_codes:
+                continue
+            bp = bps.get(c)
+            g = reco.loc[reco["code"] == c, "grade"].iloc[0] if not reco.empty else None
+            watch_rows.append({
+                "plan_date": dt, "code": c, "name": wnames.get(c, ""), "action": "watch",
+                "cur_weight": 0.0, "tgt_weight": 0.0, "shares_delta": 0.0,
+                "reason": bp.reason if bp else "观察", "stop_price": None,
+                "ref_price": None, "grade": g})
 
     # ── 逐票决策 ──
     all_codes = sorted(set(held_codes) | set(targets))
@@ -150,6 +182,12 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                     tw, reason = 0.0, dec.reason
                 elif dec.action == "trim":
                     tw, reason = cw * dec.keep_frac, dec.reason
+                # 时间止损（手册第3步）：仅在已知真实建仓日、且未触发其它风控时检查
+                elif entry_map[c]:
+                    ts = time_stop(hold_hist, rc, prev_tier=prev)
+                    if ts is not None:
+                        tw = 0.0 if ts.action == "exit" else cw * ts.keep_frac
+                        reason = ts.reason
             if not np.isfinite(stop_price) and cost_map[c] > 0:
                 stop_price = cost_map[c] * (1 - rc.hard_stop_pct)
 
@@ -194,6 +232,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         "risk_off": bool(rc.enabled and rc.account_dd_stop and unreal <= -rc.account_dd_stop),
     }
 
+    rows = rows + watch_rows
     plan = ActionPlan(plan_date=dt, rows=rows, account=account)
     if persist and rows:
         cols = ["plan_date", "code", "name", "action", "cur_weight", "tgt_weight",
@@ -209,7 +248,21 @@ def _entry_reason(grade, meta: dict) -> str:
     return "量化补充" if src == "quant" else "目标加配"
 
 
-_ACTION_CN = {"buy": "买入", "add": "加仓", "trim": "减仓", "sell": "清仓", "hold": "持有"}
+_ACTION_CN = {"buy": "买入", "add": "加仓", "trim": "减仓", "sell": "清仓",
+              "hold": "持有", "watch": "观察"}
+
+
+def _table(lines: list[str], rows: list[dict]) -> None:
+    lines.append("| 代码 | 名称 | 动作 | 现权重→目标 | 约股数 | 理由 | 止损价 | 参考价 | 分级 |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
+    for r in rows:
+        sd = int(r["shares_delta"])
+        sd_s = f"+{sd}" if sd > 0 else (str(sd) if sd < 0 else "—")
+        lines.append(
+            f"| {r['code']} | {r['name']} | {_ACTION_CN.get(r['action'], r['action'])} | "
+            f"{r['cur_weight']:.1%}→{r['tgt_weight']:.1%} | {sd_s} | {r['reason']} | "
+            f"{r['stop_price'] if r['stop_price'] is not None else '—'} | "
+            f"{r['ref_price'] if r['ref_price'] is not None else '—'} | {r['grade'] or '—'} |")
 
 
 def render_markdown(plan: ActionPlan) -> str:
@@ -221,17 +274,24 @@ def render_markdown(plan: ActionPlan) -> str:
     lines.append(
         f"- 持仓数: {a.get('n_holdings')} | 整体浮盈亏: {a.get('unrealized_pnl_pct', 0):+.1%} | "
         f"账户风控(risk_off): {'⚠️ 触发，建议降仓' if a.get('risk_off') else '正常'}")
-    lines.append("")
-    order = {"sell": 0, "trim": 1, "buy": 2, "add": 3, "hold": 4}
-    rows = sorted(plan.rows, key=lambda r: (order.get(r["action"], 9), -r["tgt_weight"]))
-    lines.append("| 代码 | 名称 | 动作 | 现权重→目标 | 约股数 | 理由 | 止损价 | 参考价 | 分级 |")
-    lines.append("|---|---|---|---|---|---|---|---|---|")
-    for r in rows:
-        sd = int(r["shares_delta"])
-        sd_s = f"+{sd}" if sd > 0 else (str(sd) if sd < 0 else "—")
-        lines.append(
-            f"| {r['code']} | {r['name']} | {_ACTION_CN.get(r['action'], r['action'])} | "
-            f"{r['cur_weight']:.1%}→{r['tgt_weight']:.1%} | {sd_s} | {r['reason']} | "
-            f"{r['stop_price'] if r['stop_price'] is not None else '—'} | "
-            f"{r['ref_price'] if r['ref_price'] is not None else '—'} | {r['grade'] or '—'} |")
+
+    held = [r for r in plan.rows if r["cur_weight"] > 1e-6]
+    buys = [r for r in plan.rows if r["action"] in ("buy", "add") and r["cur_weight"] <= 1e-6]
+    watch = [r for r in plan.rows if r["action"] == "watch"]
+    held.sort(key=lambda r: ({"sell": 0, "trim": 1, "hold": 2}.get(r["action"], 3), -r["cur_weight"]))
+    buys.sort(key=lambda r: -r["tgt_weight"])
+    watch.sort(key=lambda r: (r["grade"] or "Z", r["code"]))
+
+    lines += ["", f"## 一、建议买入（买点触发，共 {len(buys)} 只）"]
+    if buys:
+        _table(lines, buys)
+    else:
+        lines.append("（今日无买点触发——观察池均在等待回踩/突破信号）")
+    lines += ["", f"## 二、当前持仓·风控动作（{len(held)} 只）"]
+    _table(lines, held) if held else lines.append("（无持仓）")
+    lines += ["", f"## 三、观察池·等买点（{len(watch)} 只，方向确认、待时机）"]
+    if watch:
+        _table(lines, watch)
+    else:
+        lines.append("（观察池为空）")
     return "\n".join(lines)
