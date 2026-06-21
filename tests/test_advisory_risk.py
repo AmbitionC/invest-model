@@ -139,6 +139,21 @@ def test_fuse_sleeve_cap_scaling():
     assert abs(w["A1.SH"] - 2 * w["B1.SH"]) < 1e-6
 
 
+def test_fuse_concentration_limits_and_advisory_only():
+    cfg = PortfolioConfig(advisor_led=True, top_n=5, max_weight=0.5, advisory_only=True,
+                          advisory_max_a=1, advisory_max_b=1, advisory_name_cap=0.2,
+                          grade_target={"A": 0.12, "B": 0.06})
+    adv = _adv([["A1.SH", "A", "long"], ["A2.SH", "A", "long"],
+                ["B1.SH", "B", "long"], ["B2.SH", "B", "long"]])
+    # 量化分：A2>A1、B2>B1 → 同级优选 A2、B2
+    scores = pd.DataFrame({"code": ["A2.SH", "A1.SH", "B2.SH", "B1.SH", "Q1.SH"],
+                           "score": [5.0, 4.0, 3.0, 2.0, 9.0], "rank_pct": [.5] * 5})
+    w, meta = fuse_targets(scores, cfg, adv, gross=1.0)
+    assert set(w) == {"A2.SH", "B2.SH"}              # 每级限 1 只、按量化分优选
+    assert w["A2.SH"] > w["B2.SH"]                   # A 重于 B
+    assert all(m["source"] == "advisor" for m in meta.values())  # advisory_only：无量化补仓
+
+
 def test_fuse_trend_gate_excludes():
     cfg = PortfolioConfig(advisor_led=True, top_n=5, max_weight=0.5, advisory_name_cap=0.2)
     adv = _adv([["A1.SH", "A", "long"], ["B1.SH", "B", "long"]])

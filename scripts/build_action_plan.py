@@ -38,8 +38,20 @@ def main() -> None:
     ap.add_argument("--trail-full", action="store_true")
     ap.add_argument("--trend-filter", action="store_true")
     ap.add_argument("--no-timing", action="store_true")
+    ap.add_argument("--concentration", choices=["spread", "medium", "high"], default="spread",
+                    help="集中度：spread=全量分散；medium=A重仓+精选B(纯投顾)；high=只A级重仓")
     ap.add_argument("--out", default=None, help="输出 Markdown 路径（默认仅打印）")
     args = ap.parse_args()
+
+    # 集中度预设（投顾持仓数上限 + 放大权重 + 是否关量化补仓）
+    presets = {
+        "spread": dict(advisory_only=False, advisory_max_a=999, advisory_max_b=999,
+                       grade_target={"A": 0.20, "B": 0.10}, advisory_name_cap=0.20),
+        "medium": dict(advisory_only=True, advisory_max_a=5, advisory_max_b=5,
+                       grade_target={"A": 0.12, "B": 0.06}, advisory_name_cap=0.15),
+        "high": dict(advisory_only=True, advisory_max_a=5, advisory_max_b=0,
+                     grade_target={"A": 0.15, "B": 0.0}, advisory_name_cap=0.20),
+    }[args.concentration]
 
     engine = make_engine(args.db)
     create_schema(engine)
@@ -53,7 +65,7 @@ def main() -> None:
                         trend_filter=args.trend_filter),
         universe=UniverseConfig(method=args.universe_method),
         portfolio=PortfolioConfig(top_n=args.top_n, max_weight=args.max_weight,
-                                  advisor_led=args.advisor_led),
+                                  advisor_led=args.advisor_led, **presets),
     )
     plan = build_action_plan(engine, cfg, dt=args.date, cash=args.cash)
     md = plan.to_markdown()

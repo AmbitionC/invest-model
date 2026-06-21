@@ -23,6 +23,10 @@ class PortfolioConfig:
     advisory_sleeve_cap: float = 1.0     # 投顾仓位池占 gross 的上限
     include_grade_c: bool = False        # 是否纳入 C 级
     theme_boost: float = 1.0             # 命中投顾看多主题的票，conviction 乘数（1.0=关）
+    # ── 集中度控制 ──
+    advisory_only: bool = False          # True=纯投顾，不做量化补仓（集中）
+    advisory_max_a: int = 999            # A 级最多取几只
+    advisory_max_b: int = 999            # B 级最多取几只（按量化分排序优选）
 
 
 def _cap_weights(w: pd.Series, max_weight: float) -> pd.Series:
@@ -104,6 +108,15 @@ def fuse_targets(
         df = df[~df["code"].isin(exit_codes)]
         if trend_ok_codes is not None:
             df = df[df["code"].isin(trend_ok_codes)]
+        # 集中度：每级限只数；同级按量化分排序优选（B 用量化模型再筛一道）
+        score_map = (dict(zip(scores["code"], scores["score"]))
+                     if scores is not None and not scores.empty else {})
+        df = df.assign(_qs=df["code"].map(score_map).fillna(-np.inf)) \
+               .sort_values("_qs", ascending=False)
+        max_by_grade = {"A": cfg.advisory_max_a, "B": cfg.advisory_max_b, "C": cfg.advisory_max_b}
+        rk = df.groupby("grade").cumcount()
+        cap = df["grade"].map(max_by_grade).fillna(999)
+        df = df[rk < cap]
         raw: dict[str, float] = {}
         for _, r in df.iterrows():
             conv = float(cfg.grade_target.get(r["grade"], 0.0))
@@ -119,11 +132,11 @@ def fuse_targets(
             adv_weights[c] = w * scale
             meta[c] = {"grade": dict(advisor_df.set_index("code")["grade"]).get(c), "source": "advisor"}
 
-    # 量化补充：填满剩余仓位
+    # 量化补充：填满剩余仓位（advisory_only=True 时跳过，纯投顾集中持仓）
     used = sum(adv_weights.values())
     remaining = max(0.0, gross - used)
     quant_weights: dict[str, float] = {}
-    if remaining > 1e-6 and scores is not None and not scores.empty:
+    if not cfg.advisory_only and remaining > 1e-6 and scores is not None and not scores.empty:
         qs = scores.copy()
         drop = set(adv_weights) | exit_codes
         qs = qs[~qs["code"].isin(drop)]
