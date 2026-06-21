@@ -44,3 +44,6 @@ data/*.db
 
 # Generated pipeline outputs (synthetic/real run artifacts)
 # results/*.json  # 回测结果需要跟踪
+
+# 个人实盘持仓/操作计划（隐私，不提交到远程）
+results/action_plan_real*.md
