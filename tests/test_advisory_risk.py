@@ -121,7 +121,8 @@ def test_fuse_grade_weight_and_quant_fill():
     adv = _adv([["A1.SH", "A", "long"], ["B1.SH", "B", "long"],
                 ["X1.SH", "A", "long"], ["C1.SH", "C", "long"]])
     w, meta = fuse_targets(scores, cfg, adv, gross=1.0, exit_codes={"X1.SH"})
-    assert abs(w["A1.SH"] - 0.2) < 1e-6 and abs(w["B1.SH"] - 0.2) < 1e-6  # 各封顶到 name_cap
+    assert abs(w["A1.SH"] - 0.2) < 1e-6 and abs(w["B1.SH"] - 0.1) < 1e-6  # A 顶到 cap，B=半
+    assert abs(w["A1.SH"] - 2 * w["B1.SH"]) < 1e-6                        # A=2×B
     assert "X1.SH" not in w and "C1.SH" not in w                          # 排除 / C 级不入
     assert meta["A1.SH"] == {"grade": "A", "source": "advisor"}
     assert any(m["source"] == "quant" for m in meta.values())             # 量化补充
@@ -130,11 +131,12 @@ def test_fuse_grade_weight_and_quant_fill():
 
 def test_fuse_sleeve_cap_scaling():
     cfg = PortfolioConfig(advisor_led=True, top_n=5, max_weight=0.5,
-                          advisory_name_cap=0.3, advisory_sleeve_cap=0.3)
+                          advisory_name_cap=0.3, advisory_sleeve_cap=0.2)
     adv = _adv([["A1.SH", "A", "long"], ["B1.SH", "B", "long"]])
     w, _ = fuse_targets(_scores([f"S{i}.SH" for i in range(5)]), cfg, adv, gross=1.0)
-    # raw 0.3+0.3=0.6 → 缩放到 sleeve_cap 0.3
-    assert abs((w["A1.SH"] + w["B1.SH"]) - 0.3) < 1e-6
+    # raw 0.2+0.1=0.3 > sleeve_cap 0.2 → 等比缩放到 0.2，且 A 仍=2×B
+    assert abs((w["A1.SH"] + w["B1.SH"]) - 0.2) < 1e-6
+    assert abs(w["A1.SH"] - 2 * w["B1.SH"]) < 1e-6
 
 
 def test_fuse_trend_gate_excludes():

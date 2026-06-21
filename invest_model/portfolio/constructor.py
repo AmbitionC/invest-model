@@ -16,7 +16,9 @@ class PortfolioConfig:
     industry_cap: float | None = 0.30  # 单行业上限（可选，None=不限）
     # ── 投顾为主融合（advisor_led=True 时生效）──
     advisor_led: bool = False
-    grade_target: dict = field(default_factory=lambda: {"A": 0.65, "B": 0.50})  # 分级 conviction 权重
+    # 分级 conviction 权重（归一化前）。默认 A=2×B 且 A 顶到 advisory_name_cap，
+    # 保证 A 级真重仓而非与 B 拍平。
+    grade_target: dict = field(default_factory=lambda: {"A": 0.20, "B": 0.10})
     advisory_name_cap: float = 0.20      # 投顾单票上限
     advisory_sleeve_cap: float = 1.0     # 投顾仓位池占 gross 的上限
     include_grade_c: bool = False        # 是否纳入 C 级
