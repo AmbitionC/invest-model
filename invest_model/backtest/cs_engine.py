@@ -16,11 +16,13 @@ import pandas as pd
 
 from invest_model.backtest.metrics import compute_metrics
 from invest_model.logger import get_logger
+from invest_model.portfolio.risk import RiskConfig, evaluate_holding, ma_tail
 from invest_model.repositories.base import BaseRepository
 
 logger = get_logger()
 
 TargetProvider = Callable[[str, dict[str, float]], dict[str, float]]
+ExitCodesProvider = Callable[[str], set]
 
 
 @dataclass
@@ -36,6 +38,7 @@ class CSBacktestConfig:
     benchmark_code: str = "000300.SH"
     limit_pct: float = 9.8           # 涨跌停近似阈值（|pct_chg|）
     exec_lag: int = 1                # 成交滞后：1=调仓日出信号、次一交易日收盘成交（避免同日前视）；0=同日收盘成交
+    risk: RiskConfig = field(default_factory=lambda: RiskConfig(enabled=False))
 
 
 @dataclass
@@ -48,20 +51,34 @@ class CSBacktestResult:
 
 class CSBacktestEngine:
     def __init__(self, engine, config: CSBacktestConfig, target_provider: TargetProvider,
-                 rebalance_dates: list[str]):
+                 rebalance_dates: list[str], exit_codes_provider: ExitCodesProvider | None = None):
         self.engine = engine
         self.cfg = config
         self.target_provider = target_provider
+        self.exit_codes_provider = exit_codes_provider
         self.reb_set = set(rebalance_dates)
         self.repo = BaseRepository(engine)
         self._close: pd.DataFrame = pd.DataFrame()
         self._pct: pd.DataFrame = pd.DataFrame()
+        self._exit_cache: dict[str, set] = {}
+
+    def _exit_codes(self, dt: str) -> set:
+        if self.exit_codes_provider is None:
+            return set()
+        if dt not in self._exit_cache:
+            try:
+                self._exit_cache[dt] = set(self.exit_codes_provider(dt) or set())
+            except Exception:  # noqa: BLE001
+                self._exit_cache[dt] = set()
+        return self._exit_cache[dt]
 
     def _load_prices(self) -> list[str]:
+        # 取数起点前移 ~120 自然日做 MA 暖机（首月即可算 MA60/MA20）。
+        warm_start = (pd.to_datetime(self.cfg.start_date) - pd.Timedelta(days=120)).strftime("%Y%m%d")
         df = self.repo.read_sql(
             "SELECT code, trade_date, close, pct_chg FROM stock_daily "
             "WHERE trade_date>=:s AND trade_date<=:d",
-            {"s": self.cfg.start_date, "d": self.cfg.end_date},
+            {"s": warm_start, "d": self.cfg.end_date},
         )
         if df.empty:
             return []
@@ -69,7 +86,9 @@ class CSBacktestEngine:
         df["pct_chg"] = pd.to_numeric(df["pct_chg"], errors="coerce")
         self._close = df.pivot(index="trade_date", columns="code", values="close").sort_index()
         self._pct = df.pivot(index="trade_date", columns="code", values="pct_chg").sort_index()
-        return self._close.index.tolist()
+        # 暖机段只用于算 MA，不参与回测交易；交易日历从 start_date 起。
+        all_dates = self._close.index.tolist()
+        return [d for d in all_dates if d >= self.cfg.start_date]
 
     def _tradable(self, code: str, dt: str, buying: bool) -> bool:
         try:
@@ -96,6 +115,11 @@ class CSBacktestEngine:
         nav_rows, trades = [], []
         prev_close = {}
         pending: dict[str, float] | None = None   # 待次日成交的目标权重
+        # 风控状态
+        state = {"entry_cost": {}, "trail_tier": {}}
+        peak_nav = 1.0
+        risk_off = False
+        risk_on = self.cfg.risk.enabled
 
         for i, dt in enumerate(dates):
             day_ret = 0.0
@@ -118,16 +142,28 @@ class CSBacktestEngine:
                 if denom > 0:
                     weights = {c: v / denom for c, v in new_w.items()}
 
+            turnover = 0.0
+            # 日频风控：硬止损 / 均线移动止盈 / 逻辑证伪 / 账户级回撤（在成交前）。
+            if risk_on and weights:
+                t_ex, nav, hit = self._apply_risk_exits(dt, weights, nav, trades, state, peak_nav)
+                turnover += t_ex
+                if hit:                       # 账户级 -7% → 清仓转现金，封锁买入到下个调仓日
+                    risk_off = True
+                    pending = None
+            peak_nav = max(peak_nav, nav)
+
             # 成交：exec_lag=1 时，调仓日只出信号（pending），次一交易日收盘成交，
             # 杜绝「用当日收盘信号在当日收盘成交」的同日前视。
-            turnover = 0.0
-            if pending is not None:
-                turnover, nav = self._apply_targets(pending, dt, weights, nav, trades)
+            if pending is not None and not risk_off:
+                t, nav = self._apply_targets(pending, dt, weights, nav, trades, state)
+                turnover += t
                 pending = None
             if dt in self.reb_set:
+                risk_off = False              # 调仓日重置：重新审视、可再建仓
                 signal = self.target_provider(dt, dict(weights)) or {}
                 if self.cfg.exec_lag <= 0:
-                    turnover, nav = self._apply_targets(signal, dt, weights, nav, trades)
+                    t, nav = self._apply_targets(signal, dt, weights, nav, trades, state)
+                    turnover += t
                 else:
                     pending = signal
 
@@ -151,7 +187,8 @@ class CSBacktestEngine:
         return CSBacktestResult(self.cfg, nav_df, trades, md)
 
     def _apply_targets(self, targets: dict[str, float], dt: str,
-                       weights: dict[str, float], nav: float, trades: list) -> tuple[float, float]:
+                       weights: dict[str, float], nav: float, trades: list,
+                       state: dict | None = None) -> tuple[float, float]:
         """在 dt 收盘把组合调向 targets，扣成本、记录成交。返回 (turnover, nav)。"""
         turnover = 0.0
         for c in set(weights) | set(targets):
@@ -166,6 +203,10 @@ class CSBacktestEngine:
             nav *= 1.0 - abs(delta) * fee
             turnover += abs(delta)
             weights[c] = tgt
+            if state is not None and delta > 0:
+                # 买入：以成交价重置成本与移动止盈档位（加仓视为重新建仓）。
+                state["entry_cost"][c] = float(self._close.at[dt, c])
+                state["trail_tier"][c] = 0
             trades.append({"trade_date": dt, "code": c,
                            "action": "buy" if delta > 0 else "sell",
                            "weight": round(tgt, 6),
@@ -173,7 +214,65 @@ class CSBacktestEngine:
         # 清理空仓
         for c in [c for c, w in weights.items() if w <= 1e-6]:
             weights.pop(c, None)
+            if state is not None:
+                state["entry_cost"].pop(c, None)
+                state["trail_tier"].pop(c, None)
         return turnover, nav
+
+    def _execute_sell(self, c: str, tgt_w: float, dt: str, weights: dict[str, float],
+                      nav: float, trades: list, state: dict) -> tuple[float, float]:
+        """风控强制减仓/清仓到 tgt_w（绕过换手带；遵守跌停不卖）。返回 (turnover, nav)。"""
+        cur = weights.get(c, 0.0)
+        if tgt_w >= cur - 1e-9:
+            return 0.0, nav
+        if not self._tradable(c, dt, buying=False):
+            return 0.0, nav
+        delta = cur - tgt_w
+        fee = self.cfg.fee_rate + self.cfg.slippage + self.cfg.stamp_tax
+        nav *= 1.0 - delta * fee
+        weights[c] = tgt_w
+        trades.append({"trade_date": dt, "code": c, "action": "sell",
+                       "weight": round(tgt_w, 6), "price": float(self._close.at[dt, c])})
+        if tgt_w <= 1e-6:
+            weights.pop(c, None)
+            state["entry_cost"].pop(c, None)
+            state["trail_tier"].pop(c, None)
+        return delta, nav
+
+    def _apply_risk_exits(self, dt: str, weights: dict[str, float], nav: float,
+                          trades: list, state: dict, peak_nav: float) -> tuple[float, float, bool]:
+        """日频风控：逐票评估硬止损/移动止盈/逻辑证伪，再判账户级回撤。
+
+        返回 (turnover, nav, account_stop_hit)。
+        """
+        rc = self.cfg.risk
+        exit_codes = self._exit_codes(dt)
+        turnover = 0.0
+        for c in list(weights.keys()):
+            if c not in self._close.columns:
+                continue
+            hist = self._close[c].loc[:dt]
+            if hist.dropna().empty:
+                continue
+            cost = state["entry_cost"].get(c, float("nan"))
+            prev_tier = state["trail_tier"].get(c, 0)
+            dec = evaluate_holding(hist, cost, rc, in_exit_codes=(c in exit_codes),
+                                   prev_tier=prev_tier)
+            state["trail_tier"][c] = dec.new_tier
+            if dec.action == "exit":
+                t, nav = self._execute_sell(c, 0.0, dt, weights, nav, trades, state)
+                turnover += t
+            elif dec.action == "trim":
+                t, nav = self._execute_sell(c, weights[c] * dec.keep_frac, dt,
+                                            weights, nav, trades, state)
+                turnover += t
+        # 账户级回撤止损：相对峰值回撤达阈值 → 全部清仓转现金。
+        if rc.account_dd_stop and peak_nav > 0 and nav / peak_nav - 1.0 <= -rc.account_dd_stop:
+            for c in list(weights.keys()):
+                t, nav = self._execute_sell(c, 0.0, dt, weights, nav, trades, state)
+                turnover += t
+            return turnover, nav, True
+        return turnover, nav, False
 
     def _benchmark_nav(self, dates: list[str]) -> pd.DataFrame | None:
         df = self.repo.read_sql(

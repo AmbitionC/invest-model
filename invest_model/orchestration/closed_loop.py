@@ -24,7 +24,14 @@ from invest_model.factors import FACTORS, FactorPipeline
 from invest_model.logger import get_logger
 from invest_model.model import CSPredictor
 from invest_model.model.dataset import compute_factor_ic, rebalance_dates
-from invest_model.portfolio import MarketTiming, PortfolioConfig, build_targets
+from invest_model.portfolio import (
+    MarketTiming,
+    PortfolioConfig,
+    RiskConfig,
+    build_targets,
+    fuse_targets,
+)
+from invest_model.repositories.advisor_repo import AdvisorRepo
 from invest_model.repositories.base import BaseRepository
 from invest_model.repositories.portfolio_repo import (
     ModelRegistryRepository,
@@ -32,6 +39,7 @@ from invest_model.repositories.portfolio_repo import (
 )
 from invest_model.repositories.prediction_repo import PredictionRepository
 from invest_model.repositories.universe_repo import UniverseRepository
+from invest_model.signals.trend import trend_ok
 from invest_model.universe import UniverseBuilder, UniverseConfig
 
 logger = get_logger()
@@ -51,6 +59,7 @@ class LoopConfig:
     model_kind: str = "ic"           # ic（多因子合成，默认） | ranker（ML 截面排序）
     timing_enabled: bool = True
     timing_floor: float = 0.5
+    risk: RiskConfig = field(default_factory=lambda: RiskConfig(enabled=False))
 
 
 class ClosedLoop:
@@ -70,6 +79,7 @@ class ClosedLoop:
         self.pred_repo = PredictionRepository(engine)
         self.pf_repo = PortfolioRepository(engine)
         self.reg_repo = ModelRegistryRepository(engine)
+        self.adv_repo = AdvisorRepo(engine)
         self._reb: list[str] = []
         self._ind_map: dict[str, str] = {}
         self._ranker = None
@@ -135,30 +145,81 @@ class ClosedLoop:
                     f"(version={self.cfg.version}, model={self.cfg.model_kind})")
         return n
 
+    def _theme_industries(self, dt: str) -> set[str]:
+        """投顾看多主题 → 行业名集合（子串匹配）。theme_boost==1.0 时跳过。"""
+        if self.cfg.portfolio.theme_boost == 1.0:
+            return set()
+        themes = self.adv_repo.get_active_theme(dt)
+        if themes.empty:
+            return set()
+        names = set(themes.loc[themes["direction"] == "long", "theme"].astype(str))
+        inds = set(self.industry_map().values())
+        return {ind for ind in inds for t in names if t and (t in ind or ind in t)}
+
+    def _build_targets(self, dt: str, p: pd.DataFrame, gross: float) -> tuple[dict, dict]:
+        """构建 dt 目标组合，返回 (weights, meta)。投顾为主或纯量化由 portfolio.advisor_led 决定。
+
+        重构为独立方法，供回测 target_provider 与实盘 action_plan 共用。
+        """
+        pcfg = self.cfg.portfolio
+        scores = p[["code", "score", "rank_pct"]] if not p.empty else p
+        # 趋势闸只需对「可能买入」的票判定 → 限定到 top 候选，避免扫全 universe（性能关键）。
+        topk = pcfg.top_n * 4
+
+        def _top_codes(df: pd.DataFrame) -> list[str]:
+            if df.empty:
+                return []
+            return list(df.sort_values("score", ascending=False).head(topk)["code"])
+
+        if pcfg.advisor_led:
+            advisor_df = self.adv_repo.get_active_reco(dt)
+            exit_codes = self.adv_repo.get_exit_codes(dt)
+            trend_codes = None
+            if self.cfg.risk.trend_filter:
+                cand = set(_top_codes(scores))
+                if not advisor_df.empty:
+                    cand |= set(advisor_df["code"])
+                trend_codes = trend_ok(self.engine, dt, list(cand), self.cfg.risk)
+            return fuse_targets(scores, pcfg, advisor_df, gross=gross,
+                                trend_ok_codes=trend_codes, exit_codes=exit_codes,
+                                theme_industries=self._theme_industries(dt),
+                                industry_map=self.industry_map())
+        # 纯量化
+        if self.cfg.risk.trend_filter and not p.empty:
+            ok = trend_ok(self.engine, dt, _top_codes(scores), self.cfg.risk)
+            scores = scores[scores["code"].isin(ok)]
+        targets = build_targets(scores, pcfg, gross=gross, industry_map=self.industry_map())
+        meta = {c: {"grade": None, "source": "quant"} for c in targets}
+        return targets, meta
+
     def _target_provider(self, dt: str, _cur: dict[str, float]) -> dict[str, float]:
         p = self.pred_repo.get_predictions(dt, self.cfg.version)
         if p.empty:
             p = self._predict_one(dt)
-        if p.empty:
-            return {}
         u = set(self.uni_repo.get_universe(dt, self.cfg.universe.method))
-        if u:
+        if u and not p.empty:
             p = p[p["code"].isin(u)]
+        if p.empty and not self.cfg.portfolio.advisor_led:
+            return {}
         gross = self.mt.gross_exposure(dt, list(u) if u else None)
-        targets = build_targets(p[["code", "score", "rank_pct"]], self.cfg.portfolio,
-                                gross=gross, industry_map=self.industry_map())
-        # 落 portfolio_target
+        targets, meta = self._build_targets(dt, p, gross)
+        # 落 portfolio_target（带 grade/source）
         if targets:
             rows = [{"trade_date": dt, "version": self.cfg.version, "code": c,
-                     "weight": w, "rank": i + 1, "gross_exposure": gross}
+                     "weight": w, "rank": i + 1, "gross_exposure": gross,
+                     "grade": meta.get(c, {}).get("grade"),
+                     "source": meta.get(c, {}).get("source")}
                     for i, (c, w) in enumerate(sorted(targets.items(), key=lambda x: -x[1]))]
             self.pf_repo.save_targets(pd.DataFrame(rows))
         return targets
 
     def backtest(self) -> dict:
         cfg = CSBacktestConfig(name=f"cs_{self.cfg.version}", start_date=self.cfg.start,
-                               end_date=self.cfg.end, benchmark_code=self.cfg.benchmark)
-        res = CSBacktestEngine(self.engine, cfg, self._target_provider, self.reb()).run()
+                               end_date=self.cfg.end, benchmark_code=self.cfg.benchmark,
+                               risk=self.cfg.risk)
+        exit_provider = self.adv_repo.get_exit_codes if self.cfg.risk.enabled else None
+        res = CSBacktestEngine(self.engine, cfg, self._target_provider, self.reb(),
+                               exit_codes_provider=exit_provider).run()
         run_id = self._persist_backtest(res)
         self._export(res, run_id)
         logger.info(f"回测完成 run_id={run_id}：{json.dumps(res.metrics, ensure_ascii=False)}")

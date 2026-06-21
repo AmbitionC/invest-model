@@ -19,7 +19,7 @@ class PortfolioRepository(BaseRepository):
 
     def get_targets(self, trade_date: str, version: str) -> pd.DataFrame:
         df = self.read_sql(
-            f"SELECT code, weight, `rank`, gross_exposure FROM {self.TABLE} "
+            f"SELECT code, weight, `rank`, gross_exposure, grade, source FROM {self.TABLE} "
             f"WHERE trade_date=:d AND version=:v ORDER BY weight DESC",
             {"d": trade_date, "v": version},
         )

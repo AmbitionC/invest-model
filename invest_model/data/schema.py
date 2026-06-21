@@ -180,6 +180,8 @@ portfolio_target = Table(
     Column("weight", Numeric(12, 6)),
     Column("rank", Integer),
     Column("gross_exposure", Numeric(8, 4)),
+    Column("grade", String(2)),          # 投顾分级 A/B/C；量化补充为空
+    Column("source", String(16)),        # advisor | quant
     _created_at(),
 )
 
@@ -246,8 +248,93 @@ backtest_trades = Table(
     Column("price", Numeric(14, 4)),
 )
 
+# ── 投顾融合 / 实盘决策表 ────────────────────────────────────
+
+# 投顾个股信号（研报=中期有效 research / 早午盘=短期 intraday）。
+advisor_reco = Table(
+    "advisor_reco", metadata,
+    Column("rec_date", String(8), primary_key=True),       # 生效起始日 YYYYMMDD
+    Column("code", String(16), primary_key=True),
+    Column("source_type", String(12), primary_key=True),   # research | intraday
+    Column("grade", String(2)),                            # A | B | C
+    Column("direction", String(8)),                        # long | reduce | avoid | exit
+    Column("catalyst", Text),                              # 催化剂/推荐逻辑
+    Column("valid_until", String(8)),                      # 失效日（空=按 source_type 默认）
+    Column("source", String(64)),                          # 团队/分析师标识
+    Column("raw_excerpt", Text),                           # 原文留痕（可审计）
+    _created_at(),
+)
+
+# 投顾行业/主题信号。
+advisor_theme = Table(
+    "advisor_theme", metadata,
+    Column("rec_date", String(8), primary_key=True),
+    Column("theme", String(64), primary_key=True),
+    Column("source_type", String(12), primary_key=True),
+    Column("direction", String(8)),
+    Column("thesis", Text),
+    Column("valid_until", String(8)),
+    _created_at(),
+)
+
+# 当前持仓（实盘，股数+成本价）。
+current_holding = Table(
+    "current_holding", metadata,
+    Column("code", String(16), primary_key=True),
+    Column("shares", Numeric(20, 2)),
+    Column("cost_price", Numeric(14, 4)),
+    Column("entry_date", String(8)),
+    Column("updated_at", DateTime, server_default=_NOW),
+)
+
+# 操作计划存证（每次 build_action_plan 落一批）。
+action_plan = Table(
+    "action_plan", metadata,
+    Column("plan_date", String(8), primary_key=True),
+    Column("code", String(16), primary_key=True),
+    Column("name", String(32)),
+    Column("action", String(12)),                          # buy|add|trim|sell|hold
+    Column("cur_weight", Numeric(12, 6)),
+    Column("tgt_weight", Numeric(12, 6)),
+    Column("shares_delta", Numeric(20, 2)),
+    Column("reason", String(64)),
+    Column("stop_price", Numeric(14, 4)),
+    Column("ref_price", Numeric(14, 4)),
+    Column("grade", String(2)),
+    _created_at(),
+)
+
+# 关键列补丁：老库已存在的表按需补列（create_all 不会改已存在表）。
+_COLUMN_PATCHES: dict[str, dict[str, str]] = {
+    "portfolio_target": {"grade": "VARCHAR(2)", "source": "VARCHAR(16)"},
+}
+
+
+def _ensure_columns(engine: Engine) -> None:
+    repo_exists_cols: dict[str, set[str]] = {}
+    dialect = engine.dialect.name
+    with engine.begin() as conn:
+        for table, cols in _COLUMN_PATCHES.items():
+            try:
+                if dialect == "sqlite":
+                    rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+                    existing = {r[1] for r in rows}
+                else:
+                    rows = conn.exec_driver_sql(
+                        "SELECT column_name FROM information_schema.columns "
+                        f"WHERE table_schema=DATABASE() AND table_name='{table}'"
+                    ).fetchall()
+                    existing = {r[0] for r in rows}
+            except Exception:  # noqa: BLE001 — 表不存在时交给 create_all
+                continue
+            repo_exists_cols[table] = existing
+            for col, ddl in cols.items():
+                if col not in existing:
+                    conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+
 
 def create_schema(engine: Engine) -> list[str]:
     """在给定引擎上创建全部新系统表（已存在则跳过）。返回本次新建/确保的表名。"""
     metadata.create_all(engine, checkfirst=True)
+    _ensure_columns(engine)
     return list(metadata.tables.keys())

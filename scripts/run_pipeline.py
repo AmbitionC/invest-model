@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from invest_model.data import create_schema, make_engine  # noqa: E402
 from invest_model.logger import get_logger  # noqa: E402
 from invest_model.orchestration import ClosedLoop, LoopConfig  # noqa: E402
-from invest_model.portfolio import PortfolioConfig  # noqa: E402
+from invest_model.portfolio import PortfolioConfig, RiskConfig  # noqa: E402
 from invest_model.universe import UniverseConfig  # noqa: E402
 
 logger = get_logger()
@@ -51,19 +51,38 @@ def main() -> None:
     ap.add_argument("--model", default="ic", choices=["ic", "ranker"],
                     help="ic=多因子IC加权合成（默认）；ranker=截面ML排序（需 xgboost）")
     ap.add_argument("--no-timing", action="store_true", help="关闭指数择时（恒满仓）")
+    # ── 风控 / 投顾融合 ──
+    ap.add_argument("--risk", action="store_true", help="开启日频风控（硬止损+均线移动止盈）")
+    ap.add_argument("--hard-stop", type=float, default=0.08, help="单票硬止损浮亏阈值")
+    ap.add_argument("--account-dd-stop", type=float, default=0.15, help="账户级回撤止损阈值（0=关闭）")
+    ap.add_argument("--no-ma-trailing", action="store_true", help="关闭均线移动止盈（只留硬止损）")
+    ap.add_argument("--trail-full", action="store_true",
+                    help="均线移动止盈用完整档位（破5减半/破10再减半/破20清仓）；默认仅破MA20清仓")
+    ap.add_argument("--trend-filter", action="store_true", help="开启左侧趋势过滤（仅买 MA60 走平向上）")
+    ap.add_argument("--advisor-led", action="store_true", help="投顾为主融合（A/B 推荐定仓 + 量化补充）")
     args = ap.parse_args()
 
     engine = make_engine(args.db)
     create_schema(engine)
 
+    risk = RiskConfig(
+        enabled=args.risk,            # 仅控日频止损/止盈；趋势过滤由 trend_filter 独立开关
+        hard_stop_pct=args.hard_stop,
+        account_dd_stop=args.account_dd_stop,
+        ma_trailing=not args.no_ma_trailing,
+        trail_full=args.trail_full,
+        trend_filter=args.trend_filter,
+    )
     cfg = LoopConfig(
         start=args.start, end=args.end, version=args.version,
         rebalance=args.rebalance, benchmark=args.benchmark,
         ic_window=args.ic_window, ic_mode=args.ic_mode,
         model_kind=args.model,
         timing_enabled=not args.no_timing,
+        risk=risk,
         universe=UniverseConfig(method=args.universe_method),
-        portfolio=PortfolioConfig(top_n=args.top_n, max_weight=args.max_weight),
+        portfolio=PortfolioConfig(top_n=args.top_n, max_weight=args.max_weight,
+                                  advisor_led=args.advisor_led),
     )
 
     if args.mode == "update":
