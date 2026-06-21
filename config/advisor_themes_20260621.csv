@@ -1,0 +1,5 @@
+rec_date,theme,source_type,direction,thesis,valid_until
+20260621,先进封装EMIB,research,long,"Intel EMIB嵌入硅桥,成本/良率优于CoWoS,或2027切入NVIDIA Rubin Ultra;CoWoS紧缺到2027",
+20260621,玻璃基板,research,long,Intel Glass Core/台积电CoPoS替代有机载板与硅中介层;ABF配合使用且2027起供不应求、涨价30%,
+20260621,氮化镓GaN,research,long,"第三代宽禁带半导体;AI数据中心电源管理/快充;2026市场+58%,超越摩尔",
+20260621,磷化铟InP,research,long,光通信衬底缺口>70%;1.6T指数级需求;中国出口管制驱动国产替代窗口,
