@@ -9,8 +9,10 @@ name: 每日操作计划
 # 持仓与投顾信号需已在 MySQL（用 scripts/migrate_user_data.py 一次性迁入）。
 
 on:
-  schedule:
-    - cron: "30 9 * * 1-5"   # 工作日 09:30 UTC ≈ 北京 17:30（盘后、数据更新之后）
+  # 定时已停用：本仓库改用「本环境 SQLite + 会话内按需生成」方案，未配 INVEST_DB_URL。
+  # 若日后上生产 MySQL，再取消下面注释启用定时（见 docs/plan_notify.md）。
+  # schedule:
+  #   - cron: "30 9 * * 1-5"   # 工作日 09:30 UTC ≈ 北京 17:30
   workflow_dispatch:
     inputs:
       cash:
