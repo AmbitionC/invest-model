@@ -98,7 +98,7 @@ def main() -> None:
         stop = cost * (1 - args.hard_stop); ma20 = lv.get("ma20")
         if pnl <= -args.hard_stop:
             st, hit = "⚠️ 已触发硬止损，清仓", True
-        elif ma20 and px < ma20:
+        elif ma20 and px < ma20 * 0.995:   # 0.5% 缓冲，避免贴线来回抖动
             st, hit = "破MA20，盘后确认清仓", True
         elif pnl <= -args.hard_stop + 0.02:
             st, hit = "逼近止损，盯紧", True
