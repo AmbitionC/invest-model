@@ -55,7 +55,18 @@ def main() -> None:
     ap.add_argument("--db", default="sqlite:///./data/real.db")
     ap.add_argument("--hard-stop", type=float, default=0.08)
     ap.add_argument("--pullback-pct", type=float, default=0.03)
+    ap.add_argument("--alert", action="store_true",
+                    help="只报触发/逼近项 + 交易时段感知（盯盘轮询用）")
     args = ap.parse_args()
+
+    # 交易时段感知（CST=UTC+8；A股 09:30-11:30 / 13:00-15:00，工作日）
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc) + timedelta(hours=8)
+    hm = now.hour * 60 + now.minute
+    trading = (now.weekday() < 5) and (570 <= hm <= 690 or 780 <= hm <= 900)
+    if args.alert and not trading:
+        print(f"⏸ {now:%Y-%m-%d %H:%M} CST 非交易时段，跳过。")
+        return
 
     engine = make_engine(args.db)
     repo = BaseRepository(engine)
@@ -73,15 +84,10 @@ def main() -> None:
 
     levels = _levels(repo, held + watch, dt)
     rt = get_realtime(held + watch)
-    if not rt:
-        print("⚠️ 实时行情拉取为空（非交易时段或接口限流）。盘后请用 build_action_plan.py。")
+    g_of = dict(zip(reco["code"], reco["grade"])) if not reco.empty else {}
 
-    print(f"# 盘中速查 — 实时价 / 落库基准 {dt}\n")
-
-    # ── 持仓监控 ──
-    print("## 持仓监控")
-    print("| 名称 | 现价 | 涨跌 | 成本 | 浮盈亏 | 止损价 | MA20 | 状态 |")
-    print("|---|---|---|---|---|---|---|---|")
+    # 计算各行状态
+    hold_rows, watch_rows, alerts = [], [], []
     for _, h in holds.iterrows():
         c = h["code"]; q = rt.get(c, {}); lv = levels.get(c, {})
         px = q.get("price"); pre = q.get("pre_close"); cost = float(h["cost_price"] or 0)
@@ -89,43 +95,58 @@ def main() -> None:
             continue
         chg = (px / pre - 1) if pre else 0
         pnl = (px / cost - 1) if cost else 0
-        stop = cost * (1 - args.hard_stop)
-        ma20 = lv.get("ma20")
+        stop = cost * (1 - args.hard_stop); ma20 = lv.get("ma20")
         if pnl <= -args.hard_stop:
-            st = "⚠️ 已触发硬止损，清仓"
+            st, hit = "⚠️ 已触发硬止损，清仓", True
         elif ma20 and px < ma20:
-            st = "破MA20，盘后确认清仓"
+            st, hit = "破MA20，盘后确认清仓", True
         elif pnl <= -args.hard_stop + 0.02:
-            st = "逼近止损，盯紧"
+            st, hit = "逼近止损，盯紧", True
         else:
-            st = "持有"
-        print(f"| {q.get('name', c)} | {px:.2f} | {chg:+.1%} | {cost:.2f} | {pnl:+.1%} | "
-              f"{stop:.2f} | {ma20:.2f} | {st} |")
-
-    # ── 观察池价位预警 ──
-    print("\n## 观察池·买点价位预警")
-    print("| 名称 | 级 | 现价 | 回踩位(MA20) | 突破位(20日高) | 状态 |")
-    print("|---|---|---|---|---|---|")
-    g_of = dict(zip(reco["code"], reco["grade"])) if not reco.empty else {}
+            st, hit = "持有", False
+        hold_rows.append((q.get("name", c), px, chg, cost, pnl, stop, ma20, st))
+        if hit:
+            alerts.append(f"🔴 持仓 {q.get('name', c)} {px:.2f}({chg:+.1%}) — {st}")
     for c in watch:
-        q = rt.get(c, {}); lv = levels.get(c, {})
-        px = q.get("price")
+        q = rt.get(c, {}); lv = levels.get(c, {}); px = q.get("price")
         if not px or not lv:
             continue
         ma20, hi20 = lv.get("ma20"), lv.get("hi20")
-        dev = (px / ma20 - 1) if ma20 else 0       # 距 MA20 偏离
+        dev = (px / ma20 - 1) if ma20 else 0
         if not lv.get("ma60_up") or (lv.get("ma60") and px < lv["ma60"]):
-            st = "趋势未上（不看）"
+            st, hit = "趋势未上（不看）", False
         elif ma20 and abs(dev) <= args.pullback_pct:
-            st = "⚠️ 到回踩位，企稳放量则买点"      # 最佳买点（趋势中继）
+            st, hit = "⚠️ 到回踩位，企稳放量则买点", True
         elif px >= hi20 and dev <= 0.06:
-            st = "⚠️ 突破平台，放量则买点"          # 刚突破、未过度偏离
+            st, hit = "⚠️ 突破平台，放量则买点", True
         elif dev > 0.06:
-            st = f"偏离MA20 {dev:+.0%}，勿追高，等回踩"
+            st, hit = f"偏离MA20 {dev:+.0%}，勿追高，等回踩", False
         else:
-            st = "上方运行，等回踩MA20"
-        print(f"| {q.get('name', c)} | {g_of.get(c, '')} | {px:.2f} | "
-              f"{ma20:.2f} | {hi20:.2f} | {st} |")
+            st, hit = "上方运行，等回踩MA20", False
+        watch_rows.append((q.get("name", c), g_of.get(c, ""), px, ma20, hi20, st))
+        if hit:
+            alerts.append(f"🟢 观察 {q.get('name', c)}({g_of.get(c, '')}) {px:.2f} — {st}")
+
+    if args.alert:
+        ts = f"{now:%H:%M} CST"
+        if alerts:
+            print(f"⏰ {ts} 触发 {len(alerts)} 项：")
+            print("\n".join(alerts))
+        else:
+            print(f"✓ {ts} 无触发（持仓未碰止损/破位，观察池未到买点）")
+        return
+
+    print(f"# 盘中速查 — 实时价 / 落库基准 {dt}\n")
+    print("## 持仓监控")
+    print("| 名称 | 现价 | 涨跌 | 成本 | 浮盈亏 | 止损价 | MA20 | 状态 |")
+    print("|---|---|---|---|---|---|---|---|")
+    for n, px, chg, cost, pnl, stop, ma20, st in hold_rows:
+        print(f"| {n} | {px:.2f} | {chg:+.1%} | {cost:.2f} | {pnl:+.1%} | {stop:.2f} | {ma20:.2f} | {st} |")
+    print("\n## 观察池·买点价位预警")
+    print("| 名称 | 级 | 现价 | 回踩位(MA20) | 突破位(20日高) | 状态 |")
+    print("|---|---|---|---|---|---|")
+    for n, g, px, ma20, hi20, st in watch_rows:
+        print(f"| {n} | {g} | {px:.2f} | {ma20:.2f} | {hi20:.2f} | {st} |")
 
 
 if __name__ == "__main__":
