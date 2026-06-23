@@ -146,6 +146,11 @@ def main() -> None:
         return
 
     print(f"# 盘中速查 — 实时价 / 落库基准 {dt}\n")
+    try:
+        from invest_model.signals.fear import fear_gauge, format_fear
+        print(format_fear(fear_gauge(engine, dt)) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
     print("## 持仓监控")
     print("| 名称 | 现价 | 涨跌 | 成本 | 浮盈亏 | 止损价 | MA20 | 状态 |")
     print("|---|---|---|---|---|---|---|---|")
