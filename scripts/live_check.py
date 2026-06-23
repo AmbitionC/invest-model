@@ -70,6 +70,14 @@ def main() -> None:
 
     engine = make_engine(args.db)
     repo = BaseRepository(engine)
+    # 移动止盈白名单：这些票按"破MA20"管，不套用 -8% 硬止损（如业绩爆发的核心仓）
+    import os
+    tro = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "config", "trailing_only.txt")
+    trailing_only = set()
+    if os.path.exists(tro):
+        trailing_only = {ln.split("#")[0].strip() for ln in open(tro, encoding="utf-8")
+                         if ln.split("#")[0].strip()}
     dt = repo.read_sql("SELECT MAX(trade_date) d FROM stock_daily")["d"].iloc[0]
     holds = HoldingRepo(engine).get_all()
     reco = AdvisorRepo(engine).get_active_reco(dt)
@@ -96,14 +104,15 @@ def main() -> None:
         chg = (px / pre - 1) if pre else 0
         pnl = (px / cost - 1) if cost else 0
         stop = cost * (1 - args.hard_stop); ma20 = lv.get("ma20")
-        if pnl <= -args.hard_stop:
+        ex = c in trailing_only            # 移动止盈白名单：不套硬止损
+        if not ex and pnl <= -args.hard_stop:
             st, hit = "⚠️ 已触发硬止损，清仓", True
         elif ma20 and px < ma20 * 0.995:   # 0.5% 缓冲，避免贴线来回抖动
-            st, hit = "破MA20，盘后确认清仓", True
-        elif pnl <= -args.hard_stop + 0.02:
+            st, hit = ("破MA20移动止盈，确认清仓" if ex else "破MA20，盘后确认清仓"), True
+        elif not ex and pnl <= -args.hard_stop + 0.02:
             st, hit = "逼近止损，盯紧", True
         else:
-            st, hit = "持有", False
+            st, hit = ("持有(MA20移动止盈)" if ex else "持有"), False
         hold_rows.append((q.get("name", c), px, chg, cost, pnl, stop, ma20, st))
         if hit:
             alerts.append(f"🔴 持仓 {q.get('name', c)} {px:.2f}({chg:+.1%}) — {st}")
