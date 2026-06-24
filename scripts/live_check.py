@@ -50,6 +50,63 @@ def _levels(repo: BaseRepository, codes: list[str], dt: str) -> dict[str, dict]:
     return out
 
 
+def _etf_watch(dt: str) -> list[tuple]:
+    """ETF 观察清单（无 rt_k 实时源）：用 fund_daily EOD 算趋势/回踩位/突破位。
+
+    返回 [(代码, 备注, 最新收盘, MA20, MA60趋势, 突破位, 状态)]。读 config/watch_etf.txt。
+    """
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(base, "config", "watch_etf.txt")
+    if not os.path.exists(path):
+        return []
+    items = []
+    for ln in open(path, encoding="utf-8"):
+        code = ln.split("#")[0].strip()
+        if not code:
+            continue
+        note = ln.split("#", 1)[1].strip() if "#" in ln else ""
+        items.append((code, note))
+    if not items:
+        return []
+    from invest_model.sources.tushare_client import TushareClient
+    pro = TushareClient().pro
+    start = (pd.to_datetime(dt) - pd.Timedelta(days=130)).strftime("%Y%m%d")
+    rows = []
+    for code, note in items:
+        df = None
+        for _ in range(4):
+            try:
+                df = pro.query("fund_daily", ts_code=code, start_date=start, end_date=dt)
+            except Exception:  # noqa: BLE001
+                df = None
+            if df is not None and len(df):
+                break
+        if df is None or df.empty:
+            rows.append((code, note, float("nan"), float("nan"), "?", float("nan"), "取数失败"))
+            continue
+        df = df.sort_values("trade_date")
+        cl = pd.to_numeric(df["close"], errors="coerce").dropna()
+        last = float(cl.iloc[-1])
+        ma20 = float(cl.tail(20).mean()) if len(cl) >= 20 else float("nan")
+        ma60 = float(cl.tail(60).mean()) if len(cl) >= 60 else float("nan")
+        ma60_prev = float(cl.tail(65).head(60).mean()) if len(cl) >= 65 else ma60
+        ma60_up = ma60 >= ma60_prev
+        hi20 = float(cl.iloc[-21:-1].max()) if len(cl) >= 21 else float("nan")
+        dev = (last / ma20 - 1) if ma20 == ma20 else 0.0
+        if not (last >= ma60 and ma60_up):
+            st = "左侧（MA60未走平/上行，不买）"
+        elif abs(dev) <= 0.03:
+            st = "⚠️ 到回踩位，企稳放量则买点"
+        elif last >= hi20:
+            st = "⚠️ 突破平台，放量则买点"
+        elif dev > 0.06:
+            st = f"偏离MA20 {dev:+.0%}，勿追，等回踩"
+        else:
+            st = "上方运行，等回踩MA20"
+        rows.append((code, note, last, ma20, ("MA60↑" if ma60_up else "MA60↓"), hi20, st))
+    return rows
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="盘中实时盯盘")
     ap.add_argument("--db", default="sqlite:///./data/real.db")
@@ -161,6 +218,14 @@ def main() -> None:
     print("|---|---|---|---|---|---|")
     for n, g, px, ma20, hi20, st in watch_rows:
         print(f"| {n} | {g} | {px:.2f} | {ma20:.2f} | {hi20:.2f} | {st} |")
+
+    etf_rows = _etf_watch(dt)
+    if etf_rows:
+        print("\n## ETF观察·EOD买点位（无实时源，盘后基准）")
+        print("| 代码 | 备注 | 收盘 | 回踩位(MA20) | MA60 | 突破位(20日高) | 状态 |")
+        print("|---|---|---|---|---|---|---|")
+        for code, note, last, ma20, ma60t, hi20, st in etf_rows:
+            print(f"| {code} | {note} | {last:.3f} | {ma20:.3f} | {ma60t} | {hi20:.3f} | {st} |")
 
 
 if __name__ == "__main__":
