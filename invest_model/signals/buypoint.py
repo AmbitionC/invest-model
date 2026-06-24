@@ -7,6 +7,9 @@
   - 环境：大盘择时 gross ≥ 阈值（差行情不追新仓）
 
 只有三层都过，研报观察池里的标的才从"观察"提升为"建议买入"。
+
+逆向叠加：恐慌指数 ≥ 阈值（极度恐慌）时，差行情反而是抄底窗口，故放松环境闸到
+``fear_min_gross``，并给触发的买点打 "抄底" 标签。其余两闸（技术/量化）不放松。
 """
 
 from __future__ import annotations
@@ -30,6 +33,9 @@ class BuyPointConfig:
     min_gross: float = 0.6           # 大盘环境闸：gross 下限
     use_quant: bool = True
     use_env: bool = True
+    use_fear: bool = True            # 逆向：极度恐慌时放松环境闸
+    fear_buy: float = 75.0           # 恐慌分 ≥ 此值视为抄底窗口
+    fear_min_gross: float = 0.4      # 抄底窗口里环境闸下限（放松后）
 
 
 @dataclass
@@ -55,8 +61,12 @@ def _slope_up(s: pd.Series, n: int, look: int = 5) -> bool:
 
 def detect_buypoints(engine, dt: str, codes: list[str], gross: float,
                      rank_map: dict[str, float] | None = None,
-                     cfg: BuyPointConfig | None = None) -> dict[str, BuyPoint]:
-    """对 codes 在 dt 检测复合买点。返回 {code: BuyPoint}。"""
+                     cfg: BuyPointConfig | None = None,
+                     fear: float | None = None) -> dict[str, BuyPoint]:
+    """对 codes 在 dt 检测复合买点。返回 {code: BuyPoint}。
+
+    fear: 当期恐慌分（0–100）。未传且 use_fear 时按 dt 现算一次（慢变量，按日不变）。
+    """
     cfg = cfg or BuyPointConfig()
     rank_map = rank_map or {}
     codes = list(dict.fromkeys(codes))
@@ -64,6 +74,12 @@ def detect_buypoints(engine, dt: str, codes: list[str], gross: float,
     if not codes:
         return out
     repo = BaseRepository(engine)
+    if cfg.use_fear and fear is None:
+        try:
+            from invest_model.signals.fear import fear_gauge
+            fear = float(fear_gauge(engine, dt)["score"])
+        except Exception:  # noqa: BLE001
+            fear = None
     start = (pd.to_datetime(dt) - pd.Timedelta(days=cfg.trend_ma * 2 + 40)).strftime("%Y%m%d")
     frames = []
     for i in range(0, len(codes), 600):
@@ -75,7 +91,9 @@ def detect_buypoints(engine, dt: str, codes: list[str], gross: float,
             f"SELECT code, trade_date, open, high, low, close, volume FROM stock_daily "
             f"WHERE trade_date>=:s AND trade_date<=:d AND code IN ({ph})", params))
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    env_ok = (not cfg.use_env) or (gross >= cfg.min_gross)
+    panic = cfg.use_fear and fear is not None and fear >= cfg.fear_buy
+    gross_floor = cfg.fear_min_gross if panic else cfg.min_gross
+    env_ok = (not cfg.use_env) or (gross >= gross_floor)
 
     for c in codes:
         g = df[df["code"] == c].sort_values("trade_date") if not df.empty else pd.DataFrame()
@@ -122,7 +140,10 @@ def detect_buypoints(engine, dt: str, codes: list[str], gross: float,
             out[c] = BuyPoint(c, False, kind, f"观察：现{kind}买点但量化分偏弱(rank<{cfg.quant_min_rank:.0%})", **px)
             continue
         if not env_ok:
-            out[c] = BuyPoint(c, False, kind, f"观察：现{kind}买点但大盘环境差(gross<{cfg.min_gross:.0%})", **px)
+            out[c] = BuyPoint(c, False, kind, f"观察：现{kind}买点但大盘环境差(gross<{gross_floor:.0%})", **px)
             continue
-        out[c] = BuyPoint(c, True, kind, f"买点触发：{kind}（技术+量化+环境三重确认）", **px)
+        tag = f"买点触发：{kind}（技术+量化+环境三重确认）"
+        if panic and gross < cfg.min_gross:
+            tag = f"抄底买点：{kind}（恐慌{fear:.0f}≥{cfg.fear_buy:.0f}放松环境闸，技术+量化确认）"
+        out[c] = BuyPoint(c, True, kind, tag, **px)
     return out
