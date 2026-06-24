@@ -63,10 +63,15 @@ def _etf_watch(dt: str) -> list[tuple]:
         return []
     items = []
     for ln in open(path, encoding="utf-8"):
-        code = ln.split("#")[0].strip()
-        if not code:
+        head = ln.split("#")[0].strip()
+        if not head:
             continue
+        toks = head.split()
+        code = toks[0]
+        grade = toks[1] if len(toks) > 1 else ""        # 可选级别列（A/B）
         note = ln.split("#", 1)[1].strip() if "#" in ln else ""
+        if grade:
+            note = f"[{grade}级] {note}"
         items.append((code, note))
     if not items:
         return []
