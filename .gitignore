@@ -47,3 +47,4 @@ data/*.db
 
 # 个人实盘持仓/操作计划（隐私，不提交到远程）
 results/action_plan_real*.md
+config/holdings_*.csv
