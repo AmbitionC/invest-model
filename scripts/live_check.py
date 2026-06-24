@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -72,20 +74,36 @@ def _etf_watch(dt: str) -> list[tuple]:
     pro = TushareClient().pro
     start = (pd.to_datetime(dt) - pd.Timedelta(days=130)).strftime("%Y%m%d")
     rows = []
-    for code, note in items:
-        df = None
-        for _ in range(4):
+    def _q(ep, **kw):
+        for _ in range(6):
             try:
-                df = pro.query("fund_daily", ts_code=code, start_date=start, end_date=dt)
+                d = pro.query(ep, **kw)
             except Exception:  # noqa: BLE001
-                df = None
-            if df is not None and len(df):
-                break
+                d = None
+            if d is not None and len(d):
+                return d
+            time.sleep(6)
+        return None
+
+    for code, note in items:
+        df = _q("fund_daily", ts_code=code, start_date=start, end_date=dt)
         if df is None or df.empty:
             rows.append((code, note, float("nan"), float("nan"), "?", float("nan"), "取数失败"))
             continue
         df = df.sort_values("trade_date")
-        cl = pd.to_numeric(df["close"], errors="coerce").dropna()
+        # 前复权：用 fund_adj 把份额拆分/折算抹平（否则拆分日价格台阶会污染均线）。
+        # 取不到复权因子时不静默用原始价（会因拆分台阶误判趋势），直接标注存疑。
+        adj = _q("fund_adj", ts_code=code, start_date=start, end_date=dt)
+        cl_raw = pd.to_numeric(df["close"], errors="coerce")
+        if adj is None or not len(adj):
+            last = float(cl_raw.dropna().iloc[-1])
+            rows.append((code, note, last, float("nan"), "?", float("nan"), "复权因子取数失败(趋势存疑,勿据此操作)"))
+            continue
+        adj = adj.sort_values("trade_date")
+        fac = dict(zip(adj["trade_date"], pd.to_numeric(adj["adj_factor"], errors="coerce")))
+        last_fac = pd.to_numeric(adj["adj_factor"], errors="coerce").iloc[-1]
+        f = df["trade_date"].map(fac).astype(float).ffill().fillna(1.0)
+        cl = (cl_raw * f / last_fac).dropna()
         last = float(cl.iloc[-1])
         ma20 = float(cl.tail(20).mean()) if len(cl) >= 20 else float("nan")
         ma60 = float(cl.tail(60).mean()) if len(cl) >= 60 else float("nan")
