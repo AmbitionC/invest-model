@@ -1,0 +1,6 @@
+rec_date,code,source_type,grade,direction,catalyst,valid_until,source
+20260625,688041.SH,intraday,B,long,"国产CPU/DCU龙头;服务器CPU涨价,国产受Fab涨价影响小;互联网开放市场订单预期差",,投顾收盘0625
+20260625,000066.SZ,intraday,C,long,"国产CPU(飞腾);互联网订单绑定弹性;盘面异动",,投顾收盘0625
+20260625,688047.SH,intraday,C,long,"国产CPU(LoongArch自主架构)",,投顾收盘0625
+20260625,688380.SH,intraday,C,long,"存储/MCU;+20%已涨高",,投顾收盘0625
+20260625,000725.SZ,intraday,C,long,"玻璃基封装载板试验线2026H1全自动通线1000片/月;9-2-9 20层样品送样;与康宁合作",,投顾收盘0625

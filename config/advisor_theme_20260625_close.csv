@@ -1,0 +1,3 @@
+rec_date,theme,source_type,direction,thesis,valid_until
+20260625,国产CPU算力,intraday,long,"服务器CPU受Fab涨价普涨,国产CPU(x86/Arm/LoongArch)受影响小且性能接近至强6/霄龙5;互联网开放市场订单存预期差,头部商务绑定厂商弹性大(海光/长城/龙芯)",
+20260625,玻璃基板,research,long,"京东方玻璃基封装载板试验线2026H1全自动通线1000片/月,TGV开孔/深孔填铜/布线全流程拉通,9-2-9 20层送样;康宁玻璃基光互连;海外加速导入",
