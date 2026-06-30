@@ -1,0 +1,42 @@
+name: report
+
+# 生成今日持仓报告/策略：build_action_plan(模型预测+投顾信号+current_holding)。
+# 依赖 backfill 已把行情/因子/预测/投顾/持仓写进 MySQL。输出 markdown 打到日志。
+# 触发：手动 或 改 ops/report.trigger 后 push。仅读 DB。
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'ops/report.trigger'
+
+concurrency:
+  group: report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      CASH: ${{ vars.ACCOUNT_CASH || '1061' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 生成持仓报告/策略（打印到日志）
+        run: |
+          python scripts/build_action_plan.py \
+            --advisor-led --risk --trend-filter --concentration medium --time-stop-days 8 \
+            --cash "$CASH" --out results/action_plan.md
+          echo "================ ACTION PLAN MARKDOWN ================"
+          cat results/action_plan.md
