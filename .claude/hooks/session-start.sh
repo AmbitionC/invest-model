@@ -13,8 +13,11 @@ cd "${CLAUDE_PROJECT_DIR:-.}"
 # 可重复执行（幂等）；容器状态在 hook 完成后会被缓存。
 pip install -e ".[dev,ml]"
 
-# 若无 .env，则由示例生成一份，默认走本地 SQLite，无需外部数据库/外网。
+# 若无 .env，则由示例生成一份。仅当环境未提供 INVEST_DB_URL 时才回落本地 SQLite，
+# 环境（Claude on the web 的环境变量）已配 INVEST_DB_URL 则尊重环境值，不覆盖。
 if [ ! -f .env ] && [ -f .env.example ]; then
   cp .env.example .env
-  printf '\n# 由 session-start hook 自动追加：默认本地 SQLite 后端\nINVEST_DB_URL=sqlite:///./data/local.db\n' >> .env
+  if [ -z "${INVEST_DB_URL:-}" ]; then
+    printf '\n# 由 session-start hook 自动追加：环境未配 INVEST_DB_URL，回落本地 SQLite\nINVEST_DB_URL=sqlite:///./data/local.db\n' >> .env
+  fi
 fi
