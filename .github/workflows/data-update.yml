@@ -1,0 +1,58 @@
+name: data-update
+
+# 盘后增量更新生产 MySQL 的行情/估值数据；周六做一次全量刷新（universe→因子→IC→预测→回测）。
+# 需要在 仓库 Settings → Secrets and variables → Actions 配置：
+#   Secrets: INVEST_DB_URL（mysql+pymysql://user:pass@host:3306/invest?charset=utf8mb4）
+#            TUSHARE_TOKEN，TUSHARE_HTTP_URL（如 https://minitick.top/）
+# 未配 Secrets 前任务只会失败、无副作用。
+
+on:
+  schedule:
+    # 工作日 17:00 北京时间(=09:00 UTC) 增量更新
+    - cron: "0 9 * * 1-5"
+    # 周六 18:00 北京时间(=10:00 UTC) 全量刷新因子/预测
+    - cron: "0 10 * * 6"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "运行模式"
+        type: choice
+        default: update
+        options: [update, all]
+
+concurrency:
+  group: data-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Resolve mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 10 * * 6" ]; then
+            echo "mode=all" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=update" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run pipeline (${{ steps.mode.outputs.mode }})
+        run: python scripts/run_pipeline.py --mode "${{ steps.mode.outputs.mode }}" --start 20190101

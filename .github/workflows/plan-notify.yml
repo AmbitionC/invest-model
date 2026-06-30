@@ -1,0 +1,79 @@
+name: plan-notify
+
+# 工作日盘后(约 17:30 北京时间)在生产 MySQL 上生成三段式操作计划，
+# 以 GitHub Issue 评论形式追加 → 你会收到 GitHub 邮件提醒。
+# 需要在 仓库 Settings → Secrets and variables → Actions 配置：
+#   Secrets: INVEST_DB_URL，TUSHARE_TOKEN，TUSHARE_HTTP_URL（同 data-update）
+#   Variables(可选): ACCOUNT_CASH=账户现金(如 54089)；PLAN_ARGS=覆盖默认计划参数
+# 依赖 data-update 已把当日数据/预测刷进 MySQL。未配 Secrets 前只失败、无副作用。
+
+on:
+  schedule:
+    # 工作日 17:30 北京时间(=09:30 UTC)，盘后数据更新之后
+    - cron: "30 9 * * 1-5"
+  workflow_dispatch: {}
+
+concurrency:
+  group: plan-notify
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+      ACCOUNT_CASH: ${{ vars.ACCOUNT_CASH || '0' }}
+      PLAN_ARGS: ${{ vars.PLAN_ARGS || '--advisor-led --risk --trend-filter --concentration medium --time-stop-days 8' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Build action plan
+        run: |
+          python scripts/build_action_plan.py \
+            $PLAN_ARGS --cash "$ACCOUNT_CASH" \
+            --out results/action_plan.md
+
+      - name: Post plan to tracking issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const title = '📈 每日操作计划';
+            const body = fs.readFileSync('results/action_plan.md', 'utf8');
+            const today = new Date(Date.now() + 8 * 3600 * 1000)
+              .toISOString().slice(0, 10);   // 北京日期
+            const { owner, repo } = context.repo;
+
+            // 找到(或新建)那条追加用的 issue
+            const found = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue is:open in:title "${title}"`,
+            });
+            let issue = found.data.items.find(i => i.title === title);
+            if (!issue) {
+              const created = await github.rest.issues.create({
+                owner, repo, title,
+                body: '本 issue 由 plan-notify 工作流每个交易日盘后追加操作计划评论。',
+              });
+              issue = created.data;
+            }
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: issue.number,
+              body: `## ${today} 盘后操作计划\n\n${body}`,
+            });
+            core.info(`已在 issue #${issue.number} 追加 ${today} 计划评论。`);
