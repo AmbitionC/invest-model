@@ -60,3 +60,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# re-run trigger: 验证建库后 DB 连通（无害注释）
