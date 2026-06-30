@@ -26,7 +26,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      # 数据库：优先 INVEST_DB_URL；否则回落 DB_*（与 fe-journey-faas 同名，可设 Org secret 共用），
+      # 库名固定 invest。详见 data-update.yml 注释。
       INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
       TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
       TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
       ACCOUNT_CASH: ${{ vars.ACCOUNT_CASH || '0' }}

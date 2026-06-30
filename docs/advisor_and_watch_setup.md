@@ -70,15 +70,30 @@ python scripts/build_action_plan.py --advisor-led --risk --out results/action_pl
 - `.github/workflows/plan-notify.yml`：工作日 17:30 生成计划，追加到 GitHub Issue
   「📈 每日操作计划」评论 → 你收到邮件提醒。
 
-**一次性配置**（仓库 Settings → Secrets and variables → Actions）：
+**一次性配置**（仓库 Settings → Secrets and variables → Actions）。
 
-| 类型 | 名称 | 值 |
+数据库 secret 两种配法，二选一（工作流两种都支持，`INVEST_DB_URL` 优先）：
+
+- **配法① 复用 fe-journey-faas 的同名 secret（推荐，可共用）**：直接复用
+  `DB_HOST` / `DB_USER` / `DB_PASS` 三个 secret（值与 faas 指向同一台 RDS）。
+  把它们设为 **Organization secret** 即可两仓共享、改一处两边生效。库名由工作流固定为
+  `invest`（可用 Variable `INVEST_DB_NAME` 覆盖）。代码侧会对用户名/密码做 URL 转义。
+- **配法② 单个整串 URL（隔离账号时用）**：只配一个 `INVEST_DB_URL`，指向 `invest` 库。
+
+| 类型 | 名称 | 值 / 说明 |
 |---|---|---|
-| Secret | `INVEST_DB_URL` | `mysql+pymysql://user:pass@host:3306/invest?charset=utf8mb4` |
+| Secret（配法①） | `DB_HOST` | RDS 外网地址，如 `rm-xxx.mysql.rds.aliyuncs.com` |
+| Secret（配法①） | `DB_USER` | DB 用户名 |
+| Secret（配法①） | `DB_PASS` | DB 密码（含特殊字符也行，代码会转义） |
+| Secret（配法②，替代①） | `INVEST_DB_URL` | `mysql+pymysql://用户:密码@host:3306/invest?charset=utf8mb4` |
 | Secret | `TUSHARE_TOKEN` | 你的 Tushare token |
 | Secret | `TUSHARE_HTTP_URL` | `https://minitick.top/` |
+| Variable(可选) | `INVEST_DB_NAME` | 覆盖库名，默认 `invest` |
 | Variable(可选) | `ACCOUNT_CASH` | 账户现金，如 `54089` |
 | Variable(可选) | `PLAN_ARGS` | 覆盖默认 `--advisor-led --risk --trend-filter --concentration medium --time-stop-days 8` |
+
+> 注意：GitHub secret 名不能以 `GITHUB_` 开头（故 faas 用 `GH_TOKEN`）。本仓的
+> `plan-notify` 发 issue 用的是 Actions 内置的 `GITHUB_TOKEN`，无需另配。
 
 注意：
 - 生产 MySQL 需允许 GitHub 运行器访问（放行出口 IP，或自托管 runner）。

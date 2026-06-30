@@ -30,7 +30,14 @@ jobs:
     # 增量(update)几分钟即可；周六/手动全量(all)会重算因子与预测，放宽到 3 小时。
     timeout-minutes: 180
     env:
+      # 数据库：优先用整串 INVEST_DB_URL（若配了该 secret）；否则回落到 DB_*——
+      # 与 fe-journey-faas 同名，可设为 Organization secret 让两仓共用同一套 RDS 凭证。
+      # 代码侧 config.get_mysql_url 会对用户名/密码做 URL 转义，库名固定 invest。
       INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
       TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
       TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
     steps:
