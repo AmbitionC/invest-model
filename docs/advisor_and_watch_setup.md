@@ -85,3 +85,25 @@ python scripts/build_action_plan.py --advisor-led --risk --out results/action_pl
 - `plan-notify` 依赖 `data-update` 已把当日数据/预测刷进 MySQL。
 - 未配 Secrets 前定时任务只失败、无副作用。
 - 配好后可在 Actions 页手动 `Run workflow` 跑一次 `data-update`(mode=all) 验证。
+
+### 复用已有阿里云 RDS（方案 A）
+
+若已有阿里云 RDS（如与 fe-journey-faas 共用实例），按下列方式复用，**不与其它库混表**：
+
+1. **建独立库**（DMS/客户端执行）：
+   ```sql
+   CREATE DATABASE invest CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+   ```
+   沿用现有 DB 账号即可；想隔离权限可另建 `invest_app` 用户只授权 `invest.*`。
+2. **网络可达**：RDS 控制台「数据库连接」确认有**外网地址**；「白名单设置」需放行
+   GitHub runner（其出口 IP 为大段动态范围，通常设 `0.0.0.0/0` + 强口令；想彻底不暴露
+   则改用阿里云 FC 同 VPC 内网方案）。
+3. **Secret 值**：`INVEST_DB_URL=mysql+pymysql://用户:密码@RDS外网地址:3306/invest?charset=utf8mb4`
+4. **首次回填建议在本地机器跑**（已白名单 minitick），直接写 RDS，避免 Actions 单次时长限制：
+   ```bash
+   export INVEST_DB_URL='mysql+pymysql://用户:密码@RDS外网:3306/invest?charset=utf8mb4'
+   export TUSHARE_TOKEN=... TUSHARE_HTTP_URL=https://minitick.top/
+   python scripts/run_pipeline.py --mode update --start 20190101
+   python scripts/run_pipeline.py --mode all
+   ```
+   之后每日增量交给 GitHub Actions。`current_holding` 与投顾信号同样写入这个 `invest` 库。

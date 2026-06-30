@@ -27,7 +27,8 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 增量(update)几分钟即可；周六/手动全量(all)会重算因子与预测，放宽到 3 小时。
+    timeout-minutes: 180
     env:
       INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
       TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
