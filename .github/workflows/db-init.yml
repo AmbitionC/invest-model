@@ -1,11 +1,14 @@
 name: db-init
 
-# 一次性：在目标 RDS 上创建 invest 库（幂等）。仅手动触发（workflow_dispatch）——
-# 故意不加 push 触发：避免在共享生产 RDS 上自动执行 CREATE DATABASE，须人工显式触发。
-# Secrets 来源与 data-update 一致（INVEST_DB_URL 优先，否则 DB_*）。
+# 一次性：在目标 RDS 上创建 invest 库（幂等）。Secrets 来源与 data-update 一致
+# （INVEST_DB_URL 优先，否则 DB_*）。push 触发仅限本文件/脚本变更（用户已显式授权建库）。
 
 on:
   workflow_dispatch: {}
+  push:
+    paths:
+      - '.github/workflows/db-init.yml'
+      - 'scripts/init_db.py'
 
 jobs:
   init:
