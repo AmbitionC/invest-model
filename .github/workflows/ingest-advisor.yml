@@ -1,0 +1,48 @@
+name: ingest-advisor
+
+# 录入投顾信号到生产 MySQL：每当 config/advisor_*.csv 变更(push)即自动 ingest。
+# reco/theme 均幂等 upsert；reco 需 stock_info 命中(由 backfill/data-update 填好)，
+# 命中不到的行整文件会失败，这里容错跳过单个文件、不影响其它。
+# 仅用 DB（不需要 Tushare）。Secrets：INVEST_DB_URL 优先，否则 DB_*。
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'config/advisor_*.csv'
+
+concurrency:
+  group: ingest-advisor
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 录入 reco/theme（容错跳过失败项）
+        run: |
+          shopt -s nullglob
+          for f in config/advisor_research_*.csv config/advisor_signals_*.csv config/advisor_intraday_*.csv; do
+            case "$f" in *template*) continue;; esac
+            echo "== reco: $f"
+            python scripts/ingest_advisor.py --kind reco --csv "$f" || echo "WARN 跳过 $f"
+          done
+          for f in config/advisor_theme_*.csv config/advisor_themes_*.csv; do
+            case "$f" in *template*) continue;; esac
+            echo "== theme: $f"
+            python scripts/ingest_advisor.py --kind theme --csv "$f" || echo "WARN 跳过 $f"
+          done
