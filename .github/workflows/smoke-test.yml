@@ -1,0 +1,34 @@
+name: smoke-test
+
+# 手动触发的连通性自检：验证 RDS 与 Tushare 的 Secrets 是否配置正确。
+# 只做 SELECT 1 + 一次极小 Tushare 查询，不写库、不拉历史，秒级完成。
+# Secrets 来源与 data-update 一致（INVEST_DB_URL 优先，否则 DB_*）。
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Connectivity smoke check
+        run: python scripts/smoke_check.py
