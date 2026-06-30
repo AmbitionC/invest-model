@@ -1,0 +1,29 @@
+name: db-init
+
+# 一次性：在目标 RDS 上创建 invest 库（幂等）。仅手动触发（workflow_dispatch）——
+# 故意不加 push 触发：避免在共享生产 RDS 上自动执行 CREATE DATABASE，须人工显式触发。
+# Secrets 来源与 data-update 一致（INVEST_DB_URL 优先，否则 DB_*）。
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: Create invest database (idempotent)
+        run: python scripts/init_db.py
