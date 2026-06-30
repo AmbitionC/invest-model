@@ -60,3 +60,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# re-run trigger: 验证建库后 DB 连通（无害注释）
+# re-run trigger: 验证更新 token 后 Tushare 连通

@@ -6,6 +6,11 @@ name: smoke-test
 
 on:
   workflow_dispatch: {}
+  # 也在 smoke 相关文件变更时自动跑一次（仅限这些路径，不影响其它 push）。
+  push:
+    paths:
+      - '.github/workflows/smoke-test.yml'
+      - 'scripts/smoke_check.py'
 
 jobs:
   smoke:
