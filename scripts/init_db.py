@@ -26,7 +26,7 @@ def main() -> None:
         print("[init-db] FAIL 解析不到目标库名（INVEST_DB_URL/MYSQL_DATABASE）。")
         sys.exit(1)
 
-    server_url = url.set(database=None)  # 连到服务器，不指定库
+    server_url = url._replace(database=None)  # 连到服务器，不指定库（set(None) 是 no-op，须用 _replace）
     try:
         eng = create_engine(server_url, future=True)
         with eng.connect() as c:
