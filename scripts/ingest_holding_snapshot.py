@@ -62,6 +62,8 @@ def main() -> None:
     cols = ["snapshot_date", "code", "name", "asset_type", "shares", "available",
             "cost_price", "last_price", "market_value", "pnl", "pnl_pct"]
     df = df[[c for c in cols if c in df.columns]]
+    # 当天先删后插：让单日快照成为权威（修代码/删持仓都能干净覆盖）
+    repo.execute_sql("DELETE FROM holding_snapshot WHERE snapshot_date=:d", {"d": snap_date})
     n = repo.upsert("holding_snapshot", df, ["snapshot_date", "code"])
 
     mv = float(df["market_value"].sum())
