@@ -34,7 +34,7 @@ def main() -> None:
     create_schema(engine)
     repo = BaseRepository(engine)
 
-    raw = pd.read_csv(args.csv, dtype={"code": str, "snapshot_date": str})
+    raw = pd.read_csv(args.csv, dtype={"code": str, "snapshot_date": str, "entry_date": str})
     # 分离现金行（asset_type=cash），其余为持仓
     is_cash = raw.get("asset_type", "").astype(str).str.lower() == "cash"
     cash_rows = raw[is_cash]
@@ -65,6 +65,20 @@ def main() -> None:
     # 当天先删后插：让单日快照成为权威（修代码/删持仓都能干净覆盖）
     repo.execute_sql("DELETE FROM holding_snapshot WHERE snapshot_date=:d", {"d": snap_date})
     n = repo.upsert("holding_snapshot", df, ["snapshot_date", "code"])
+
+    # 同步刷新 current_holding（实盘持仓表，供 build_action_plan/盯盘）：
+    # 从原始行取 stock（含 entry_date，未被上面的列裁剪影响）；全量替换=当前持仓。
+    stocks = raw[raw["asset_type"].astype(str).str.lower() == "stock"].copy()
+    if not stocks.empty:
+        stocks["shares"] = pd.to_numeric(stocks["shares"], errors="coerce")
+        stocks["cost_price"] = pd.to_numeric(stocks["cost_price"], errors="coerce")
+        if "entry_date" not in stocks.columns:
+            stocks["entry_date"] = snap_date
+        stocks["entry_date"] = stocks["entry_date"].where(stocks["entry_date"].notna(), snap_date)
+        ch = stocks[["code", "shares", "cost_price", "entry_date"]].copy()
+        repo.execute_sql("DELETE FROM current_holding")
+        m = repo.upsert("current_holding", ch, ["code"])
+        print(f"current_holding 刷新 {m} 只（stock）")
 
     mv = float(df["market_value"].sum())
     acct = pd.DataFrame([{
