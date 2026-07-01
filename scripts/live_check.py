@@ -179,9 +179,36 @@ def _load_etf_holdings() -> list[dict]:
     out = []
     for _, r in etf.iterrows():
         cost = pd.to_numeric(r.get("cost_price"), errors="coerce")
+        sh = pd.to_numeric(r.get("shares"), errors="coerce")
         out.append({"code": r["code"], "name": r.get("name") or r["code"],
-                    "cost": float(cost) if cost == cost else 0.0})
+                    "cost": float(cost) if cost == cost else 0.0,
+                    "shares": float(sh) if sh == sh else 0.0})
     return out
+
+
+def _account_cash() -> float:
+    """从最新持仓快照读可用现金（asset_type=cash 行的 market_value），用于买入类挂单定量。"""
+    files = sorted(glob.glob(os.path.join(_ROOT, "config", "holding_snapshot_*.csv")))
+    if not files:
+        return 0.0
+    df = pd.read_csv(files[-1], dtype=str)
+    if "asset_type" not in df.columns:
+        return 0.0
+    cash_rows = df[df["asset_type"].astype(str).str.lower() == "cash"]
+    if cash_rows.empty:
+        return 0.0
+    return float(pd.to_numeric(cash_rows["market_value"], errors="coerce").sum() or 0.0)
+
+
+def _buy_ticket(level: float, cash: float) -> str:
+    """买入挂单：给挂单价 + 按可用现金能买的整手股数（现金不足则提示先腾资金）。"""
+    if not level or level <= 0:
+        return "买点未知"
+    lots = int(cash // (level * 100))       # A 股 100 股/手
+    n = lots * 100
+    if n <= 0:
+        return f"挂买 限价{level:.2f}; 现金{cash:.0f}不足(需先卖出腾资金)"
+    return f"挂买 限价{level:.2f} 约{n}股(≈{n * level:.0f}元)"
 
 
 def _fetch_rt(ctx: dict) -> dict:
@@ -232,7 +259,7 @@ def _build_context(args: argparse.Namespace) -> dict:
             "watch": watch, "levels": levels, "g_of": g_of,
             "trailing_only": trailing_only, "codes": held + watch,
             "etf_holds": etf_holds, "etf_levels": etf_levels,
-            "etf_codes": [e["code"] for e in etf_holds]}
+            "etf_codes": [e["code"] for e in etf_holds], "cash": _account_cash()}
 
 
 def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, list, list]:
@@ -242,11 +269,12 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
     dedup_key 含状态标签——同一票同一状态只算一次，状态切换才算新预警。
     """
     holds = ctx["holds"]; levels = ctx["levels"]
-    trailing_only = ctx["trailing_only"]; g_of = ctx["g_of"]
+    trailing_only = ctx["trailing_only"]; g_of = ctx["g_of"]; cash = ctx.get("cash", 0.0)
     hold_rows, watch_rows, etf_rows, alerts = [], [], [], []
     for _, h in holds.iterrows():
         c = h["code"]; q = rt.get(c, {}); lv = levels.get(c, {})
         px = q.get("price"); pre = q.get("pre_close"); cost = float(h["cost_price"] or 0)
+        sh = float(h.get("shares") or 0)
         if not px:
             continue
         chg = (px / pre - 1) if pre else 0
@@ -263,8 +291,10 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
             st, hit = ("持有(MA20移动止盈)" if ex else "持有"), False
         hold_rows.append((q.get("name", c), px, chg, cost, pnl, stop, ma20, st))
         if hit:
+            # 挂单信号：清仓类给「卖 全部股数 市价/限价≈现价」；逼近只提示不给单
+            ticket = "" if "逼近" in st else f" → 卖 {int(sh)}股 市价/限价≈{px:.2f}(清)"
             alerts.append((f"H:{c}:{st}",
-                           f"🔴 持仓 {q.get('name', c)} {px:.2f}({chg:+.1%}) — {st}"))
+                           f"🔴 持仓 {q.get('name', c)} {px:.2f}({chg:+.1%}) — {st}{ticket}"))
     for c in ctx["watch"]:
         q = rt.get(c, {}); lv = levels.get(c, {}); px = q.get("price")
         if not px or not lv:
@@ -283,8 +313,11 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
             st, hit = "上方运行，等回踩MA20", False
         watch_rows.append((q.get("name", c), g_of.get(c, ""), px, ma20, hi20, st))
         if hit:
+            # 挂单信号：回踩位挂 MA20、突破位挂 20日高，股数按可用现金定量
+            lvl = ma20 if "回踩" in st else hi20
+            ticket = " → " + _buy_ticket(lvl, cash)
             alerts.append((f"W:{c}:{st}",
-                           f"🟢 观察 {q.get('name', c)}({g_of.get(c, '')}) {px:.2f} — {st}"))
+                           f"🟢 观察 {q.get('name', c)}({g_of.get(c, '')}) {px:.2f} — {st}{ticket}"))
     # ETF 持仓风控：无移动止盈白名单概念，一律按 硬止损 + 破MA20 管
     for e in ctx.get("etf_holds", []):
         c = e["code"]; q = rt.get(c, {}); lv = ctx["etf_levels"].get(c, {})
@@ -304,8 +337,9 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
             st, hit = "持有", False
         etf_rows.append((e["name"], px, chg, cost, pnl, stop, ma20, st))
         if hit:
+            ticket = "" if "逼近" in st else f" → 卖 {int(e['shares'])}份 市价/限价≈{px:.3f}(减/清)"
             alerts.append((f"E:{c}:{st}",
-                           f"🟠 ETF持仓 {e['name']} {px:.3f}({chg:+.1%}) — {st}"))
+                           f"🟠 ETF持仓 {e['name']} {px:.3f}({chg:+.1%}) — {st}{ticket}"))
     return hold_rows, watch_rows, etf_rows, alerts
 
 
