@@ -1,0 +1,56 @@
+name: live-watch
+
+# 常驻盘中盯盘：单个 job 在交易时段内每 INTERVAL 秒轮询一次 rt_k 实时价，
+# 对照库里均线/成本/投顾观察池，只在「新」触发止损/破位/买点时把预警追加到
+# 跟踪 issue「📟 盘中盯盘预警」（→ GitHub 邮件提醒），无事静默。
+# 均线基准与持仓/观察池全天只取一次并复用；午休/盘前自动暂停，收盘自动退出。
+#
+# 触发：手动(workflow_dispatch，可传 interval) 或 改 ops/live-watch.trigger 后 push。
+# cancel-in-progress：新触发会顶掉旧的常驻 run（改参数/重启用）。
+# Secrets 来源与 live-check 一致（INVEST_DB_URL 优先，否则 DB_*；Tushare rt_k 走代理）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      interval:
+        description: "轮询间隔秒数"
+        default: "60"
+  push:
+    paths:
+      - 'ops/live-watch.trigger'
+
+concurrency:
+  group: live-watch
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    # 覆盖整个交易时段（09:30-15:00 约 5.5h）；python 到 15:00 会自动退出，不会空转到超时。
+    timeout-minutes: 360
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      INTERVAL: ${{ inputs.interval || '60' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 常驻盯盘（每 INTERVAL 秒，新触发推送到跟踪 issue）
+        run: |
+          python scripts/live_check.py --watch --interval "$INTERVAL" --notify \
+            --hard-stop 0.08 --pullback-pct 0.03
