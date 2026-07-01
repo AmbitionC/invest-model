@@ -213,8 +213,53 @@ def review_holdings(repo: BaseRepository) -> list[str]:
     return lines
 
 
+# ── 4) 信号时效与纪律 ────────────────────────────────────────────
+def review_discipline(repo: BaseRepository, asof: str) -> list[str]:
+    lines = ["", "## 四、信号时效与纪律（买点/风控 事后验证）"]
+    if not repo.table_exists("action_plan"):
+        return lines + ["（无 action_plan 历史，随每日计划累积后生效）"]
+    ap = repo.read_sql("SELECT plan_date, code, action, ref_price FROM action_plan")
+    if ap.empty:
+        return lines + ["（action_plan 暂无记录）"]
+    cn = {"buy": "买入", "add": "加仓", "sell": "清仓", "trim": "减仓", "hold": "持有", "watch": "观察"}
+    last = ap["plan_date"].max()
+    comp = ap[ap["plan_date"] == last]["action"].value_counts().to_dict()
+    lines.append(f"- 最新计划（{last}）信号构成：" +
+                 "，".join(f"{cn.get(k, k)}{v}" for k, v in comp.items()))
+    # 买点时效：历史 buy/add 信号自触发日至今的实际收益（验证买点靠不靠谱）
+    buys = ap[(ap["action"].isin(["buy", "add"])) & (ap["plan_date"] < asof)].copy()
+    if not buys.empty:
+        codes = sorted(set(buys["code"]))
+        cur_px = _closes_on(repo, [asof], codes)
+        cur_map = dict(zip(cur_px["code"], cur_px["close"])) if not cur_px.empty else {}
+        rets = []
+        for _, r in buys.iterrows():
+            entry = _f(r["ref_price"])
+            if entry and entry > 0 and r["code"] in cur_map:
+                rets.append(cur_map[r["code"]] / entry - 1.0)
+        if rets:
+            rr = np.array(rets)
+            lines.append(f"- 历史买点信号 {len(rr)} 次：自触发至今平均 {rr.mean():+.1%}，胜率 {(rr > 0).mean():.0%}")
+            lines.append("- 📌 若买点触发后胜率长期偏低，需收紧买点条件（放量/趋势确认再进）。")
+    else:
+        lines.append("- 买点时效：历史买点信号累积中（当前无触发或前瞻样本不足）。")
+    exits = ap[(ap["plan_date"] == last) & (ap["action"].isin(["sell", "trim"]))]
+    if not exits.empty:
+        lines.append(f"- 本次风控触发 {len(exits)} 笔（清仓/减仓）——执行到位是纪律关键，"
+                     "复盘核对：是否按计划执行、有无该止损未止/该减未减。")
+    return lines
+
+
+def _f(x):
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if np.isfinite(v) else None
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser(description="复盘引擎：投顾/模型/持仓 与真实收益对账")
+    ap = argparse.ArgumentParser(description="复盘引擎：投顾/模型/持仓/纪律 与真实收益对账")
     ap.add_argument("--db", default=None)
     ap.add_argument("--horizon", type=int, default=10, help="投顾前瞻窗口（预留）")
     ap.add_argument("--out", default=None)
@@ -229,7 +274,8 @@ def main() -> None:
              "> 闭环校准：投顾说得准不准、模型分位有没有区分力、持仓靠什么赚钱。"]
     for fn in (lambda: review_advisor(repo, asof, args.horizon),
                lambda: review_model(repo),
-               lambda: review_holdings(repo)):
+               lambda: review_holdings(repo),
+               lambda: review_discipline(repo, asof)):
         try:
             lines += fn()
         except Exception as e:  # noqa: BLE001

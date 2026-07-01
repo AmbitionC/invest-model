@@ -63,4 +63,6 @@ jobs:
           fi
 
       - name: Run pipeline (${{ steps.mode.outputs.mode }})
-        run: python scripts/run_pipeline.py --mode "${{ steps.mode.outputs.mode }}" --start 20190101
+        # start 收敛到近18月：全市场因子×多年在云端+RDS公网下会超时；模型定位是给投顾当参谋，
+        # 不需超长回测，近端窗口即够 IC/预测。日频 update 幂等只补最新缺口，不受影响。
+        run: python scripts/run_pipeline.py --mode "${{ steps.mode.outputs.mode }}" --start 20250101

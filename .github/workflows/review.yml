@@ -1,10 +1,13 @@
 name: review
 
-# 复盘引擎：投顾研判/模型因子/持仓 与事后真实收益对账，闭环校准。
-# 盘后/周末用。仅读 DB。输出 Markdown 打到日志。
-# 触发：改 ops/review.trigger 后 push（仅 master）。
+# 复盘引擎：投顾研判/模型因子/持仓/信号纪律 与事后真实收益对账，闭环校准。
+# 每周日循环的一环：周六模型重建后跑周度复盘，追加到「🔍 复盘报告」issue。
+# 仅读 DB。触发：周六定时 / 手动 / 改 ops/review.trigger 后 push（仅 master）。
 
 on:
+  schedule:
+    # 周六 11:30 UTC(=19:30 北京)——data-update 周六 10:00 重建模型之后
+    - cron: "30 11 * * 6"
   workflow_dispatch: {}
   push:
     branches: [master]
@@ -14,6 +17,10 @@ on:
 concurrency:
   group: review
   cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   review:
@@ -34,8 +41,34 @@ jobs:
           cache: pip
       - name: Install package
         run: pip install -e .
-      - name: 复盘（投顾/模型/持仓 对账，打印到日志）
+      - name: 复盘（投顾/模型/持仓/纪律 对账）
         run: |
           python scripts/review.py --out results/review.md
           echo "================ REVIEW MARKDOWN ================"
           cat results/review.md
+      - name: Post review to tracking issue
+        if: ${{ always() && hashFiles('results/review.md') != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const title = '🔍 复盘报告';
+            const body = fs.readFileSync('results/review.md', 'utf8');
+            const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+            const { owner, repo } = context.repo;
+            const found = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue is:open in:title "${title}"`,
+            });
+            let issue = found.data.items.find(i => i.title === title);
+            if (!issue) {
+              const created = await github.rest.issues.create({
+                owner, repo, title,
+                body: '本 issue 由 review 工作流定期追加复盘报告（投顾/模型/持仓/纪律 与真实收益对账）。',
+              });
+              issue = created.data;
+            }
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: issue.number,
+              body: `## ${today} 复盘\n\n${body}`,
+            });
+            core.info(`已在 issue #${issue.number} 追加 ${today} 复盘。`);
