@@ -40,3 +40,5 @@ jobs:
             --cash "$CASH" --out results/action_plan.md
           echo "================ ACTION PLAN MARKDOWN ================"
           cat results/action_plan.md
+          echo "================ 持仓段(便于核对，打到日志尾) ================"
+          sed -n '/## 二/,/## 三/p' results/action_plan.md

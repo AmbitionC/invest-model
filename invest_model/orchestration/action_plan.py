@@ -191,6 +191,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         for _, rr in pxdf.iterrows():
             last_close[rr["code"]] = float(pd.to_numeric(rr["close"], errors="coerce"))
     warm = (pd.to_datetime(dt) - pd.Timedelta(days=150)).strftime("%Y%m%d")
+    reset_floor = (pd.to_datetime(dt) - pd.Timedelta(days=35)).strftime("%Y%m%d")  # 档位回放窗口下限(≈1个调仓周期)
     rows: list[dict] = []
     for c in all_codes:
         cw = cur_w.get(c, 0.0)
@@ -205,13 +206,12 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             hist = _close_hist(loop, c, warm, dt)             # 市场窗口：算真实 MA（与建仓日无关）
             hold_hist = hist[hist.index >= real_entry] if real_entry else hist.iloc[0:0]  # 自建仓日(供时间止损)
             if not hist.empty and rc.enabled:
-                # 移动止盈档位只从真实建仓日回放；建仓日未知则不回放(tier=0)，
-                # 否则会用建仓前的历史把档位误累积到"破MA20清仓"（bug：持有大涨股被误清）
-                if real_entry and bool((hist.index >= real_entry).any()):
-                    prev = replay_tier(hist[(hist.index >= real_entry) & (hist.index < dt)],
-                                       full=rc.trail_full)
-                else:
-                    prev = 0
+                # 移动止盈档位回放起点：真实建仓日 / 最近调仓日 / dt-35天 取最晚，
+                # 限定在"当前调仓周期"内单调 → 与回测的每调仓日重置对齐；
+                # 避免长持 winner 被几个月前的一次破位永久锁死"破MA20清仓"。
+                reset_from = max(x for x in (real_entry, pred_date, reset_floor) if x)
+                mask = (hist.index >= reset_from) & (hist.index < dt)
+                prev = replay_tier(hist[mask], full=rc.trail_full) if bool(mask.any()) else 0
                 dec = evaluate_holding(hist, cost_map[c], rc,
                                        in_exit_codes=(c in exit_codes), prev_tier=prev)
                 stop_price = dec.stop_price
