@@ -1,0 +1,40 @@
+name: live-check
+
+# 盘中盯盘（随叫随到）：rt_k 实时价 + 库里均线/成本/投顾观察池，
+# 输出「持仓风控预警 + 观察池买点位」到日志。不依赖模型，只用 stock_daily/advisor_reco/持仓。
+# 触发：改 ops/live-check.trigger 后 push（集成 token 不能 workflow_dispatch，故走 push 路径）。
+# 实时源走 Tushare rt_k（minitick 代理）；DB 走 Secrets。
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'ops/live-check.trigger'
+
+concurrency:
+  group: live-check
+  cancel-in-progress: true
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 盯盘（持仓风控 + 观察池买点，打印到日志）
+        run: |
+          python scripts/live_check.py --hard-stop 0.08 --pullback-pct 0.03
