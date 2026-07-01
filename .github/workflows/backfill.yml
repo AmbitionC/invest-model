@@ -20,7 +20,7 @@ on:
 
 concurrency:
   group: backfill
-  cancel-in-progress: false
+  cancel-in-progress: true   # 新触发自动抢占取消旧的慢 run
 
 jobs:
   backfill:
@@ -34,7 +34,7 @@ jobs:
       MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
       TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
       TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
-      START: ${{ inputs.start || '20190101' }}
+      START: ${{ inputs.start || '20230101' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -304,6 +304,33 @@ action_plan = Table(
     _created_at(),
 )
 
+# 每日持仓快照（时间序列，供复盘/净值曲线；逐持仓一行）。
+holding_snapshot = Table(
+    "holding_snapshot", metadata,
+    Column("snapshot_date", String(8), primary_key=True),   # YYYYMMDD
+    Column("code", String(16), primary_key=True),           # 含 ETF/转债，不校验 stock_info
+    Column("name", String(32)),
+    Column("asset_type", String(8)),                        # stock | etf | bond
+    Column("shares", Numeric(20, 2)),
+    Column("available", Numeric(20, 2)),
+    Column("cost_price", Numeric(16, 4)),
+    Column("last_price", Numeric(16, 4)),
+    Column("market_value", Numeric(20, 2)),
+    Column("pnl", Numeric(20, 2)),
+    Column("pnl_pct", Numeric(12, 4)),
+    _created_at(),
+)
+
+# 每日账户快照（现金 + 总市值 + 总资产）。
+account_snapshot = Table(
+    "account_snapshot", metadata,
+    Column("snapshot_date", String(8), primary_key=True),
+    Column("cash", Numeric(20, 2)),
+    Column("market_value", Numeric(20, 2)),
+    Column("total_asset", Numeric(20, 2)),
+    _created_at(),
+)
+
 # 关键列补丁：老库已存在的表按需补列（create_all 不会改已存在表）。
 _COLUMN_PATCHES: dict[str, dict[str, str]] = {
     "portfolio_target": {"grade": "VARCHAR(2)", "source": "VARCHAR(16)"},

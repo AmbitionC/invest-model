@@ -101,10 +101,18 @@ class TushareClient(BaseSource):
 
         self.pro = ts.pro_api(token)
 
+        # HTTP 超时：防止单次请求挂住导致整条流水线无限等待（config sources.tushare.timeout，默认30s）。
+        try:
+            ts_cfg = (load_config().get("sources", {}) or {}).get("tushare", {}) or {}
+            timeout = int(ts_cfg.get("timeout", 30))
+            self.pro._DataApi__timeout = timeout
+        except Exception:  # noqa: BLE001 — 不同 tushare 版本属性名差异时不阻断初始化
+            timeout = 30
+
         http_url = _resolve_tushare_http_url()
         if http_url:
             self.pro._DataApi__http_url = http_url
-            logger.info(f"Tushare 使用自定义接口基地址: {http_url}")
+            logger.info(f"Tushare 使用自定义接口基地址: {http_url}（超时 {timeout}s）")
 
         try:
             df = self.pro.trade_cal(exchange="SSE", start_date="20250101", end_date="20250101")

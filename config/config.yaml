@@ -7,6 +7,7 @@ sources:
     retry_times: 3
     retry_delay: 2
     rate_limit_per_min: 480
+    timeout: 30            # 单次 HTTP 超时秒数（防请求挂死）
     # 数据服务基地址：使用 minitick.top 镜像（含 VIP 接口，如 fina_indicator_vip）。
     # 也可在 .env 用 TUSHARE_HTTP_URL 覆盖；留空走官方 HTTPS。
     http_url: "https://minitick.top/"

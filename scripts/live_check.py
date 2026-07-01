@@ -132,7 +132,8 @@ def _etf_watch(dt: str) -> list[tuple]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="盘中实时盯盘")
-    ap.add_argument("--db", default="sqlite:///./data/real.db")
+    ap.add_argument("--db", default=None,
+                    help="DB URL；省略则读环境变量 INVEST_DB_URL/DB_*（生产 MySQL）")
     ap.add_argument("--hard-stop", type=float, default=0.08)
     ap.add_argument("--pullback-pct", type=float, default=0.03)
     ap.add_argument("--alert", action="store_true",
@@ -148,7 +149,7 @@ def main() -> None:
         print(f"⏸ {now:%Y-%m-%d %H:%M} CST 非交易时段，跳过。")
         return
 
-    engine = make_engine(args.db)
+    engine = make_engine(args.db) if args.db else make_engine()
     repo = BaseRepository(engine)
     # 移动止盈白名单：这些票按"破MA20"管，不套用 -8% 硬止损（如业绩爆发的核心仓）
     import os

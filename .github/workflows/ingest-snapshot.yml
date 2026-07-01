@@ -1,0 +1,39 @@
+name: ingest-snapshot
+
+# 每日持仓+现金快照入库：config/holding_snapshot_*.csv 变更(push)即写 MySQL。
+# 现金作为 CSV 内 asset_type=cash 的一行自包含;仅写 DB,不需 stock_info/Tushare。
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'config/holding_snapshot_*.csv'
+
+concurrency:
+  group: ingest-snapshot
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 录入最新持仓快照（现金读自 CSV 内 cash 行）
+        run: |
+          shopt -s nullglob
+          latest=$(ls -1 config/holding_snapshot_*.csv | sort | tail -1)
+          echo "ingest $latest"
+          python scripts/ingest_holding_snapshot.py --csv "$latest"

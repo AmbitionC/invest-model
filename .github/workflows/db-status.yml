@@ -1,0 +1,34 @@
+name: db-status
+
+# 数据库盘点(只读):各表行数 + 行情写到哪一天。打到日志。
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'scripts/db_status.py'
+      - 'ops/db-status.trigger'
+
+concurrency:
+  group: db-status
+  cancel-in-progress: false
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: DB status
+        run: python scripts/db_status.py
