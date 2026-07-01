@@ -65,6 +65,30 @@ def main() -> None:
     except Exception:  # noqa: BLE001
         pass
 
+    # 圈定标的（投顾定稿 28 只 + 持仓股）在 stock_daily 的覆盖核对
+    curated = ("002384,300308,300502,002281,688048,002428,600141,300260,002158,"
+               "688409,688596,600552,000725,603773,002371,688361,300666,600703,"
+               "688106,002851,300466,002050,688316,688158,688629,688122,002897,"
+               "300395,000833,002648,300750,600118,600160,688733").split(",")
+    codes = [f"{c}.SZ" if c[0] in "03" else f"{c}.SH" for c in curated]
+    try:
+        ph = ",".join(f":c{i}" for i in range(len(codes)))
+        params = {f"c{i}": c for i, c in enumerate(codes)}
+        df = repo.read_sql(
+            f"SELECT d.code, i.name, MAX(d.trade_date) hi, COUNT(*) n "
+            f"FROM stock_daily d LEFT JOIN stock_info i ON d.code=i.ts_code "
+            f"WHERE d.code IN ({ph}) GROUP BY d.code, i.name", params)
+        have = set(df["code"]) if not df.empty else set()
+        print("-" * 60)
+        print(f"圈定标的核对：{len(have)}/{len(codes)} 有行情")
+        for _, r in df.sort_values("code").iterrows():
+            print(f"  {r['code']:<11}{str(r['name'] or ''):<8} 行数={int(r['n']):>4} 最新={r['hi']}")
+        missing = [c for c in codes if c not in have]
+        if missing:
+            print(f"  ⚠️ 缺行情: {missing}")
+    except Exception as e:  # noqa: BLE001
+        print(f"圈定标的核对 ERROR: {e}")
+
 
 if __name__ == "__main__":
     main()
