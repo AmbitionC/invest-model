@@ -26,7 +26,7 @@ from invest_model.data import make_engine  # noqa: E402
 from invest_model.repositories.advisor_repo import AdvisorRepo  # noqa: E402
 from invest_model.repositories.base import BaseRepository  # noqa: E402
 from invest_model.repositories.holding_repo import HoldingRepo  # noqa: E402
-from invest_model.signals.realtime import get_realtime  # noqa: E402
+from invest_model.signals.realtime import get_realtime, get_realtime_etf  # noqa: E402
 
 
 def _levels(repo: BaseRepository, codes: list[str], dt: str) -> dict[str, dict]:
@@ -244,11 +244,11 @@ def _buy_ticket(level: float, cash: float, equity: float, weight: float) -> str:
 
 
 def _fetch_rt(ctx: dict) -> dict:
-    """取实时价：股票+观察池走一批，ETF 单独一批（隔离 ETF 取数失败，不拖累股票）。"""
+    """取实时价：股票+观察池走 rt_k，ETF 走 rt_etf_k（rt_k 不返回 ETF），隔离取数失败。"""
     rt = get_realtime(ctx["codes"])
     if ctx.get("etf_codes"):
         try:
-            rt.update(get_realtime(ctx["etf_codes"]))
+            rt.update(get_realtime_etf(ctx["etf_codes"]))
         except Exception:  # noqa: BLE001
             pass
     return rt
