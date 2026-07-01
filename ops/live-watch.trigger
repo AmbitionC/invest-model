@@ -1,1 +1,1 @@
-live-watch 0701 去重跨重启持久化:重启不重复推,仅新增/变化才推 2026-07-01T03:35:00Z
+live-watch 0701 ETF自检落issue+日志unbuffered 2026-07-01T05:05:00Z

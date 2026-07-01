@@ -535,9 +535,16 @@ def _watch(args: argparse.Namespace) -> None:
             time.sleep(interval)
             continue
         if first and ctx["etf_codes"]:     # 首轮自检：ETF 实时价是否取到（rt_k 是否支持 ETF）
-            got = sum(1 for c in ctx["etf_codes"] if rt.get(c, {}).get("price"))
-            print(f"  ETF实时自检：{got}/{len(ctx['etf_codes'])} 取到现价"
-                  + ("" if got else "（rt_k 未返回 ETF 价，ETF 盘中风控本轮无效，见收盘 EOD 视图）"))
+            got = [(c, rt.get(c, {}).get("price")) for c in ctx["etf_codes"]]
+            n = sum(1 for _, p in got if p)
+            detail = "，".join(f"{c}={p}" if p else f"{c}=无价" for c, p in got)
+            tail = "" if n else "（rt_k 不返回 ETF 价，ETF 盘中风控无效，需改基金实时源）"
+            line = f"🔎 ETF实时自检：{n}/{len(got)} 取到现价（{detail}）{tail}"
+            print(line)
+            key = f"ETFSELF:{today}"        # 每交易日一次、去重、跨重启不重复（走标记）
+            if args.notify and key not in seen:
+                seen.add(key)
+                _gh_notify(issue, now, line, [key])
         new = [(k, line) for k, line in alerts if k not in seen]
         for k, _ in new:
             seen.add(k)

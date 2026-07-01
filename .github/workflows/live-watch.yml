@@ -46,6 +46,8 @@ jobs:
       TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       INTERVAL: ${{ inputs.interval || '60' }}
+      PYTHONUNBUFFERED: "1"   # 否则 print 被块缓冲，日志要进程退出才可见（被 cancel 则丢失）
+
       # 预警评论里 @提及谁（触发通知邮件）。默认 @仓库 owner；可在
       # Settings → Variables 配 LIVE_WATCH_MENTION 覆盖（如换个账号/多人）。
       LIVE_WATCH_MENTION: ${{ vars.LIVE_WATCH_MENTION || '' }}
