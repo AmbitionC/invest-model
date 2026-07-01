@@ -310,8 +310,15 @@ def _watch(args: argparse.Namespace) -> None:
             print(f"▶ 盯盘启动 | 基准 {ctx['dt']} | 持仓 {len(ctx['holds'])} 只 | "
                   f"观察 {len(ctx['watch'])} 只 | 间隔 {interval}s "
                   f"| 推送 {'开' if args.notify else '关'}")
-        rt = get_realtime(ctx["codes"])
-        _, _, alerts = _scan(ctx, rt, args)
+        # 单轮取数/评估异常（Tushare 超时/限频/重启抢占导致的 ip超限 等）只跳过本轮、
+        # 下轮重试，绝不让全天常驻 job 因一次瞬时错误崩溃。
+        try:
+            rt = get_realtime(ctx["codes"])
+            _, _, alerts = _scan(ctx, rt, args)
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️ {now:%H:%M} CST 本轮取数/评估失败，跳过：{repr(e)[:160]}")
+            time.sleep(interval)
+            continue
         new = [(k, line) for k, line in alerts if k not in seen]
         for k, _ in new:
             seen.add(k)
