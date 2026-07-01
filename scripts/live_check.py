@@ -388,57 +388,100 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
     return hold_rows, watch_rows, etf_rows, alerts
 
 
-def _gh_notify(cache: list, now: datetime, body: str) -> None:
-    """把新触发的预警以评论形式追加到跟踪 issue「📟 盘中盯盘预警」（→ GitHub 邮件提醒）。
+_GH_API = "https://api.github.com"
+_GH_TITLE = "📟 盘中盯盘预警"
 
-    在 GitHub Actions 内运行，用自带 GITHUB_TOKEN + GITHUB_REPOSITORY；缺则静默跳过。
-    issue 号首次解析后缓存在 cache[0]，后续直接复用。
-    """
+
+def _gh_env() -> tuple[str | None, str | None]:
+    return (os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN"),
+            os.getenv("GITHUB_REPOSITORY"))
+
+
+def _gh_req(method: str, url: str, token: str, payload: dict | None = None):
     import json
-    import urllib.parse
     import urllib.request
+    data = json.dumps(payload).encode() if payload is not None else None
+    r = urllib.request.Request(url, data=data, method=method)
+    r.add_header("Authorization", f"Bearer {token}")
+    r.add_header("Accept", "application/vnd.github+json")
+    r.add_header("User-Agent", "invest-live-watch")
+    if data:
+        r.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(r, timeout=30) as resp:
+        return json.loads(resp.read().decode() or "null")
 
-    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
-    repo = os.getenv("GITHUB_REPOSITORY")
+
+def _gh_issue_number(cache: list, token: str, repo: str) -> int:
+    """解析（或创建）跟踪 issue「📟 盘中盯盘预警」的编号，缓存到 cache[0]。"""
+    import urllib.parse
+    if cache[0] is not None:
+        return cache[0]
+    mention = os.getenv("LIVE_WATCH_MENTION") or f"@{repo.split('/')[0]}"
+    q = urllib.parse.quote(f'repo:{repo} is:issue is:open in:title "{_GH_TITLE}"')
+    found = _gh_req("GET", f"{_GH_API}/search/issues?q={q}", token)
+    items = [i for i in (found.get("items") or []) if i.get("title") == _GH_TITLE]
+    if items:
+        cache[0] = items[0]["number"]
+    else:
+        created = _gh_req("POST", f"{_GH_API}/repos/{repo}/issues", token, {
+            "title": _GH_TITLE,
+            "body": f"{mention} 本 issue 由 live-watch 盯盘工作流在触发止损/破位/"
+                    "买点时追加预警评论（每条 @你 触发通知邮件）。",
+        })
+        cache[0] = created["number"]
+    return cache[0]
+
+
+def _gh_notify(cache: list, now: datetime, body: str, keys: list[str]) -> None:
+    """把新触发的预警以评论形式追加到跟踪 issue（→ @你 触发 GitHub 邮件提醒）。
+
+    评论尾部嵌隐藏标记 <!--lwk:key1|key2-->，记录本条推送的去重键，供下次启动
+    重建「已推送集合」（见 _seed_seen），从而重启/重跑不重复推同一信号。
+    在 GitHub Actions 内用自带 GITHUB_TOKEN + GITHUB_REPOSITORY；缺则静默跳过。
+    """
+    token, repo = _gh_env()
     if not token or not repo:
         print("  (未配置 GITHUB_TOKEN/REPOSITORY，跳过推送，仅打日志)")
         return
-    api = "https://api.github.com"
-    title = "📟 盘中盯盘预警"
-    # @提及接收人：机器人评论默认不会触发邮件（除非你 watch 了该 issue），
-    # @提及则无视订阅状态直接发通知邮件。默认 @仓库 owner，可用 LIVE_WATCH_MENTION 覆盖。
     mention = os.getenv("LIVE_WATCH_MENTION") or f"@{repo.split('/')[0]}"
-
-    def _req(method: str, url: str, payload: dict | None = None):
-        data = json.dumps(payload).encode() if payload is not None else None
-        r = urllib.request.Request(url, data=data, method=method)
-        r.add_header("Authorization", f"Bearer {token}")
-        r.add_header("Accept", "application/vnd.github+json")
-        r.add_header("User-Agent", "invest-live-watch")
-        if data:
-            r.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(r, timeout=30) as resp:
-            return json.loads(resp.read().decode() or "null")
-
     try:
-        if cache[0] is None:
-            q = urllib.parse.quote(f'repo:{repo} is:issue is:open in:title "{title}"')
-            found = _req("GET", f"{api}/search/issues?q={q}")
-            items = [i for i in (found.get("items") or []) if i.get("title") == title]
-            if items:
-                cache[0] = items[0]["number"]
-            else:
-                created = _req("POST", f"{api}/repos/{repo}/issues", {
-                    "title": title,
-                    "body": f"{mention} 本 issue 由 live-watch 盯盘工作流在触发止损/"
-                            "破位/买点时追加预警评论（每条 @你 以触发通知邮件）。",
-                })
-                cache[0] = created["number"]
-        _req("POST", f"{api}/repos/{repo}/issues/{cache[0]}/comments",
-             {"body": f"{mention} **{now:%Y-%m-%d %H:%M} CST**\n\n{body}"})
-        print(f"  → 已推送到 issue #{cache[0]}")
+        n = _gh_issue_number(cache, token, repo)
+        marker = "<!--lwk:" + "|".join(keys) + "-->"
+        _gh_req("POST", f"{_GH_API}/repos/{repo}/issues/{n}/comments", token,
+                {"body": f"{mention} **{now:%Y-%m-%d %H:%M} CST**\n\n{body}\n\n{marker}"})
+        print(f"  → 已推送到 issue #{n}")
     except Exception as e:  # noqa: BLE001
         print(f"  ⚠️ 推送失败：{repr(e)[:160]}")
+
+
+def _seed_seen(cache: list) -> set[str]:
+    """启动时从跟踪 issue「今日」评论的隐藏标记重建已推送集合，使去重跨重启/重跑生效。
+
+    重启（改参数/崩溃重跑/cancel-in-progress）不会重复推已报过的信号；跨天自动清零
+    （只认当天日期的评论），保证新交易日重新提醒一次。
+    """
+    import re
+    token, repo = _gh_env()
+    if not token or not repo:
+        return set()
+    try:
+        n = _gh_issue_number(cache, token, repo)
+        since = (datetime.now(timezone.utc) - timedelta(hours=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        comments = _gh_req(
+            "GET", f"{_GH_API}/repos/{repo}/issues/{n}/comments?since={since}&per_page=100", token)
+    except Exception as e:  # noqa: BLE001
+        print(f"  ⚠️ 去重集重建失败（按空集起步）：{repr(e)[:120]}")
+        return set()
+    today = _now_cst().strftime("%Y-%m-%d")
+    seen: set[str] = set()
+    for c in (comments or []):
+        b = c.get("body", "")
+        if today not in b:                      # 只认当天评论，跨天自动重置
+            continue
+        m = re.search(r"<!--lwk:(.*?)-->", b, re.S)
+        if m:
+            seen.update(k for k in m.group(1).split("|") if k)
+    return seen
 
 
 def _watch(args: argparse.Namespace) -> None:
@@ -454,8 +497,11 @@ def _watch(args: argparse.Namespace) -> None:
         print(f"⏹ {today} 非交易日（节假日/休市），盯盘退出。")
         return
     ctx = None
-    seen: set[str] = set()
     issue = [None]
+    # 跨重启去重：从今日 issue 评论恢复「已推送」集合，重启/重跑不重复推同一信号
+    seen: set[str] = _seed_seen(issue) if args.notify else set()
+    if seen:
+        print(f"↺ 已从今日评论恢复 {len(seen)} 条已推送信号（重启不重复推，仅新增/变化才推）")
     while True:
         now = _now_cst()
         hm = now.hour * 60 + now.minute
@@ -499,7 +545,7 @@ def _watch(args: argparse.Namespace) -> None:
             body = "\n".join(line for _, line in new)
             print(f"⏰ {now:%H:%M} CST 新触发 {len(new)} 项：\n{body}")
             if args.notify:
-                _gh_notify(issue, now, body)
+                _gh_notify(issue, now, body, [k for k, _ in new])
         else:
             print(f"✓ {now:%H:%M} CST 无新触发（累计已报 {len(seen)}）")
         time.sleep(interval)
