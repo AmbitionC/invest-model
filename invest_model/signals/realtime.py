@@ -1,7 +1,8 @@
-"""实时行情：通过 Tushare 代理的 rt_k 接口取现价（盘中可用；免迁 MySQL）。
+"""实时行情：通过 Tushare 代理取盘中现价（免迁 MySQL）。
 
 环境网络白名单只放行 Tushare 代理（minitick），新浪/东财/腾讯实时源被 403 拦截，
-故统一走 ``pro.query('rt_k')``。返回 {code: {price, pre_close, open, high, low, vol}}。
+故走 ``pro.query`` 的实时端点：股票用 ``rt_k``、ETF 用 ``rt_etf_k``（rt_k 不返回 ETF）。
+两端点字段一致，返回 {code: {price, pre_close, open, high, low, vol, name}}。
 """
 
 from __future__ import annotations
@@ -9,7 +10,8 @@ from __future__ import annotations
 import pandas as pd
 
 
-def get_realtime(codes: list[str]) -> dict[str, dict]:
+def _query_rt(codes: list[str], endpoint: str) -> dict[str, dict]:
+    """按 endpoint（rt_k / rt_etf_k）批量取实时价，字段统一。取数失败的批次跳过。"""
     from invest_model.sources.tushare_client import TushareClient
 
     codes = list(dict.fromkeys(codes))
@@ -20,7 +22,7 @@ def get_realtime(codes: list[str]) -> dict[str, dict]:
     for i in range(0, len(codes), 50):
         batch = codes[i:i + 50]
         try:
-            df = pro.query("rt_k", ts_code=",".join(batch))
+            df = pro.query(endpoint, ts_code=",".join(batch))
         except Exception:  # noqa: BLE001
             continue
         if df is None or df.empty:
@@ -36,3 +38,13 @@ def get_realtime(codes: list[str]) -> dict[str, dict]:
                 "name": r.get("name"),
             }
     return out
+
+
+def get_realtime(codes: list[str]) -> dict[str, dict]:
+    """股票实时价（rt_k）。"""
+    return _query_rt(codes, "rt_k")
+
+
+def get_realtime_etf(codes: list[str]) -> dict[str, dict]:
+    """ETF 实时价（rt_etf_k）。rt_k 不返回 ETF，故 ETF 必须走此端点。"""
+    return _query_rt(codes, "rt_etf_k")
