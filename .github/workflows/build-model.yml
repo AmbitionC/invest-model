@@ -2,16 +2,20 @@ name: build-model
 
 # 只建模（不拉数）：用库里已有行情/估值，直接跑 universe→因子→预测→回测→导出。
 # 绕开 backfill 里按天补历史估值的慢步骤（盘中镜像更慢，动辄数小时）。
-# 数据前提：stock_daily 已完整、stock_fundamental 从 2023-09 起（故 start 对齐到 20231001）。
-# 触发：改 ops/build-model.trigger 后 push。仅读/写 DB（建模产物表）。
+#
+# 云端+RDS 公网下，全市场因子×多年月度调仓极重（2.7 年跑 >60min 超时）。模型定位是
+# "给投顾标的当参谋"（质量分位+IC 置信度），不需要超长回测，故窗口收敛到近 ~18 个月
+# （start=20250101）即够 IC/近端预测，能稳定跑完。
+# 只在 master 触发，避免与其它分支互相抢占取消。
 
 on:
   workflow_dispatch:
     inputs:
       start:
-        description: "建模起始日 YYYYMMDD（对齐估值可用区间）"
-        default: "20231001"
+        description: "建模起始日 YYYYMMDD"
+        default: "20250101"
   push:
+    branches: [master]
     paths:
       - 'ops/build-model.trigger'
 
@@ -22,14 +26,15 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
       MYSQL_HOST: ${{ secrets.DB_HOST }}
       MYSQL_USER: ${{ secrets.DB_USER }}
       MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
       MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
-      START: ${{ inputs.start || '20231001' }}
+      START: ${{ inputs.start || '20250101' }}
+      PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
