@@ -55,7 +55,24 @@ def _name_map(loop: ClosedLoop, codes: list[str]) -> dict[str, str]:
     params = {f"c{i}": c for i, c in enumerate(codes)}
     df = loop.repo.read_sql(
         f"SELECT ts_code AS code, name FROM stock_info WHERE ts_code IN ({ph})", params)
-    return dict(zip(df["code"], df["name"]))
+    m = {str(c): str(n) for c, n in zip(df["code"], df["name"]) if str(n)}
+    # 补名：ETF/转债等不在 stock_info，用最新持仓快照里的名称兜底
+    miss = [c for c in codes if c not in m]
+    if miss:
+        try:
+            if loop.repo.table_exists("holding_snapshot"):
+                ph2 = ",".join(f":m{i}" for i in range(len(miss)))
+                p2 = {f"m{i}": c for i, c in enumerate(miss)}
+                sn = loop.repo.read_sql(
+                    "SELECT code, name FROM holding_snapshot WHERE snapshot_date="
+                    "(SELECT MAX(snapshot_date) FROM holding_snapshot) "
+                    f"AND code IN ({ph2})", p2)
+                for c, n in zip(sn["code"], sn["name"]):
+                    if str(n):
+                        m[str(c)] = str(n)
+        except Exception:  # noqa: BLE001
+            pass
+    return m
 
 
 def _close_hist(loop: ClosedLoop, code: str, start: str, dt: str) -> pd.Series:
