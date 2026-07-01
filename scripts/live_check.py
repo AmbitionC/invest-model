@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import sys
 import time
@@ -55,6 +56,51 @@ def _levels(repo: BaseRepository, codes: list[str], dt: str) -> dict[str, dict]:
     return out
 
 
+def _fund_levels(pro, code: str, dt: str) -> dict | None:
+    """ETF/基金前复权均线基准：{ma20, ma60, ma60_up, hi20, last, adj_ok}。
+
+    用 fund_daily + fund_adj 做前复权（把份额拆分/折算的价格台阶抹平，否则均线会被污染），
+    复权后最新值 == 原始最新收盘，故可直接与 rt_k 原始现价比较。取数失败/样本不足返回 None。
+    """
+    start = (pd.to_datetime(dt) - pd.Timedelta(days=130)).strftime("%Y%m%d")
+
+    def _q(ep, **kw):
+        for _ in range(6):
+            try:
+                d = pro.query(ep, **kw)
+            except Exception:  # noqa: BLE001
+                d = None
+            if d is not None and len(d):
+                return d
+            time.sleep(6)
+        return None
+
+    df = _q("fund_daily", ts_code=code, start_date=start, end_date=dt)
+    if df is None or df.empty:
+        return None
+    df = df.sort_values("trade_date")
+    cl_raw = pd.to_numeric(df["close"], errors="coerce")
+    adj = _q("fund_adj", ts_code=code, start_date=start, end_date=dt)
+    if adj is None or not len(adj):
+        cl = cl_raw.dropna()          # 复权因子取不到：退回原始价（趋势存疑）
+        adj_ok = False
+    else:
+        adj = adj.sort_values("trade_date")
+        fac = dict(zip(adj["trade_date"], pd.to_numeric(adj["adj_factor"], errors="coerce")))
+        last_fac = pd.to_numeric(adj["adj_factor"], errors="coerce").iloc[-1]
+        f = df["trade_date"].map(fac).astype(float).ffill().fillna(1.0)
+        cl = (cl_raw * f / last_fac).dropna()
+        adj_ok = True
+    if len(cl) < 20:
+        return None
+    ma60 = float(cl.tail(60).mean()) if len(cl) >= 60 else float("nan")
+    ma60_prev = float(cl.tail(65).head(60).mean()) if len(cl) >= 65 else ma60
+    return {"ma20": float(cl.tail(20).mean()), "ma60": ma60,
+            "ma60_up": ma60 >= ma60_prev,
+            "hi20": float(cl.iloc[-21:-1].max()) if len(cl) >= 21 else float("nan"),
+            "last": float(cl.iloc[-1]), "adj_ok": adj_ok}
+
+
 def _etf_watch(dt: str) -> list[tuple]:
     """ETF 观察清单（无 rt_k 实时源）：用 fund_daily EOD 算趋势/回踩位/突破位。
 
@@ -80,46 +126,19 @@ def _etf_watch(dt: str) -> list[tuple]:
         return []
     from invest_model.sources.tushare_client import TushareClient
     pro = TushareClient().pro
-    start = (pd.to_datetime(dt) - pd.Timedelta(days=130)).strftime("%Y%m%d")
     rows = []
-    def _q(ep, **kw):
-        for _ in range(6):
-            try:
-                d = pro.query(ep, **kw)
-            except Exception:  # noqa: BLE001
-                d = None
-            if d is not None and len(d):
-                return d
-            time.sleep(6)
-        return None
-
     for code, note in items:
-        df = _q("fund_daily", ts_code=code, start_date=start, end_date=dt)
-        if df is None or df.empty:
+        lv = _fund_levels(pro, code, dt)
+        if lv is None:
             rows.append((code, note, float("nan"), float("nan"), "?", float("nan"), "取数失败"))
             continue
-        df = df.sort_values("trade_date")
-        # 前复权：用 fund_adj 把份额拆分/折算抹平（否则拆分日价格台阶会污染均线）。
-        # 取不到复权因子时不静默用原始价（会因拆分台阶误判趋势），直接标注存疑。
-        adj = _q("fund_adj", ts_code=code, start_date=start, end_date=dt)
-        cl_raw = pd.to_numeric(df["close"], errors="coerce")
-        if adj is None or not len(adj):
-            last = float(cl_raw.dropna().iloc[-1])
-            rows.append((code, note, last, float("nan"), "?", float("nan"), "复权因子取数失败(趋势存疑,勿据此操作)"))
+        last, ma20, hi20 = lv["last"], lv["ma20"], lv["hi20"]
+        if not lv["adj_ok"]:
+            rows.append((code, note, last, ma20, "?", hi20, "复权因子取数失败(趋势存疑,勿据此操作)"))
             continue
-        adj = adj.sort_values("trade_date")
-        fac = dict(zip(adj["trade_date"], pd.to_numeric(adj["adj_factor"], errors="coerce")))
-        last_fac = pd.to_numeric(adj["adj_factor"], errors="coerce").iloc[-1]
-        f = df["trade_date"].map(fac).astype(float).ffill().fillna(1.0)
-        cl = (cl_raw * f / last_fac).dropna()
-        last = float(cl.iloc[-1])
-        ma20 = float(cl.tail(20).mean()) if len(cl) >= 20 else float("nan")
-        ma60 = float(cl.tail(60).mean()) if len(cl) >= 60 else float("nan")
-        ma60_prev = float(cl.tail(65).head(60).mean()) if len(cl) >= 65 else ma60
-        ma60_up = ma60 >= ma60_prev
-        hi20 = float(cl.iloc[-21:-1].max()) if len(cl) >= 21 else float("nan")
+        ma60_up = lv["ma60_up"]
         dev = (last / ma20 - 1) if ma20 == ma20 else 0.0
-        if not (last >= ma60 and ma60_up):
+        if not (last >= lv["ma60"] and ma60_up):
             st = "左侧（MA60未走平/上行，不买）"
         elif abs(dev) <= 0.03:
             st = "⚠️ 到回踩位，企稳放量则买点"
@@ -142,6 +161,38 @@ def _trading(now: datetime) -> bool:
     """是否 A 股交易时段（工作日 09:30-11:30 / 13:00-15:00）。"""
     hm = now.hour * 60 + now.minute
     return (now.weekday() < 5) and (570 <= hm <= 690 or 780 <= hm <= 900)
+
+
+def _load_etf_holdings() -> list[dict]:
+    """从最新 config/holding_snapshot_*.csv 读 ETF 持仓（code/name/cost）。
+
+    current_holding 表按设计只存 stock（rt_k 也只支持股票），故 ETF 持仓直接从快照
+    CSV 读——该 CSV 正是入库 current_holding 的同一来源，盘中在 Actions checkout 里可用。
+    """
+    files = sorted(glob.glob(os.path.join(_ROOT, "config", "holding_snapshot_*.csv")))
+    if not files:
+        return []
+    df = pd.read_csv(files[-1], dtype=str)
+    if "asset_type" not in df.columns:
+        return []
+    etf = df[df["asset_type"].astype(str).str.lower() == "etf"]
+    out = []
+    for _, r in etf.iterrows():
+        cost = pd.to_numeric(r.get("cost_price"), errors="coerce")
+        out.append({"code": r["code"], "name": r.get("name") or r["code"],
+                    "cost": float(cost) if cost == cost else 0.0})
+    return out
+
+
+def _fetch_rt(ctx: dict) -> dict:
+    """取实时价：股票+观察池走一批，ETF 单独一批（隔离 ETF 取数失败，不拖累股票）。"""
+    rt = get_realtime(ctx["codes"])
+    if ctx.get("etf_codes"):
+        try:
+            rt.update(get_realtime(ctx["etf_codes"]))
+        except Exception:  # noqa: BLE001
+            pass
+    return rt
 
 
 def _build_context(args: argparse.Namespace) -> dict:
@@ -167,20 +218,32 @@ def _build_context(args: argparse.Namespace) -> dict:
     watch = [c for c in watch if c not in held and c not in exit_codes]
     levels = _levels(repo, held + watch, dt)
     g_of = dict(zip(reco["code"], reco["grade"])) if not reco.empty else {}
+    # ETF 持仓：成本读快照 CSV，均线基准用 fund_daily 前复权（可转债不盯，用户上市即卖）
+    etf_holds = _load_etf_holdings()
+    etf_levels: dict[str, dict] = {}
+    if etf_holds:
+        from invest_model.sources.tushare_client import TushareClient
+        pro = TushareClient().pro
+        for e in etf_holds:
+            lv = _fund_levels(pro, e["code"], dt)
+            if lv is not None:
+                etf_levels[e["code"]] = lv
     return {"engine": engine, "repo": repo, "dt": dt, "holds": holds,
             "watch": watch, "levels": levels, "g_of": g_of,
-            "trailing_only": trailing_only, "codes": held + watch}
+            "trailing_only": trailing_only, "codes": held + watch,
+            "etf_holds": etf_holds, "etf_levels": etf_levels,
+            "etf_codes": [e["code"] for e in etf_holds]}
 
 
-def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, list]:
-    """用实时价 rt 评估持仓风控 + 观察池买点。
+def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, list, list]:
+    """用实时价 rt 评估持仓风控（股票+ETF） + 观察池买点。
 
-    返回 (持仓行, 观察行, 预警) 三元组；预警为 [(dedup_key, 展示行)]，
+    返回 (股票持仓行, 观察行, ETF持仓行, 预警) 四元组；预警为 [(dedup_key, 展示行)]，
     dedup_key 含状态标签——同一票同一状态只算一次，状态切换才算新预警。
     """
     holds = ctx["holds"]; levels = ctx["levels"]
     trailing_only = ctx["trailing_only"]; g_of = ctx["g_of"]
-    hold_rows, watch_rows, alerts = [], [], []
+    hold_rows, watch_rows, etf_rows, alerts = [], [], [], []
     for _, h in holds.iterrows():
         c = h["code"]; q = rt.get(c, {}); lv = levels.get(c, {})
         px = q.get("price"); pre = q.get("pre_close"); cost = float(h["cost_price"] or 0)
@@ -222,7 +285,28 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         if hit:
             alerts.append((f"W:{c}:{st}",
                            f"🟢 观察 {q.get('name', c)}({g_of.get(c, '')}) {px:.2f} — {st}"))
-    return hold_rows, watch_rows, alerts
+    # ETF 持仓风控：无移动止盈白名单概念，一律按 硬止损 + 破MA20 管
+    for e in ctx.get("etf_holds", []):
+        c = e["code"]; q = rt.get(c, {}); lv = ctx["etf_levels"].get(c, {})
+        px = q.get("price"); pre = q.get("pre_close"); cost = e["cost"]
+        if not px:                          # rt_k 取不到 ETF 现价 → 本轮跳过，不误报
+            continue
+        chg = (px / pre - 1) if pre else 0
+        pnl = (px / cost - 1) if cost else 0
+        stop = cost * (1 - args.hard_stop); ma20 = lv.get("ma20")
+        if pnl <= -args.hard_stop:
+            st, hit = "⚠️ 已触发硬止损，考虑清仓", True
+        elif ma20 and px < ma20 * 0.995:
+            st, hit = "破MA20，盘后确认减/清", True
+        elif pnl <= -args.hard_stop + 0.02:
+            st, hit = "逼近止损，盯紧", True
+        else:
+            st, hit = "持有", False
+        etf_rows.append((e["name"], px, chg, cost, pnl, stop, ma20, st))
+        if hit:
+            alerts.append((f"E:{c}:{st}",
+                           f"🟠 ETF持仓 {e['name']} {px:.3f}({chg:+.1%}) — {st}"))
+    return hold_rows, watch_rows, etf_rows, alerts
 
 
 def _gh_notify(cache: list, now: datetime, body: str) -> None:
@@ -305,20 +389,25 @@ def _watch(args: argparse.Namespace) -> None:
             print(f"🍱 {now:%H:%M} CST 午休，暂停轮询。")
             time.sleep(interval)
             continue
-        if ctx is None:
+        first = ctx is None
+        if first:
             ctx = _build_context(args)
-            print(f"▶ 盯盘启动 | 基准 {ctx['dt']} | 持仓 {len(ctx['holds'])} 只 | "
-                  f"观察 {len(ctx['watch'])} 只 | 间隔 {interval}s "
-                  f"| 推送 {'开' if args.notify else '关'}")
+            print(f"▶ 盯盘启动 | 基准 {ctx['dt']} | 股票持仓 {len(ctx['holds'])} 只 | "
+                  f"ETF持仓 {len(ctx['etf_holds'])} 只 | 观察 {len(ctx['watch'])} 只 | "
+                  f"间隔 {interval}s | 推送 {'开' if args.notify else '关'}")
         # 单轮取数/评估异常（Tushare 超时/限频/重启抢占导致的 ip超限 等）只跳过本轮、
         # 下轮重试，绝不让全天常驻 job 因一次瞬时错误崩溃。
         try:
-            rt = get_realtime(ctx["codes"])
-            _, _, alerts = _scan(ctx, rt, args)
+            rt = _fetch_rt(ctx)
+            _, _, _, alerts = _scan(ctx, rt, args)
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ {now:%H:%M} CST 本轮取数/评估失败，跳过：{repr(e)[:160]}")
             time.sleep(interval)
             continue
+        if first and ctx["etf_codes"]:     # 首轮自检：ETF 实时价是否取到（rt_k 是否支持 ETF）
+            got = sum(1 for c in ctx["etf_codes"] if rt.get(c, {}).get("price"))
+            print(f"  ETF实时自检：{got}/{len(ctx['etf_codes'])} 取到现价"
+                  + ("" if got else "（rt_k 未返回 ETF 价，ETF 盘中风控本轮无效，见收盘 EOD 视图）"))
         new = [(k, line) for k, line in alerts if k not in seen]
         for k, _ in new:
             seen.add(k)
@@ -358,8 +447,8 @@ def main() -> None:
         return
 
     ctx = _build_context(args)
-    rt = get_realtime(ctx["codes"])
-    hold_rows, watch_rows, alerts = _scan(ctx, rt, args)
+    rt = _fetch_rt(ctx)
+    hold_rows, watch_rows, etf_hold_rows, alerts = _scan(ctx, rt, args)
 
     if args.alert:
         ts = f"{now:%H:%M} CST"
@@ -381,6 +470,13 @@ def main() -> None:
     print("|---|---|---|---|---|---|---|---|")
     for n, px, chg, cost, pnl, stop, ma20, st in hold_rows:
         print(f"| {n} | {px:.2f} | {chg:+.1%} | {cost:.2f} | {pnl:+.1%} | {stop:.2f} | {ma20:.2f} | {st} |")
+    if etf_hold_rows:
+        print("\n## ETF持仓监控（rt_k 实时价 + fund 前复权MA20）")
+        print("| 名称 | 现价 | 涨跌 | 成本 | 浮盈亏 | 止损价 | MA20 | 状态 |")
+        print("|---|---|---|---|---|---|---|---|")
+        for n, px, chg, cost, pnl, stop, ma20, st in etf_hold_rows:
+            ma20s = f"{ma20:.3f}" if ma20 else "—"
+            print(f"| {n} | {px:.3f} | {chg:+.1%} | {cost:.3f} | {pnl:+.1%} | {stop:.3f} | {ma20s} | {st} |")
     print("\n## 观察池·买点价位预警")
     print("| 名称 | 级 | 现价 | 回踩位(MA20) | 突破位(20日高) | 状态 |")
     print("|---|---|---|---|---|---|")
