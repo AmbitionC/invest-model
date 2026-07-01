@@ -193,19 +193,19 @@ def review_holdings(repo: BaseRepository) -> list[str]:
         h[c] = pd.to_numeric(h[c], errors="coerce")
     stock = h[h["asset_type"].astype(str).str.lower() != "cash"].copy()
     tot_pnl = stock["pnl"].sum(skipna=True)
+    gross = stock["pnl"].abs().sum(skipna=True)   # 贡献分母用绝对值和，避免净额近零时占比被放大
     lines.append(f"- 快照日：{last} | 持仓市值合计：{stock['market_value'].sum(skipna=True):,.0f} | "
                  f"合计浮盈亏：{tot_pnl:+,.0f}")
     lines.append("")
-    lines.append("| 标的 | 市值 | 浮盈亏 | 收益率 | 占总盈亏 |")
+    lines.append("| 标的 | 市值 | 浮盈亏 | 收益率 | 盈亏占比 |")
     lines.append("|---|---|---|---|---|")
     for _, r in stock.sort_values("pnl", ascending=False, na_position="last").iterrows():
-        contrib = (r["pnl"] / tot_pnl) if tot_pnl and np.isfinite(tot_pnl) and tot_pnl != 0 else float("nan")
+        pp = r["pnl_pct"]                         # 快照里已是百分数（如 36.56 表示 +36.56%）
+        pp_s = f"{pp:+.1f}%" if np.isfinite(pp) else "—"
+        contrib = (r["pnl"] / gross) if gross and np.isfinite(gross) and gross != 0 else float("nan")
+        contrib_s = f"{contrib:+.0%}" if np.isfinite(contrib) else "—"
         lines.append(
-            f"| {r['name'] or r['code']} | {r['market_value']:,.0f} | {r['pnl']:+,.0f} | "
-            f"{(r['pnl_pct'] if np.isfinite(r['pnl_pct']) else 0):+.1%} | "
-            f"{contrib:+.0%} |" if np.isfinite(contrib) else
-            f"| {r['name'] or r['code']} | {r['market_value']:,.0f} | {r['pnl']:+,.0f} | "
-            f"{(r['pnl_pct'] if np.isfinite(r['pnl_pct']) else 0):+.1%} | — |")
+            f"| {r['name'] or r['code']} | {r['market_value']:,.0f} | {r['pnl']:+,.0f} | {pp_s} | {contrib_s} |")
     if len(snaps) >= 2:
         lines.append(f"\n- （已有 {len(snaps)} 个快照，后续将补区间盈亏变化归因）")
     else:
