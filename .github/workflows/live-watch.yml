@@ -42,6 +42,9 @@ jobs:
       TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       INTERVAL: ${{ inputs.interval || '60' }}
+      # 预警评论里 @提及谁（触发通知邮件）。默认 @仓库 owner；可在
+      # Settings → Variables 配 LIVE_WATCH_MENTION 覆盖（如换个账号/多人）。
+      LIVE_WATCH_MENTION: ${{ vars.LIVE_WATCH_MENTION || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

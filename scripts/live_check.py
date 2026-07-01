@@ -242,6 +242,9 @@ def _gh_notify(cache: list, now: datetime, body: str) -> None:
         return
     api = "https://api.github.com"
     title = "📟 盘中盯盘预警"
+    # @提及接收人：机器人评论默认不会触发邮件（除非你 watch 了该 issue），
+    # @提及则无视订阅状态直接发通知邮件。默认 @仓库 owner，可用 LIVE_WATCH_MENTION 覆盖。
+    mention = os.getenv("LIVE_WATCH_MENTION") or f"@{repo.split('/')[0]}"
 
     def _req(method: str, url: str, payload: dict | None = None):
         data = json.dumps(payload).encode() if payload is not None else None
@@ -264,11 +267,12 @@ def _gh_notify(cache: list, now: datetime, body: str) -> None:
             else:
                 created = _req("POST", f"{api}/repos/{repo}/issues", {
                     "title": title,
-                    "body": "本 issue 由 live-watch 盯盘工作流在触发止损/破位/买点时追加预警评论。",
+                    "body": f"{mention} 本 issue 由 live-watch 盯盘工作流在触发止损/"
+                            "破位/买点时追加预警评论（每条 @你 以触发通知邮件）。",
                 })
                 cache[0] = created["number"]
         _req("POST", f"{api}/repos/{repo}/issues/{cache[0]}/comments",
-             {"body": f"**{now:%Y-%m-%d %H:%M} CST**\n\n{body}"})
+             {"body": f"{mention} **{now:%Y-%m-%d %H:%M} CST**\n\n{body}"})
         print(f"  → 已推送到 issue #{cache[0]}")
     except Exception as e:  # noqa: BLE001
         print(f"  ⚠️ 推送失败：{repr(e)[:160]}")
