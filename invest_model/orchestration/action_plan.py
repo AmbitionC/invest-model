@@ -229,16 +229,14 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                 stop_price = cost_map[c] * (1 - rc.hard_stop_pct)
 
         # 动作判定
-        if reason:
+        if reason:                                    # 风控已判定（清仓/减仓/时间止损/逻辑证伪）
             action = "sell" if tw <= 1e-6 else "trim"
-        elif cw <= 1e-6 and tw > 1e-6:
+        elif c in held_codes:
+            # 尊重真实持仓、实事求是：风控没触发就持有——不因"没挤进模型 top-N 目标"而强制换出/减配。
+            # 换出只保留给风控触发 / 投顾明确剔除（exit_codes 已在风控里判为逻辑证伪清仓）。
+            action, reason, tw = "hold", "持有", cw
+        elif cw <= 1e-6 and tw > 1e-6:                 # 非持仓、进入目标 → 新建仓（买点已在观察池闸控）
             action, reason = "buy", _entry_reason(grade, meta.get(c, {}))
-        elif tw <= 1e-6 and cw > 1e-6:
-            action, reason = "sell", "换出（已不在目标）"
-        elif tw - cw > min_trade:
-            action, reason = "add", _entry_reason(grade, meta.get(c, {}))
-        elif cw - tw > min_trade:
-            action, reason = "trim", "目标减配"
         else:
             action, reason = "hold", "持有"
 
