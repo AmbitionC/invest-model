@@ -28,6 +28,22 @@ _COLS = ["code", "trade_date", "open", "high", "low", "close",
          "pre_close", "change", "pct_chg", "volume", "amount"]
 
 
+def _client(retries: int = 6):
+    """创建 TushareClient；卖家 token 单 IP 限制('ip超限')时退避重试。"""
+    import time
+    for i in range(retries):
+        try:
+            return TushareClient()
+        except Exception as e:  # noqa: BLE001
+            if any(k in str(e) for k in ("ip超限", "多个ip", "多个IP")):
+                wait = 20 * (i + 1)
+                print(f"Tushare IP 争用，等待 {wait}s 重试 {i + 1}/{retries} …")
+                time.sleep(wait)
+                continue
+            raise
+    raise RuntimeError("Tushare 客户端多次创建失败（IP 争用，稍后由定时任务重试）")
+
+
 def _etf_codes(repo: BaseRepository) -> list[str]:
     codes: set[str] = set()
     if repo.table_exists("holding_snapshot"):
@@ -55,7 +71,7 @@ def main() -> None:
     end = args.end or _dt.datetime.now().strftime("%Y%m%d")
 
     repo = BaseRepository(make_engine())
-    cli = TushareClient()
+    cli = _client()
     codes = _etf_codes(repo)
     print(f"ETF 待拉({len(codes)}): {codes}")
     total = 0
