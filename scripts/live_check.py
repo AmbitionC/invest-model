@@ -534,14 +534,18 @@ def _watch(args: argparse.Namespace) -> None:
             print(f"⚠️ {now:%H:%M} CST 本轮取数/评估失败，跳过：{repr(e)[:160]}")
             time.sleep(interval)
             continue
-        if first and ctx["etf_codes"]:     # 首轮自检：ETF 实时价是否取到（rt_k 是否支持 ETF）
+        if first and ctx["etf_codes"]:     # 首轮自检：ETF 实时价（rt_etf_k）是否取到
             got = [(c, rt.get(c, {}).get("price")) for c in ctx["etf_codes"]]
             n = sum(1 for _, p in got if p)
             detail = "，".join(f"{c}={p}" if p else f"{c}=无价" for c, p in got)
-            tail = "" if n else "（rt_k 不返回 ETF 价，ETF 盘中风控无效，需改基金实时源）"
+            tail = ""
+            if not n:                       # 取不到时探针 rt_etf_k 真实报错（权限/积分 vs 无数据）
+                from invest_model.signals.realtime import rt_etf_probe
+                _, err = rt_etf_probe(ctx["etf_codes"][0])
+                tail = f"（rt_etf_k {'报错:' + err if err else '接口通但无数据'}）"
             line = f"🔎 ETF实时自检：{n}/{len(got)} 取到现价（{detail}）{tail}"
             print(line)
-            key = f"ETFSELF:{today}"        # 每交易日一次、去重、跨重启不重复（走标记）
+            key = f"ETFSELF:{today}:{n}"    # 含结果数，状态变化即重发一次；去重跨重启
             if args.notify and key not in seen:
                 seen.add(key)
                 _gh_notify(issue, now, line, [key])

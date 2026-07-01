@@ -48,3 +48,18 @@ def get_realtime(codes: list[str]) -> dict[str, dict]:
 def get_realtime_etf(codes: list[str]) -> dict[str, dict]:
     """ETF 实时价（rt_etf_k）。rt_k 不返回 ETF，故 ETF 必须走此端点。"""
     return _query_rt(codes, "rt_etf_k")
+
+
+def rt_etf_probe(code: str) -> tuple[int, str]:
+    """诊断：直接调 rt_etf_k 并**不吞异常**，返回 (行数, 错误串)。
+
+    用于区分「ETF 取不到价」到底是 token 无该接口权限/积分不足（有 error），
+    还是接口正常但暂无数据（行数 0、error 空）。仅自检用，不进主链路。
+    """
+    from invest_model.sources.tushare_client import TushareClient
+
+    try:
+        df = TushareClient().pro.query("rt_etf_k", ts_code=code)
+    except Exception as e:  # noqa: BLE001
+        return (0, repr(e)[:220])
+    return (0 if df is None else len(df), "")
