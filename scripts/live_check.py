@@ -538,11 +538,7 @@ def _watch(args: argparse.Namespace) -> None:
             got = [(c, rt.get(c, {}).get("price")) for c in ctx["etf_codes"]]
             n = sum(1 for _, p in got if p)
             detail = "，".join(f"{c}={p}" if p else f"{c}=无价" for c, p in got)
-            tail = ""
-            if not n:                       # 取不到时探针 rt_etf_k 真实报错（权限/积分 vs 无数据）
-                from invest_model.signals.realtime import rt_etf_probe
-                _, err = rt_etf_probe(ctx["etf_codes"][0])
-                tail = f"（rt_etf_k {'报错:' + err if err else '接口通但无数据'}）"
+            tail = "" if n else "（腾讯免费源 qt.gtimg.cn 未取到，检查 Actions 外网/代码格式）"
             line = f"🔎 ETF实时自检：{n}/{len(got)} 取到现价（{detail}）{tail}"
             print(line)
             key = f"ETFSELF:{today}:{n}"    # 含结果数，状态变化即重发一次；去重跨重启
