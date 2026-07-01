@@ -22,6 +22,8 @@ from invest_model.signals.buypoint import BuyPointConfig, detect_buypoints
 
 logger = get_logger()
 
+WATCH_POOL_CAP = 30    # 观察池上限：A 级全留 + 最近的 B 级，控制在此数量内
+
 
 @dataclass
 class ActionPlan:
@@ -138,9 +140,18 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     watch_rows: list[dict] = []
     if buypoint:
         reco = loop.adv_repo.get_active_reco(dt)
-        pool = reco[(reco["direction"] == "long")
-                    & (reco["grade"].isin({"A", "B"}))
-                    & (~reco["code"].isin(exit_codes))]["code"].tolist() if not reco.empty else []
+        # 观察池收敛：A 级全留 + B 级取最近的，总量封顶（避免历史 B 级堆积把观察池撑爆）。
+        pool: list[str] = []
+        if not reco.empty:
+            p = reco[(reco["direction"] == "long")
+                     & (reco["grade"].isin({"A", "B"}))
+                     & (~reco["code"].isin(exit_codes))].copy()
+            if "rec_date" in p.columns:
+                p = p.sort_values("rec_date", ascending=False)
+            p = p.drop_duplicates("code")
+            a_codes = p[p["grade"] == "A"]["code"].tolist()
+            b_codes = p[p["grade"] == "B"]["code"].tolist()
+            pool = a_codes + b_codes[: max(0, WATCH_POOL_CAP - len(a_codes))]
         bps = detect_buypoints(engine, dt, pool, gross, rank_map, bp_cfg)
         buy_codes = {c for c, bp in bps.items() if bp.is_buy}
         # 目标里：投顾票未触发买点的 → 移出建议买入、转观察池（持仓的不动，交风控管）
@@ -190,12 +201,18 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
 
         # 持仓的风控评估（优先级最高）
         if c in held_codes:
-            entry = entry_map[c] or warm
-            hist = _close_hist(loop, c, min(entry, warm), dt)
-            hold_hist = hist[hist.index >= entry] if entry else hist
-            if not hold_hist.empty and rc.enabled:
-                prev = replay_tier(hold_hist[hold_hist.index < dt], full=rc.trail_full)
-                dec = evaluate_holding(hold_hist, cost_map[c], rc,
+            real_entry = entry_map[c]                         # 真实建仓日（可能为空）
+            hist = _close_hist(loop, c, warm, dt)             # 市场窗口：算真实 MA（与建仓日无关）
+            hold_hist = hist[hist.index >= real_entry] if real_entry else hist.iloc[0:0]  # 自建仓日(供时间止损)
+            if not hist.empty and rc.enabled:
+                # 移动止盈档位只从真实建仓日回放；建仓日未知则不回放(tier=0)，
+                # 否则会用建仓前的历史把档位误累积到"破MA20清仓"（bug：持有大涨股被误清）
+                if real_entry and bool((hist.index >= real_entry).any()):
+                    prev = replay_tier(hist[(hist.index >= real_entry) & (hist.index < dt)],
+                                       full=rc.trail_full)
+                else:
+                    prev = 0
+                dec = evaluate_holding(hist, cost_map[c], rc,
                                        in_exit_codes=(c in exit_codes), prev_tier=prev)
                 stop_price = dec.stop_price
                 if dec.action == "exit":

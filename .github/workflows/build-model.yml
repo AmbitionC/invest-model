@@ -33,6 +33,8 @@ jobs:
       MYSQL_USER: ${{ secrets.DB_USER }}
       MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
       MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
       START: ${{ inputs.start || '20250101' }}
       PYTHONUNBUFFERED: "1"
     steps:
@@ -54,5 +56,22 @@ jobs:
             case "$f" in *template*) continue;; esac
             python scripts/ingest_advisor.py --kind theme --csv "$f" || echo "WARN 跳过 $f"
           done
+      - name: 补基准指数（alpha/beta 用；容错，取不到不阻断建模）
+        run: |
+          python - <<'PY'
+          try:
+              from invest_model.data import make_engine
+              from invest_model.repositories.base import BaseRepository
+              from invest_model.sources.tushare_client import TushareClient
+              repo = BaseRepository(make_engine()); cli = TushareClient()
+              n = 0
+              for code in ["000300.SH", "000905.SH", "000906.SH"]:
+                  df = cli.get_index_daily(code, "20230101", "20260701")
+                  if df is not None and not df.empty:
+                      n += repo.upsert("index_daily", df, ["code", "trade_date"])
+              print(f"index_daily 补齐：{n} 行")
+          except Exception as e:
+              print(f"WARN 基准指数补齐跳过：{e}")
+          PY
       - name: 建模（universe→因子→预测→回测→导出，只用库内数据）
         run: python scripts/run_pipeline.py --mode all --start "$START"
