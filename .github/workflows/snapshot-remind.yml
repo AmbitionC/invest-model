@@ -1,0 +1,82 @@
+name: snapshot-remind
+
+# 交易日收盘后提醒上传持仓快照 → 追加到「📸 持仓快照提醒」issue（你会收到 GitHub 邮件）。
+# 赶在 17:30 操作计划前把当天真实持仓入库，计划的风控段才用上今天的仓位。
+# 仅 schedule 在默认分支(master)生效。非交易日由 trade_calendar 守卫跳过(纯读 DB)。
+
+on:
+  schedule:
+    # 工作日 15:20 北京(=07:20 UTC)，收盘后
+    - cron: "20 7 * * 1-5"
+  workflow_dispatch: {}
+
+concurrency:
+  group: snapshot-remind
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 交易日守卫（trade_calendar，非交易日跳过）
+        id: cal
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          from datetime import datetime, timezone, timedelta
+          day = (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y%m%d")
+          openflag = "1"
+          try:
+              from invest_model.data import make_engine
+              from invest_model.repositories.base import BaseRepository
+              repo = BaseRepository(make_engine())
+              if repo.table_exists("trade_calendar"):
+                  df = repo.read_sql("SELECT is_open FROM trade_calendar WHERE cal_date=:d", {"d": day})
+                  if not df.empty:
+                      openflag = "1" if int(df["is_open"].iloc[0]) == 1 else "0"
+          except Exception as e:
+              print(f"# 守卫查询失败，按交易日处理：{e}")
+          print(f"open={openflag}")
+          print(f"day={day}")
+          PY
+      - name: Post snapshot reminder
+        if: ${{ steps.cal.outputs.open == '1' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '📸 持仓快照提醒';
+            const day = '${{ steps.cal.outputs.day }}';
+            const { owner, repo } = context.repo;
+            const found = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue is:open in:title "${title}"`,
+            });
+            let issue = found.data.items.find(i => i.title === title);
+            if (!issue) {
+              const created = await github.rest.issues.create({
+                owner, repo, title,
+                body: '本 issue 每交易日收盘后提醒上传当天券商持仓截图（快照入库用）。',
+              });
+              issue = created.data;
+            }
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: issue.number,
+              body: `## ${day} 收盘\n\n📸 **请把今天的券商「持仓+现金」截图发到会话**，我转成快照入库。\n赶在 **17:30 操作计划**前完成，计划的风控段就用上你今天的真实持仓。`,
+            });
+            core.info(`已在 issue #${issue.number} 追加 ${day} 快照提醒。`);
