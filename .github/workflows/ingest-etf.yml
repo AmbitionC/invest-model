@@ -1,0 +1,43 @@
+name: ingest-etf
+
+# 拉持仓/观察 ETF 的前复权日线 → stock_daily，让操作计划对 ETF 也做 MA20/硬止损。
+# 交易日收盘后刷，赶在 EOD 数据/计划前；也可 push ops/ingest-etf.trigger 手动跑。
+# 需 Tushare（fund_daily+fund_adj）；仅 master 触发。
+
+on:
+  schedule:
+    # 工作日 16:50 北京(=08:50 UTC)，收盘后、data-update(17:00)/plan(17:30) 之前
+    - cron: "50 8 * * 1-5"
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/ingest-etf.trigger'
+
+concurrency:
+  group: ingest-etf
+  cancel-in-progress: false
+
+jobs:
+  etf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 拉 ETF 前复权日线入库
+        run: python scripts/ingest_etf_daily.py --start 20230101

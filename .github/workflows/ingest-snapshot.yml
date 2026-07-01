@@ -8,6 +8,7 @@ on:
   push:
     paths:
       - 'config/holding_snapshot_*.csv'
+      - 'ops/ingest-snapshot.trigger'
 
 concurrency:
   group: ingest-snapshot

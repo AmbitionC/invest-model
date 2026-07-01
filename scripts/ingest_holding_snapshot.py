@@ -67,18 +67,20 @@ def main() -> None:
     n = repo.upsert("holding_snapshot", df, ["snapshot_date", "code"])
 
     # 同步刷新 current_holding（实盘持仓表，供 build_action_plan/盯盘）：
-    # 从原始行取 stock（含 entry_date，未被上面的列裁剪影响）；全量替换=当前持仓。
-    stocks = raw[raw["asset_type"].astype(str).str.lower() == "stock"].copy()
-    if not stocks.empty:
-        stocks["shares"] = pd.to_numeric(stocks["shares"], errors="coerce")
-        stocks["cost_price"] = pd.to_numeric(stocks["cost_price"], errors="coerce")
-        if "entry_date" not in stocks.columns:
-            stocks["entry_date"] = snap_date
-        stocks["entry_date"] = stocks["entry_date"].where(stocks["entry_date"].notna(), snap_date)
-        ch = stocks[["code", "shares", "cost_price", "entry_date"]].copy()
+    # 取 stock + etf（ETF 前复权日线已由 ingest_etf_daily 灌进 stock_daily，可同套风控）；
+    # 排除现金/转债（无日线、不做 MA 风控）。全量替换=当前持仓。含 entry_date。
+    kinds = raw["asset_type"].astype(str).str.lower()
+    pos = raw[kinds.isin(["stock", "etf"])].copy()
+    if not pos.empty:
+        pos["shares"] = pd.to_numeric(pos["shares"], errors="coerce")
+        pos["cost_price"] = pd.to_numeric(pos["cost_price"], errors="coerce")
+        if "entry_date" not in pos.columns:
+            pos["entry_date"] = snap_date
+        pos["entry_date"] = pos["entry_date"].where(pos["entry_date"].notna(), snap_date)
+        ch = pos[["code", "shares", "cost_price", "entry_date"]].copy()
         repo.execute_sql("DELETE FROM current_holding")
         m = repo.upsert("current_holding", ch, ["code"])
-        print(f"current_holding 刷新 {m} 只（stock）")
+        print(f"current_holding 刷新 {m} 只（stock+etf）")
 
     mv = float(df["market_value"].sum())
     acct = pd.DataFrame([{
