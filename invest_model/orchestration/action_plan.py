@@ -90,6 +90,21 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     hrepo = HoldingRepo(engine)
     holdings = hrepo.get_all()
 
+    # 持仓现价优先用"不早于最新行情日"的持仓快照(券商真实价)：抗 Tushare EOD 发布延迟、
+    # 手动补跑也能反映当日；快照更旧则退回 EOD。均线/历史仍走 stock_daily。{code:(date,price)}
+    snap_px: dict[str, tuple[str, float]] = {}
+    try:
+        if loop.repo.table_exists("holding_snapshot"):
+            sp = loop.repo.read_sql(
+                "SELECT snapshot_date, code, last_price FROM holding_snapshot "
+                "WHERE snapshot_date=(SELECT MAX(snapshot_date) FROM holding_snapshot)")
+            for _, r in sp.iterrows():
+                v = pd.to_numeric(r["last_price"], errors="coerce")
+                if str(r["snapshot_date"]) >= dt and pd.notna(v) and float(v) > 0:
+                    snap_px[str(r["code"])] = (str(r["snapshot_date"]), float(v))
+    except Exception:  # noqa: BLE001
+        pass
+
     # ── 当前持仓估值 ──
     held_codes = list(holdings["code"]) if not holdings.empty else []
     last_close: dict[str, float] = {}
@@ -99,6 +114,8 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     for _, h in holdings.iterrows():
         s = _close_hist(loop, h["code"], dt, dt)
         px = float(s.iloc[-1]) if not s.empty else float(h["cost_price"] or 0)
+        if h["code"] in snap_px:
+            px = snap_px[h["code"]][1]                # 券商快照现价(≥最新行情日)优先
         last_close[h["code"]] = px
         cost_map[h["code"]] = float(h["cost_price"] or 0)
         shares_map[h["code"]] = float(h["shares"] or 0)
@@ -204,13 +221,17 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         if c in held_codes:
             real_entry = entry_map[c]                         # 真实建仓日（可能为空）
             hist = _close_hist(loop, c, warm, dt)             # 市场窗口：算真实 MA（与建仓日无关）
+            cur_day = dt
+            if c in snap_px:                                  # 追加当日券商现价 → 风控按最新价判定
+                cur_day, snp = snap_px[c]
+                hist = pd.concat([hist, pd.Series({cur_day: snp})])
             hold_hist = hist[hist.index >= real_entry] if real_entry else hist.iloc[0:0]  # 自建仓日(供时间止损)
             if not hist.empty and rc.enabled:
                 # 移动止盈档位回放起点：真实建仓日 / 最近调仓日 / dt-35天 取最晚，
                 # 限定在"当前调仓周期"内单调 → 与回测的每调仓日重置对齐；
                 # 避免长持 winner 被几个月前的一次破位永久锁死"破MA20清仓"。
                 reset_from = max(x for x in (real_entry, pred_date, reset_floor) if x)
-                mask = (hist.index >= reset_from) & (hist.index < dt)
+                mask = (hist.index >= reset_from) & (hist.index < cur_day)
                 prev = replay_tier(hist[mask], full=rc.trail_full) if bool(mask.any()) else 0
                 dec = evaluate_holding(hist, cost_map[c], rc,
                                        in_exit_codes=(c in exit_codes), prev_tier=prev)
