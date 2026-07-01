@@ -163,6 +163,19 @@ def _trading(now: datetime) -> bool:
     return (now.weekday() < 5) and (570 <= hm <= 690 or 780 <= hm <= 900)
 
 
+def _is_trading_day(day: str) -> bool | None:
+    """今天是否 A 股交易日（trade_cal，含节假日）。查不到/出错返回 None（调用方按"继续"处理）。"""
+    try:
+        from invest_model.sources.tushare_client import TushareClient
+        df = TushareClient().pro.query("trade_cal", exchange="SSE",
+                                       start_date=day, end_date=day)
+    except Exception:  # noqa: BLE001
+        return None
+    if df is None or df.empty or "is_open" not in df.columns:
+        return None
+    return int(df.iloc[0]["is_open"]) == 1
+
+
 def _load_etf_holdings() -> list[dict]:
     """从最新 config/holding_snapshot_*.csv 读 ETF 持仓（code/name/cost）。
 
@@ -188,27 +201,46 @@ def _load_etf_holdings() -> list[dict]:
 
 def _account_cash() -> float:
     """从最新持仓快照读可用现金（asset_type=cash 行的 market_value），用于买入类挂单定量。"""
+    return _snapshot_sum("cash")
+
+
+def _account_equity() -> float:
+    """账户总权益 = 快照所有行 market_value 之和（含持仓市值 + 现金），用于算目标占比。"""
+    return _snapshot_sum(None)
+
+
+def _snapshot_sum(asset_type: str | None) -> float:
+    """汇总最新持仓快照的 market_value：asset_type 指定则只汇总该类，None 汇总全部。"""
     files = sorted(glob.glob(os.path.join(_ROOT, "config", "holding_snapshot_*.csv")))
     if not files:
         return 0.0
     df = pd.read_csv(files[-1], dtype=str)
-    if "asset_type" not in df.columns:
+    if "market_value" not in df.columns:
         return 0.0
-    cash_rows = df[df["asset_type"].astype(str).str.lower() == "cash"]
-    if cash_rows.empty:
-        return 0.0
-    return float(pd.to_numeric(cash_rows["market_value"], errors="coerce").sum() or 0.0)
+    if asset_type is not None:
+        if "asset_type" not in df.columns:
+            return 0.0
+        df = df[df["asset_type"].astype(str).str.lower() == asset_type]
+    return float(pd.to_numeric(df["market_value"], errors="coerce").sum() or 0.0)
 
 
-def _buy_ticket(level: float, cash: float) -> str:
-    """买入挂单：给挂单价 + 按可用现金能买的整手股数（现金不足则提示先腾资金）。"""
+def _buy_ticket(level: float, cash: float, equity: float, weight: float) -> str:
+    """买入挂单：挂单价 + 按目标占比定量（股数/金额/占比），并标注资金是否够。
+
+    数量按「目标权重 × 总权益 / 挂单价」取整手——不管现金够不够都给出该买多少，
+    便于「先卖出腾资金 → 再按此挂买」；末尾注明现金够或还需腾多少。
+    """
     if not level or level <= 0:
         return "买点未知"
-    lots = int(cash // (level * 100))       # A 股 100 股/手
-    n = lots * 100
+    target_amt = weight * equity
+    n = int(target_amt // (level * 100)) * 100     # A 股 100 股/手，向下取整手
     if n <= 0:
-        return f"挂买 限价{level:.2f}; 现金{cash:.0f}不足(需先卖出腾资金)"
-    return f"挂买 限价{level:.2f} 约{n}股(≈{n * level:.0f}元)"
+        n = 100                                    # 目标占比买不起1手 → 给最小1手，标出实际占比
+    amt = n * level
+    wt = (amt / equity) if equity else 0.0
+    over = "⚠1手占比偏高" if wt > weight * 1.5 else ""
+    fund = "现金够" if cash >= amt else f"需先卖出腾≈{amt - cash:.0f}"
+    return f"挂买 限价{level:.2f} {n}股≈{amt:.0f}(占{wt:.1%}){over}; {fund}"
 
 
 def _fetch_rt(ctx: dict) -> dict:
@@ -259,7 +291,8 @@ def _build_context(args: argparse.Namespace) -> dict:
             "watch": watch, "levels": levels, "g_of": g_of,
             "trailing_only": trailing_only, "codes": held + watch,
             "etf_holds": etf_holds, "etf_levels": etf_levels,
-            "etf_codes": [e["code"] for e in etf_holds], "cash": _account_cash()}
+            "etf_codes": [e["code"] for e in etf_holds],
+            "cash": _account_cash(), "equity": _account_equity()}
 
 
 def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, list, list]:
@@ -269,7 +302,9 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
     dedup_key 含状态标签——同一票同一状态只算一次，状态切换才算新预警。
     """
     holds = ctx["holds"]; levels = ctx["levels"]
-    trailing_only = ctx["trailing_only"]; g_of = ctx["g_of"]; cash = ctx.get("cash", 0.0)
+    trailing_only = ctx["trailing_only"]; g_of = ctx["g_of"]
+    cash = ctx.get("cash", 0.0); equity = ctx.get("equity", 0.0) or 0.0
+    buy_w = getattr(args, "buy_weight", 0.05)
     hold_rows, watch_rows, etf_rows, alerts = [], [], [], []
     for _, h in holds.iterrows():
         c = h["code"]; q = rt.get(c, {}); lv = levels.get(c, {})
@@ -291,8 +326,13 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
             st, hit = ("持有(MA20移动止盈)" if ex else "持有"), False
         hold_rows.append((q.get("name", c), px, chg, cost, pnl, stop, ma20, st))
         if hit:
-            # 挂单信号：清仓类给「卖 全部股数 市价/限价≈现价」；逼近只提示不给单
-            ticket = "" if "逼近" in st else f" → 卖 {int(sh)}股 市价/限价≈{px:.2f}(清)"
+            # 挂单信号：清仓类给「卖 全部股数 限价≈现价，占比→0，回笼资金」；逼近只提示不给单
+            if "逼近" in st:
+                ticket = ""
+            else:
+                cw = (sh * px / equity) if equity else 0.0
+                ticket = (f" → 卖 {int(sh)}股 市价/限价≈{px:.2f} 清"
+                          f"(占{cw:.1%}→0,回笼≈{sh * px:.0f})")
             alerts.append((f"H:{c}:{st}",
                            f"🔴 持仓 {q.get('name', c)} {px:.2f}({chg:+.1%}) — {st}{ticket}"))
     for c in ctx["watch"]:
@@ -313,9 +353,9 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
             st, hit = "上方运行，等回踩MA20", False
         watch_rows.append((q.get("name", c), g_of.get(c, ""), px, ma20, hi20, st))
         if hit:
-            # 挂单信号：回踩位挂 MA20、突破位挂 20日高，股数按可用现金定量
+            # 挂单信号：回踩位挂 MA20、突破位挂 20日高，按目标占比定量（股数/金额/占比）
             lvl = ma20 if "回踩" in st else hi20
-            ticket = " → " + _buy_ticket(lvl, cash)
+            ticket = " → " + _buy_ticket(lvl, cash, equity, buy_w)
             alerts.append((f"W:{c}:{st}",
                            f"🟢 观察 {q.get('name', c)}({g_of.get(c, '')}) {px:.2f} — {st}{ticket}"))
     # ETF 持仓风控：无移动止盈白名单概念，一律按 硬止损 + 破MA20 管
@@ -337,7 +377,12 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
             st, hit = "持有", False
         etf_rows.append((e["name"], px, chg, cost, pnl, stop, ma20, st))
         if hit:
-            ticket = "" if "逼近" in st else f" → 卖 {int(e['shares'])}份 市价/限价≈{px:.3f}(减/清)"
+            if "逼近" in st:
+                ticket = ""
+            else:
+                cw = (e["shares"] * px / equity) if equity else 0.0
+                ticket = (f" → 卖 {int(e['shares'])}份 市价/限价≈{px:.3f} 减/清"
+                          f"(占{cw:.1%}→0,回笼≈{e['shares'] * px:.0f})")
             alerts.append((f"E:{c}:{st}",
                            f"🟠 ETF持仓 {e['name']} {px:.3f}({chg:+.1%}) — {st}{ticket}"))
     return hold_rows, watch_rows, etf_rows, alerts
@@ -403,6 +448,11 @@ def _watch(args: argparse.Namespace) -> None:
     均线基准与持仓/观察池只在首个交易周期取一次并全天复用；每周期仅刷新实时价。
     """
     interval = max(15, args.interval)
+    # 交易日守卫：cron 每工作日 09:25 起，节假日（trade_cal is_open=0）直接退出，不空转占用额度。
+    today = _now_cst().strftime("%Y%m%d")
+    if _is_trading_day(today) is False:
+        print(f"⏹ {today} 非交易日（节假日/休市），盯盘退出。")
+        return
     ctx = None
     seen: set[str] = set()
     issue = [None]
@@ -461,6 +511,8 @@ def main() -> None:
                     help="DB URL；省略则读环境变量 INVEST_DB_URL/DB_*（生产 MySQL）")
     ap.add_argument("--hard-stop", type=float, default=0.08)
     ap.add_argument("--pullback-pct", type=float, default=0.03)
+    ap.add_argument("--buy-weight", type=float, default=0.05,
+                    help="买入类挂单的单只目标占比（占账户总权益，默认 5%%）")
     ap.add_argument("--alert", action="store_true",
                     help="只报触发/逼近项 + 交易时段感知（盯盘轮询用）")
     ap.add_argument("--watch", action="store_true",
