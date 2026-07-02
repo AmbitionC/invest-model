@@ -233,7 +233,12 @@ class CSBacktestEngine:
             cur = weights[c]
             tgt = targets.get(c, 0.0)
             delta = tgt - cur
-            if delta >= 0 or abs(delta) < self.cfg.min_trade:
+            if delta >= 0:
+                continue
+            # 完全退出（tgt≈0）不受换手带限制：否则权重 < min_trade 的出局票
+            # 永远卖不掉（rank 加权尾部权重 ~0.2%，天然低于换手带），僵尸小
+            # 仓位逐月累积、持仓数漂移超过 top_n。
+            if tgt > 1e-9 and abs(delta) < self.cfg.min_trade:
                 continue
             if not self._tradable(c, dt, buying=False):
                 continue

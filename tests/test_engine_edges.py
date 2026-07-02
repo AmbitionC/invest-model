@@ -68,6 +68,32 @@ def test_no_implicit_leverage_when_sell_blocked(tmp_path):
     assert last["invested"] <= 1.0 + 1e-6
 
 
+def test_full_exit_bypasses_min_trade_band(tmp_path):
+    """权重低于换手带的出局票（tgt=0）必须能卖掉，不得成为僵尸小仓位。"""
+    eng = _mk_engine(tmp_path, "zombie")
+    dates = _dates("2021-06-01", 12)
+    rows = []
+    for d in dates:
+        rows.append({"code": "000001.SZ", "trade_date": d, "close": 10.0, "pct_chg": 0.0})
+        rows.append({"code": "000002.SZ", "trade_date": d, "close": 20.0, "pct_chg": 0.0})
+    _insert_daily(eng, rows)
+
+    # d0 建仓 A=2%+B=90%；d3 把 A 减到 0.5%（低于 1% 换手带）；d7 A 出局(tgt=0)
+    targets_by_date = {
+        dates[0]: {"000001.SZ": 0.02, "000002.SZ": 0.90},
+        dates[3]: {"000001.SZ": 0.005, "000002.SZ": 0.90},
+        dates[7]: {"000002.SZ": 0.90},
+    }
+    reb = [dates[0], dates[3], dates[7]]
+    cfg = CSBacktestConfig(start_date=dates[0], end_date=dates[-1])
+    res = CSBacktestEngine(eng, cfg, lambda dt, cur: targets_by_date.get(dt, {}), reb).run()
+
+    assert res.nav_df["position_count"].iloc[-1] == 1, \
+        "0.5% 的 A 在 tgt=0 时应被清仓，而非因低于换手带永远卡在组合里"
+    sells_a = [t for t in res.trades if t["code"] == "000001.SZ" and t["action"] == "sell"]
+    assert sells_a and sells_a[-1]["weight"] == 0.0
+
+
 def test_delisted_holding_is_liquidated(tmp_path):
     """行情消失超过 delist_after_days 的持仓应被强制清算，不能永久冻结。"""
     eng = _mk_engine(tmp_path, "delist")
