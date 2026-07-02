@@ -66,3 +66,12 @@ jobs:
         # start 收敛到近18月：全市场因子×多年在云端+RDS公网下会超时；模型定位是给投顾当参谋，
         # 不需超长回测，近端窗口即够 IC/预测。日频 update 幂等只补最新缺口，不受影响。
         run: python scripts/run_pipeline.py --mode "${{ steps.mode.outputs.mode }}" --start 20250101
+
+      - name: P4 影子对照回测（仅周六全量后；A/B 数据每周自动积累）
+        # 与 build-model 的影子步骤一致：pf_v2 vs ic_v1 同落 backtest_run 供对比。
+        # 观测与晋升标准见 docs/model_change_proposals.md P4。失败不阻断。
+        if: steps.mode.outputs.mode == 'all'
+        run: |
+          python scripts/run_pipeline.py --mode backtest --start 20250101 \
+            --version pf_v2 --scheme inv_vol --hold-buffer 1.5 \
+            || echo "WARN P4 影子回测失败（不阻断）"
