@@ -176,17 +176,34 @@ def _is_trading_day(day: str) -> bool | None:
     return int(df.iloc[0]["is_open"]) == 1
 
 
-def _load_etf_holdings() -> list[dict]:
-    """从最新 config/holding_snapshot_*.csv 读 ETF 持仓（code/name/cost）。
-
-    current_holding 表按设计只存 stock（rt_k 也只支持股票），故 ETF 持仓直接从快照
-    CSV 读——该 CSV 正是入库 current_holding 的同一来源，盘中在 Actions checkout 里可用。
+def _latest_snapshot_df(repo: BaseRepository | None = None) -> pd.DataFrame:
+    """最新持仓快照：优先仓库 config/holding_snapshot_*.csv（Actions checkout 里最新），
+    没有 CSV 时回退查库内 holding_snapshot 表的最新 snapshot_date——FaaS 代码包
+    刻意不带快照 CSV（打包即冻结、会过期），永远走 DB 拿最新快照。
     """
     files = sorted(glob.glob(os.path.join(_ROOT, "config", "holding_snapshot_*.csv")))
-    if not files:
-        return []
-    df = pd.read_csv(files[-1], dtype=str)
-    if "asset_type" not in df.columns:
+    if files:
+        return pd.read_csv(files[-1], dtype=str)
+    if repo is not None:
+        try:
+            if repo.table_exists("holding_snapshot"):
+                return repo.read_sql(
+                    "SELECT code, name, asset_type, shares, cost_price, market_value "
+                    "FROM holding_snapshot WHERE snapshot_date="
+                    "(SELECT MAX(snapshot_date) FROM holding_snapshot)")
+        except Exception:  # noqa: BLE001
+            pass
+    return pd.DataFrame()
+
+
+def _load_etf_holdings(repo: BaseRepository | None = None) -> list[dict]:
+    """从最新持仓快照读 ETF 持仓（code/name/cost）。
+
+    current_holding 表按设计只存 stock（rt_k 也只支持股票），故 ETF 持仓从快照读
+    （CSV 或 DB，见 _latest_snapshot_df）。
+    """
+    df = _latest_snapshot_df(repo)
+    if df.empty or "asset_type" not in df.columns:
         return []
     etf = df[df["asset_type"].astype(str).str.lower() == "etf"]
     out = []
@@ -199,23 +216,20 @@ def _load_etf_holdings() -> list[dict]:
     return out
 
 
-def _account_cash() -> float:
-    """从最新持仓快照读可用现金（asset_type=cash 行的 market_value），用于买入类挂单定量。"""
-    return _snapshot_sum("cash")
+def _account_cash(repo: BaseRepository | None = None) -> float:
+    """最新快照的可用现金（asset_type=cash 行的 market_value），用于买入类挂单定量。"""
+    return _snapshot_sum("cash", repo)
 
 
-def _account_equity() -> float:
+def _account_equity(repo: BaseRepository | None = None) -> float:
     """账户总权益 = 快照所有行 market_value 之和（含持仓市值 + 现金），用于算目标占比。"""
-    return _snapshot_sum(None)
+    return _snapshot_sum(None, repo)
 
 
-def _snapshot_sum(asset_type: str | None) -> float:
+def _snapshot_sum(asset_type: str | None, repo: BaseRepository | None = None) -> float:
     """汇总最新持仓快照的 market_value：asset_type 指定则只汇总该类，None 汇总全部。"""
-    files = sorted(glob.glob(os.path.join(_ROOT, "config", "holding_snapshot_*.csv")))
-    if not files:
-        return 0.0
-    df = pd.read_csv(files[-1], dtype=str)
-    if "market_value" not in df.columns:
+    df = _latest_snapshot_df(repo)
+    if df.empty or "market_value" not in df.columns:
         return 0.0
     if asset_type is not None:
         if "asset_type" not in df.columns:
@@ -277,8 +291,8 @@ def _build_context(args: argparse.Namespace) -> dict:
     watch = [c for c in watch if c not in held and c not in exit_codes]
     levels = _levels(repo, held + watch, dt)
     g_of = dict(zip(reco["code"], reco["grade"])) if not reco.empty else {}
-    # ETF 持仓：成本读快照 CSV，均线基准用 fund_daily 前复权（可转债不盯，用户上市即卖）
-    etf_holds = _load_etf_holdings()
+    # ETF 持仓：成本读快照（CSV 或 DB），均线基准用 fund_daily 前复权（可转债不盯，用户上市即卖）
+    etf_holds = _load_etf_holdings(repo)
     etf_levels: dict[str, dict] = {}
     if etf_holds:
         from invest_model.sources.tushare_client import TushareClient
@@ -292,7 +306,7 @@ def _build_context(args: argparse.Namespace) -> dict:
             "trailing_only": trailing_only, "codes": held + watch,
             "etf_holds": etf_holds, "etf_levels": etf_levels,
             "etf_codes": [e["code"] for e in etf_holds],
-            "cash": _account_cash(), "equity": _account_equity()}
+            "cash": _account_cash(repo), "equity": _account_equity(repo)}
 
 
 def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, list, list, float]:
