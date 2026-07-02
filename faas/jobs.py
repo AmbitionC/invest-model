@@ -118,12 +118,28 @@ def _build_and_post_plan() -> dict:
     return {"plan": res}
 
 
+def _persist_fear_daily() -> str:
+    """恐慌指数按日落库（仪表盘历史曲线）；失败不阻断出计划。"""
+    try:
+        from invest_model.data import make_engine
+        from invest_model.signals.fear import fear_gauge
+        from scripts.fear_gauge import persist_fear
+        engine = make_engine()
+        persist_fear(engine, fear_gauge(engine))
+        return "ok"
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN fear_daily 落库失败：{e}")
+        return f"WARN: {e}"
+
+
 def job_daily_update_plan() -> dict:
     """增量数据更新成功后链式出计划；更新失败不出计划（避免旧数据误导）。"""
     from scripts.run_pipeline import main as pipe_main
     _run_cli(pipe_main, ["run_pipeline.py", "--mode", "update",
                          "--start", _PIPELINE_START])
-    return {"job": "daily_update_plan", "update": "ok", **_build_and_post_plan()}
+    fear = _persist_fear_daily()
+    return {"job": "daily_update_plan", "update": "ok", "fear": fear,
+            **_build_and_post_plan()}
 
 
 # ── 周六全量重建 + P4 影子回测 + 复盘（data-update all档 + review 链）────

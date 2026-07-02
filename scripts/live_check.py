@@ -422,6 +422,40 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
     return hold_rows, watch_rows, etf_rows, alerts, min_dist
 
 
+def _persist_alerts(engine, now: datetime, items: list[tuple[str, str, str]]) -> None:
+    """盯盘预警落库 watch_alert（仪表盘消息流数据源）；失败仅打印告警，绝不影响推送。
+
+    items: [(dedup_key, 展示行, 严重级)]。同日同 dedup_key 幂等（表上有唯一约束，
+    upsert 重跑不产生重复行）。与 --notify 无关：只要检测到新预警就落库。
+    """
+    if not items:
+        return
+    try:
+        from invest_model.data import create_schema
+
+        kind_of = {"H": "hold", "W": "watch", "E": "etf"}
+        rows = []
+        for k, line, sev in items:
+            head = k.split(":", 1)[0]
+            kind = "selfcheck" if head == "ETFSELF" else kind_of.get(head, "other")
+            parts = k.split(":")
+            code = parts[1] if kind in ("hold", "watch", "etf") and len(parts) > 1 else None
+            rows.append({"alert_date": now.strftime("%Y%m%d"),
+                         # DATETIME 用 ISO 字符串绑定，规避 pandas Timestamp 与 sqlite3 不兼容
+                         "alert_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+                         "code": code, "kind": kind, "severity": sev,
+                         "message": line, "dedup_key": k[:160]})
+        repo = BaseRepository(engine)
+        df = pd.DataFrame(rows)
+        try:
+            repo.upsert("watch_alert", df, ["alert_date", "dedup_key"])
+        except Exception:  # noqa: BLE001 - 表可能未建（老库），补建后重试一次
+            create_schema(engine)
+            repo.upsert("watch_alert", df, ["alert_date", "dedup_key"])
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN watch_alert 落库失败：{e}")
+
+
 _GH_API = "https://api.github.com"
 _GH_TITLE = "📟 盘中盯盘预警"
 
@@ -594,6 +628,7 @@ def _once(args: argparse.Namespace) -> dict:
     rt = _fetch_rt(ctx)
     _, _, _, alerts, _ = _scan(ctx, rt, args)
     new = [(k, line, sev) for k, line, sev in alerts if k not in seen]
+    _persist_alerts(ctx["engine"], now, new)
     crit = [(k, line) for k, line, sev in new if sev == "crit"]
     batch = [(k, line) for k, line, sev in new if sev != "crit"]
     # ETF 实时自检（每日一次，提示类）
@@ -603,6 +638,8 @@ def _once(args: argparse.Namespace) -> dict:
         key = f"ETFSELF:{now:%Y%m%d}:{n_ok}"
         if key not in seen:
             batch.append((key, f"🔎 ETF实时自检：{n_ok}/{len(got)} 取到现价"))
+            _persist_alerts(ctx["engine"], now,
+                            [(key, f"🔎 ETF实时自检：{n_ok}/{len(got)} 取到现价", "batch")])
     flush = bool(crit) or _once_flush_batch(hm, args.digest_window, args.once_step)
     items = crit + (batch if flush else [])
     if items:
@@ -709,10 +746,12 @@ def _watch(args: argparse.Namespace) -> None:
                 if not pending:
                     pending_since = now
                 pending.append((key, line))
+                _persist_alerts(ctx["engine"], now, [(key, line, "batch")])
         # 分级：卖出类风控(crit)立即推；买点/提示类(batch)进缓冲合并推
         new = [(k, line, sev) for k, line, sev in alerts if k not in seen]
         for k, _, _ in new:
             seen.add(k)
+        _persist_alerts(ctx["engine"], now, new)
         crit = [(k, line) for k, line, sev in new if sev == "crit"]
         batch = [(k, line) for k, line, sev in new if sev != "crit"]
         if batch:

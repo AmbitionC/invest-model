@@ -22,6 +22,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.engine import Engine
@@ -318,6 +319,27 @@ action_plan = Table(
     Column("stop_price", Numeric(14, 4)),
     Column("ref_price", Numeric(14, 4)),
     Column("grade", String(2)),
+    Column("trigger_hint", String(64)),                    # 买点挂单提示（trigger 为 MySQL 保留字）
+    Column("model_rank", Numeric(10, 6)),                  # 全市场因子分位
+    Column("model_view", String(32)),                      # 模型研判：看好 前8% ★★★
+    _created_at(),
+)
+
+# 操作计划账户层元数据（build_action_plan 的 account 块，供仪表盘展示）。
+action_plan_account = Table(
+    "action_plan_account", metadata,
+    Column("plan_date", String(8), primary_key=True),
+    Column("equity", Numeric(20, 2)),
+    Column("invested_pct", Numeric(12, 6)),
+    Column("cash_pct", Numeric(12, 6)),
+    Column("n_holdings", Integer),
+    Column("unrealized_pnl_pct", Numeric(12, 6)),
+    Column("gross_target", Numeric(12, 6)),
+    Column("risk_off", Integer),                           # 0/1
+    Column("model_ic_mean", Numeric(10, 6)),
+    Column("model_ic_ir", Numeric(10, 6)),
+    Column("model_hit", Numeric(8, 4)),
+    Column("model_conf_label", String(32)),
     _created_at(),
 )
 
@@ -348,9 +370,51 @@ account_snapshot = Table(
     _created_at(),
 )
 
+# 盯盘预警历史（live_check 推 GitHub 的同时落库，供仪表盘消息流展示）。
+watch_alert = Table(
+    "watch_alert", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("alert_date", String(8), nullable=False),       # 北京日期 YYYYMMDD
+    Column("alert_time", DateTime),                        # 触发时刻（CST naive）
+    Column("code", String(16)),                            # 自检类可空
+    Column("kind", String(12)),                            # hold|watch|etf|selfcheck
+    Column("severity", String(8)),                         # crit | batch
+    Column("message", Text),                               # 完整展示行
+    Column("dedup_key", String(160), nullable=False),
+    UniqueConstraint("alert_date", "dedup_key", name="uq_watch_alert_day_key"),
+    _created_at(),
+)
+
+# 复盘报告存证（review.py 输出的 Markdown）。
+review_report = Table(
+    "review_report", metadata,
+    Column("report_date", String(8), primary_key=True),    # asof 数据日
+    Column("period", String(8), primary_key=True),         # weekly | daily | adhoc
+    Column("version", String(32)),
+    Column("markdown", Text),
+    Column("meta", Text),                                  # json: {generated_at, ...}
+    _created_at(),
+)
+
+# 恐慌指数按日存证（fear_gauge 为即时计算，落库供历史曲线）。
+fear_daily = Table(
+    "fear_daily", metadata,
+    Column("trade_date", String(8), primary_key=True),
+    Column("score", Numeric(6, 2)),
+    Column("level", String(32)),
+    Column("components", Text),                            # json {动量,波动率,宽度,涨跌停,新高新低}
+    Column("raw", Text),                                   # json fear_gauge()["raw"]
+    _created_at(),
+)
+
 # 关键列补丁：老库已存在的表按需补列（create_all 不会改已存在表）。
 _COLUMN_PATCHES: dict[str, dict[str, str]] = {
     "portfolio_target": {"grade": "VARCHAR(2)", "source": "VARCHAR(16)"},
+    "action_plan": {
+        "trigger_hint": "VARCHAR(64)",
+        "model_rank": "DECIMAL(10,6)",
+        "model_view": "VARCHAR(32)",
+    },
 }
 
 

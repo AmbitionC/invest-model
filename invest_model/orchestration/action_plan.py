@@ -314,8 +314,16 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     plan = ActionPlan(plan_date=dt, rows=rows, account=account)
     if persist and rows:
         cols = ["plan_date", "code", "name", "action", "cur_weight", "tgt_weight",
-                "shares_delta", "reason", "stop_price", "ref_price", "grade"]
-        loop.repo.upsert("action_plan", pd.DataFrame(rows)[cols], ["plan_date", "code"])
+                "shares_delta", "reason", "stop_price", "ref_price", "grade",
+                "trigger_hint", "model_rank", "model_view"]
+        df = pd.DataFrame(rows)
+        df["trigger_hint"] = df["trigger"]  # trigger 为 MySQL 保留字，落库改名
+        loop.repo.upsert("action_plan", df[cols], ["plan_date", "code"])
+        try:
+            acct = {**account, "risk_off": int(account["risk_off"])}
+            loop.repo.upsert("action_plan_account", pd.DataFrame([acct]), ["plan_date"])
+        except Exception as e:  # noqa: BLE001 - 账户元数据落库失败不阻断计划生成
+            print(f"WARN action_plan_account 落库失败：{e}")
     return plan
 
 

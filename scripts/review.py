@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -258,21 +259,11 @@ def _f(x):
     return v if np.isfinite(v) else None
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description="复盘引擎：投顾/模型/持仓/纪律 与真实收益对账")
-    ap.add_argument("--db", default=None)
-    ap.add_argument("--horizon", type=int, default=10, help="投顾前瞻窗口（预留）")
-    ap.add_argument("--out", default=None)
-    args = ap.parse_args()
-
-    repo = BaseRepository(make_engine(args.db) if args.db else make_engine())
-    asof = _asof(repo)
-    if not asof:
-        print("stock_daily 无数据，无法复盘")
-        return
+def build_review(repo: BaseRepository, asof: str, horizon: int = 10) -> str:
+    """构建四段复盘 Markdown（单段出错跳过不阻断）。"""
     lines = [f"# 复盘报告 — 截至 {asof}", "",
              "> 闭环校准：投顾说得准不准、模型分位有没有区分力、持仓靠什么赚钱。"]
-    for fn in (lambda: review_advisor(repo, asof, args.horizon),
+    for fn in (lambda: review_advisor(repo, asof, horizon),
                lambda: review_model(repo),
                lambda: review_holdings(repo),
                lambda: review_discipline(repo, asof)):
@@ -280,8 +271,44 @@ def main() -> None:
             lines += fn()
         except Exception as e:  # noqa: BLE001
             lines += ["", f"（本段复盘出错，跳过：{e}）"]
-    md = "\n".join(lines)
+    return "\n".join(lines)
+
+
+def persist_review(repo: BaseRepository, asof: str, period: str, md: str) -> None:
+    """复盘报告落库（review_report），供仪表盘展示；失败不阻断输出。"""
+    from datetime import datetime, timezone
+
+    from invest_model.data import create_schema
+
+    create_schema(repo.engine)
+    repo.upsert("review_report", pd.DataFrame([{
+        "report_date": asof, "period": period, "version": VERSION, "markdown": md,
+        "meta": json.dumps(
+            {"generated_at": datetime.now(timezone.utc).isoformat()}, ensure_ascii=False),
+    }]), ["report_date", "period"])
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="复盘引擎：投顾/模型/持仓/纪律 与真实收益对账")
+    ap.add_argument("--db", default=None)
+    ap.add_argument("--horizon", type=int, default=10, help="投顾前瞻窗口（预留）")
+    ap.add_argument("--out", default=None)
+    ap.add_argument("--period", default="weekly", choices=["daily", "weekly", "adhoc"],
+                    help="报告周期标签（落库 review_report 用）")
+    args = ap.parse_args()
+
+    repo = BaseRepository(make_engine(args.db) if args.db else make_engine())
+    asof = _asof(repo)
+    if not asof:
+        print("stock_daily 无数据，无法复盘")
+        return
+    md = build_review(repo, asof, args.horizon)
     print(md)
+    try:
+        persist_review(repo, asof, args.period, md)
+        print(f"\n复盘已落库 review_report（{asof}/{args.period}）")
+    except Exception as e:  # noqa: BLE001
+        print(f"\nWARN review_report 落库失败：{e}")
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(md, encoding="utf-8")
