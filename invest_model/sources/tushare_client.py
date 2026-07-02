@@ -5,6 +5,7 @@ import time
 from functools import wraps
 
 import pandas as pd
+import requests
 import tushare as ts
 
 from invest_model.config import get_env, load_config
@@ -95,10 +96,25 @@ def _resolve_tushare_http_url() -> str | None:
     return None
 
 
+def _use_keepalive_session() -> None:
+    """让 tushare 的所有 HTTP 请求复用同一条 keep-alive 长连接。
+
+    tushare 的 DataApi 每次 query 都用模块级 requests.post 新建 TCP 连接；
+    在公网出口 IP 不固定的环境（如阿里云 FC 的 SNAT 出口）表现为同一 token
+    秒级内从多个 IP 调用，触发数据服务「ip超限，请不要在多个ip同时使用」。
+    换成全局 Session 后连接池复用同一条连接 → 同一个出口 IP。
+    对固定 IP 环境（本机/GH Actions）也是纯收益（省去每次握手）。
+    """
+    from tushare.pro import client as _pro_client
+    if not isinstance(getattr(_pro_client, "requests", None), requests.Session):
+        _pro_client.requests = requests.Session()
+
+
 class TushareClient(BaseSource):
     """Tushare Pro 数据源"""
 
     def __init__(self):
+        _use_keepalive_session()
         token = get_env("TUSHARE_TOKEN")
         if not token or not token.strip():
             raise RuntimeError("TUSHARE_TOKEN 未设置，请在 .env 文件中配置")

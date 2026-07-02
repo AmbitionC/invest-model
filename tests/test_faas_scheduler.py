@@ -186,3 +186,21 @@ def test_run_cli_restores_argv():
     jobs._run_cli(lambda: seen.append(list(sys.argv)), ["x.py", "--flag"])
     assert seen == [["x.py", "--flag"]]
     assert sys.argv != ["x.py", "--flag"]
+
+
+# ── tushare keep-alive 会话补丁（FC 出口 IP 不固定 → ip超限 的修复）──────
+
+def test_use_keepalive_session_patches_module():
+    import requests as _requests
+    from tushare.pro import client as pro_client
+    from invest_model.sources.tushare_client import _use_keepalive_session
+
+    original = pro_client.requests
+    try:
+        _use_keepalive_session()
+        assert isinstance(pro_client.requests, _requests.Session)
+        first = pro_client.requests
+        _use_keepalive_session()  # 幂等：不重复创建
+        assert pro_client.requests is first
+    finally:
+        pro_client.requests = original
