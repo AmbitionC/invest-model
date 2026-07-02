@@ -60,6 +60,15 @@
 | 回退 | scheme 配置项切回 rank_weight |
 | 工作量 | 中（~80 行 + 回测对照） |
 
+**状态：已实施为影子版本（2026-07-02 批准）。** 生产默认行为不变
+（`scheme=rank_weight, hold_buffer=0`）；build-model 工作流在主建模后自动跑
+`pf_v2`（`--scheme inv_vol --hold-buffer 1.5`）对照回测。**看结果**：
+`SELECT name, metrics FROM backtest_run ORDER BY run_id DESC LIMIT 2`（cs_ic_v1
+vs cs_pf_v2 两行），或 build-model 日志末尾的两段回测指标。**晋升条件**：
+连续 4 期（约 4 个月的周六重建）pf_v2 的 turnover_total 显著更低且
+annual_return/sharpe 不差于 ic_v1 → 把默认 PortfolioConfig 切到
+inv_vol + hold_buffer=1.5（一处配置）。**回退**：影子版本不影响生产，无需回退。
+
 ## P5. 分域/regime 建模（低优先，暂不建议）
 
 按市值/行业分域训练，或加 regime 特征。**样本量不足**（月频×每期约 2000 票，

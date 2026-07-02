@@ -45,6 +45,11 @@ def main() -> None:
     ap.add_argument("--universe-method", default="alla")
     ap.add_argument("--top-n", type=int, default=30)
     ap.add_argument("--max-weight", type=float, default=0.08)
+    ap.add_argument("--scheme", default="rank_weight",
+                    choices=["rank_weight", "equal", "score_weight", "inv_vol"],
+                    help="组合加权：inv_vol=rank 权重×20日波动倒数（P4 影子）")
+    ap.add_argument("--hold-buffer", type=float, default=0.0,
+                    help="缓冲区换手抑制：已持有且排名在 top_n×此倍数内保留（0=关，P4 影子建议 1.5）")
     ap.add_argument("--benchmark", default="000300.SH")
     ap.add_argument("--ic-window", type=int, default=12)
     ap.add_argument("--ic-mode", default="icir", choices=["icir", "ic"])
@@ -82,6 +87,7 @@ def main() -> None:
         risk=risk,
         universe=UniverseConfig(method=args.universe_method),
         portfolio=PortfolioConfig(top_n=args.top_n, max_weight=args.max_weight,
+                                  scheme=args.scheme, hold_buffer=args.hold_buffer,
                                   advisor_led=args.advisor_led),
     )
 

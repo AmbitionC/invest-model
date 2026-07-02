@@ -156,10 +156,35 @@ class ClosedLoop:
         inds = set(self.industry_map().values())
         return {ind for ind in inds for t in names if t and (t in ind or ind in t)}
 
-    def _build_targets(self, dt: str, p: pd.DataFrame, gross: float) -> tuple[dict, dict]:
+    def _vol20_map(self, dt: str, codes: list[str]) -> dict[str, float]:
+        """近 20 交易日日收益波动（pct_chg 标准差，小数）。scheme=inv_vol 加权用。"""
+        if not codes:
+            return {}
+        start = (pd.to_datetime(dt) - pd.Timedelta(days=45)).strftime("%Y%m%d")
+        out: dict[str, float] = {}
+        for i in range(0, len(codes), 800):
+            batch = codes[i:i + 800]
+            ph = ",".join(f":c{j}" for j in range(len(batch)))
+            params = {f"c{j}": c for j, c in enumerate(batch)}
+            params.update(s=start, d=dt)
+            df = self.repo.read_sql(
+                f"SELECT code, trade_date, pct_chg FROM stock_daily "
+                f"WHERE trade_date>=:s AND trade_date<=:d AND code IN ({ph})", params)
+            if df.empty:
+                continue
+            df["pct_chg"] = pd.to_numeric(df["pct_chg"], errors="coerce")
+            for c, g in df.sort_values("trade_date").groupby("code"):
+                v = g["pct_chg"].dropna().tail(20)
+                if len(v) >= 10:
+                    out[str(c)] = float(v.std()) / 100.0
+        return out
+
+    def _build_targets(self, dt: str, p: pd.DataFrame, gross: float,
+                       cur_codes: set[str] | None = None) -> tuple[dict, dict]:
         """构建 dt 目标组合，返回 (weights, meta)。投顾为主或纯量化由 portfolio.advisor_led 决定。
 
         重构为独立方法，供回测 target_provider 与实盘 action_plan 共用。
+        cur_codes：现持仓代码（hold_buffer 换手抑制用；回测传当前权重键、实盘传真实持仓）。
         """
         pcfg = self.cfg.portfolio
         scores = p[["code", "score", "rank_pct"]] if not p.empty else p
@@ -170,6 +195,10 @@ class ClosedLoop:
             if df.empty:
                 return []
             return list(df.sort_values("score", ascending=False).head(topk)["code"])
+
+        vol_map = None
+        if pcfg.scheme == "inv_vol" and not p.empty:
+            vol_map = self._vol20_map(dt, _top_codes(scores) + sorted(cur_codes or set()))
 
         if pcfg.advisor_led:
             advisor_df = self.adv_repo.get_active_reco(dt)
@@ -183,16 +212,18 @@ class ClosedLoop:
             return fuse_targets(scores, pcfg, advisor_df, gross=gross,
                                 trend_ok_codes=trend_codes, exit_codes=exit_codes,
                                 theme_industries=self._theme_industries(dt),
-                                industry_map=self.industry_map())
+                                industry_map=self.industry_map(),
+                                current_codes=cur_codes, vol_map=vol_map)
         # 纯量化
         if self.cfg.risk.trend_filter and not p.empty:
             ok = trend_ok(self.engine, dt, _top_codes(scores), self.cfg.risk)
             scores = scores[scores["code"].isin(ok)]
-        targets = build_targets(scores, pcfg, gross=gross, industry_map=self.industry_map())
+        targets = build_targets(scores, pcfg, gross=gross, industry_map=self.industry_map(),
+                                current_codes=cur_codes, vol_map=vol_map)
         meta = {c: {"grade": None, "source": "quant"} for c in targets}
         return targets, meta
 
-    def _target_provider(self, dt: str, _cur: dict[str, float]) -> dict[str, float]:
+    def _target_provider(self, dt: str, cur: dict[str, float]) -> dict[str, float]:
         p = self.pred_repo.get_predictions(dt, self.cfg.version)
         if p.empty:
             p = self._predict_one(dt)
@@ -202,7 +233,7 @@ class ClosedLoop:
         if p.empty and not self.cfg.portfolio.advisor_led:
             return {}
         gross = self.mt.gross_exposure(dt, list(u) if u else None)
-        targets, meta = self._build_targets(dt, p, gross)
+        targets, meta = self._build_targets(dt, p, gross, cur_codes=set(cur or {}))
         # 落 portfolio_target（带 grade/source）
         if targets:
             rows = [{"trade_date": dt, "version": self.cfg.version, "code": c,

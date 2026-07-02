@@ -167,7 +167,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         pass
     model_trust = _model_trust(m_ic_ir)
     gross = loop.mt.gross_exposure(dt, list(u) if u else None)
-    targets, meta = loop._build_targets(dt, preds, gross)
+    targets, meta = loop._build_targets(dt, preds, gross, cur_codes=set(held_codes))
     exit_codes = loop.adv_repo.get_exit_codes(dt)
 
     # ── 观察池 + 复合买点（手册第1-2步）：研报标的先观察，仅买点触发才建议买入 ──

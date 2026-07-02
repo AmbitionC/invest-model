@@ -11,9 +11,12 @@ import pandas as pd
 @dataclass
 class PortfolioConfig:
     top_n: int = 30
-    scheme: str = "rank_weight"     # equal | rank_weight | score_weight
+    scheme: str = "rank_weight"     # equal | rank_weight | score_weight | inv_vol
     max_weight: float = 0.08        # 单票上限
     industry_cap: float | None = 0.30  # 单行业上限（可选，None=不限）
+    # 缓冲区换手抑制（P4，0=关闭）：已持有且排名仍在 top_n×hold_buffer 内的票
+    # 保留不换出，名额剩余部分按排名递补——排名小幅波动不再触发换仓，直接压换手。
+    hold_buffer: float = 0.0
     # ── 投顾为主融合（advisor_led=True 时生效）──
     advisor_led: bool = False
     # 分级 conviction 权重（归一化前）。默认 A=2×B 且 A 顶到 advisory_name_cap，
@@ -53,14 +56,30 @@ def build_targets(
     cfg: PortfolioConfig,
     gross: float = 1.0,
     industry_map: dict[str, str] | None = None,
+    current_codes: set[str] | None = None,
+    vol_map: dict[str, float] | None = None,
 ) -> dict[str, float]:
-    """scores：含 code, score（可选 rank_pct）。返回 {code: weight}，Σ=gross。"""
+    """scores：含 code, score（可选 rank_pct）。返回 {code: weight}，Σ=gross。
+
+    current_codes：现持仓代码（cfg.hold_buffer>0 时启用缓冲区换手抑制）；
+    vol_map：{code: 20日波动}（cfg.scheme="inv_vol" 时做波动倒数调整）。
+    """
     if scores is None or scores.empty:
         return {}
     s = scores.dropna(subset=["score"]).sort_values("score", ascending=False)
     if cfg.industry_cap and industry_map:
         s = _apply_industry_cap(s, cfg, industry_map)
-    top = s.head(cfg.top_n).copy()
+    if cfg.hold_buffer and current_codes:
+        # 缓冲区：已持有且排名在 top_n×hold_buffer 内 → 保留；剩余名额按排名递补
+        order = list(s["code"])
+        buffer_n = max(cfg.top_n, int(cfg.top_n * cfg.hold_buffer))
+        keep = [c for c in order[:buffer_n] if c in current_codes][: cfg.top_n]
+        kept = set(keep)
+        fill = [c for c in order if c not in kept][: max(0, cfg.top_n - len(keep))]
+        chosen = kept | set(fill)
+        top = s[s["code"].isin(chosen)].head(cfg.top_n).copy()
+    else:
+        top = s.head(cfg.top_n).copy()
     if top.empty:
         return {}
 
@@ -71,8 +90,15 @@ def build_targets(
         v = top["score"].to_numpy()
         v = v - v.min() + 1e-6
         raw = pd.Series(v, index=top["code"].values)
-    else:  # rank_weight
+    else:  # rank_weight（inv_vol 在其基础上做波动倒数调整）
         raw = pd.Series(np.arange(n, 0, -1, dtype=float), index=top["code"].values)
+    if cfg.scheme == "inv_vol" and vol_map:
+        # 波动倒数调整：相对截面中位波动缩放，clip 防单票极端；缺波动数据的票不调
+        v = pd.Series({c: vol_map.get(c, np.nan) for c in raw.index}, dtype=float)
+        med = v.median()
+        if np.isfinite(med) and med > 0:
+            adj = (v / med).clip(0.5, 2.0).fillna(1.0)
+            raw = raw / adj
 
     w = raw / raw.sum()
     w = _cap_weights(w, cfg.max_weight)
@@ -90,6 +116,8 @@ def fuse_targets(
     exit_codes: set[str] | None = None,
     theme_industries: set[str] | None = None,
     industry_map: dict[str, str] | None = None,
+    current_codes: set[str] | None = None,
+    vol_map: dict[str, float] | None = None,
 ) -> tuple[dict[str, float], dict[str, dict]]:
     """投顾为主 + 量化补充。返回 (weights {code:w}, meta {code:{'grade','source'}})。
 
@@ -142,7 +170,8 @@ def fuse_targets(
         qs = qs[~qs["code"].isin(drop)]
         if trend_ok_codes is not None:
             qs = qs[qs["code"].isin(trend_ok_codes)]
-        quant_weights = build_targets(qs, cfg, gross=remaining, industry_map=industry_map)
+        quant_weights = build_targets(qs, cfg, gross=remaining, industry_map=industry_map,
+                                      current_codes=current_codes, vol_map=vol_map)
         for c in quant_weights:
             meta.setdefault(c, {"grade": None, "source": "quant"})
 

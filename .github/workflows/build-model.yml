@@ -75,3 +75,11 @@ jobs:
           PY
       - name: 建模（universe→因子→预测→回测→导出，只用库内数据）
         run: python scripts/run_pipeline.py --mode all --start "$START"
+      - name: P4 影子对照回测（pf_v2：inv_vol + 换手缓冲 1.5，复用已建因子/宇宙）
+        # A/B 观测：与上一步 cs_ic_v1 的回测行同落 backtest_run 表，对比
+        # turnover_total（预期降 30%+）、annual_return、sharpe、max_drawdown。
+        # 红线与晋升标准见 docs/model_change_proposals.md P4。失败不阻断主建模。
+        run: |
+          python scripts/run_pipeline.py --mode backtest --start "$START" \
+            --version pf_v2 --scheme inv_vol --hold-buffer 1.5 \
+            || echo "WARN P4 影子回测失败（不阻断主建模）"
