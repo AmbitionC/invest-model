@@ -8,8 +8,14 @@ name: plan-notify
 # 依赖 data-update 已把当日数据/预测刷进 MySQL。未配 Secrets 前只失败、无副作用。
 
 on:
+  # 主触发：data-update 完成即链式出计划——实测本仓库 schedule 延迟 2.8~5.8h，
+  # 两个独立 cron 会叠加两层延迟；链式后只吃 data-update 一层延迟，且天然保证
+  # 「先有当日数据、再出计划」的顺序。cron 档保留作兜底（data-update 整档被跳过时）。
+  workflow_run:
+    workflows: [data-update]
+    types: [completed]
   schedule:
-    # 工作日 17:30 北京时间(=09:30 UTC)，盘后数据更新之后
+    # 工作日 17:30 北京时间(=09:30 UTC)，盘后数据更新之后（兜底档）
     - cron: "30 9 * * 1-5"
   workflow_dispatch: {}
 
@@ -25,6 +31,8 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # 链式触发时只在 data-update 成功后出计划（失败的数据不出计划，避免误导）
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     env:
       # 数据库：优先 INVEST_DB_URL；否则回落 DB_*（与 fe-journey-faas 同名，可设 Org secret 共用），
       # 库名固定 invest。详见 data-update.yml 注释。
@@ -61,8 +69,12 @@ jobs:
             const fs = require('fs');
             const title = '📈 每日操作计划';
             const body = fs.readFileSync('results/action_plan.md', 'utf8');
-            const today = new Date(Date.now() + 8 * 3600 * 1000)
-              .toISOString().slice(0, 10);   // 北京日期
+            const bj = new Date(Date.now() + 8 * 3600 * 1000);
+            const today = bj.toISOString().slice(0, 10);   // 北京日期
+            if (bj.getUTCDay() === 0 || bj.getUTCDay() === 6) {
+              core.info('周末不发计划（周六 data-update 全量刷新的链式触发到此为止）。');
+              return;
+            }
             const { owner, repo } = context.repo;
 
             // 找到(或新建)那条追加用的 issue
@@ -78,6 +90,15 @@ jobs:
               issue = created.data;
             }
 
+            // 防重：链式触发与 cron 兜底同一天都到达时，只发第一封
+            const existing = await github.rest.issues.listComments({
+              owner, repo, issue_number: issue.number, per_page: 30,
+              sort: 'created', direction: 'desc',
+            });
+            if (existing.data.some(c => c.body.startsWith(`## ${today} 盘后操作计划`))) {
+              core.info(`${today} 的计划已发过，跳过（链式/cron 双触发防重）。`);
+              return;
+            }
             await github.rest.issues.createComment({
               owner, repo, issue_number: issue.number,
               body: `## ${today} 盘后操作计划\n\n${body}`,

@@ -11,18 +11,22 @@ name: live-watch
 
 on:
   schedule:
-    # 多档错时开盯，保证「今天一定有人在盯」：GitHub schedule 不保证准点(高峰延迟/偶尔跳过)，
-    # 故 09:25 / 09:40 / 10:00 北京时间各触发一次。任一档没被跳过即有覆盖；某档已在跑时后一档
-    # 会顶掉重启(concurrency cancel-in-progress)，但脚本从当日 issue 评论恢复「已推送」集合去重，
-    # 不会重复报警——等于顺带自愈(进程若卡死，下一档强制重启接管)。收盘后启动的兜底 run 秒退。
-    # 节假日由脚本内 trade_cal 守卫直接退出，不空转。注意：schedule 仅在默认分支(master)生效。
-    - cron: "25 1 * * 1-5"   # 09:25 CST 主开盯
-    - cron: "40 1 * * 1-5"   # 09:40 CST 兜底①（09:25 被跳过/延迟时接管）
-    - cron: "0 2 * * 1-5"    # 10:00 CST 兜底②（前两档都没起时的最后保障）
+    # ⚠️ 实测本仓库 GitHub schedule 延迟 2.8~5.8 小时、且有整档跳过（07-01 live-check
+    # 07:20 UTC 档、07-02 live-watch 01:25 UTC 档都没触发）——schedule 在私有仓库
+    # 不能指望分钟级准点。策略：
+    #   1) 「早鸟档」07:10 CST：即便延迟 2~6 小时，落点也在 09:10~13:10 之间，
+    #      脚本自带「开盘前等待/收盘退出」，早到就等、晚到就从当下盯起；
+    #   2) 09:25 直发档：偶尔准点就赚到；
+    #   3) live-watch-guard.yml 看门狗在多个时点补拉（同样受延迟影响，作午后兜底）；
+    #   4) 真正要分钟级准点，用外部触发（见 docs/scheduled_update.md「外部准点触发」）。
+    # 并发为「排队不打断」（见下 concurrency），多档重叠只排队、不会互相顶掉。
+    # 节假日由脚本内 trade_cal 守卫直接退出。schedule 仅在默认分支(master)生效。
+    - cron: "10 23 * * 0-4"  # 07:10 CST 早鸟档（延迟后大概率落在盘中，直接接管）
+    - cron: "25 1 * * 1-5"   # 09:25 CST 直发档
   workflow_dispatch:
     inputs:
       interval:
-        description: "轮询间隔秒数"
+        description: "常态轮询间隔秒数（距触发线远近自适应升降频）"
         default: "60"
   push:
     paths:
@@ -30,7 +34,10 @@ on:
 
 concurrency:
   group: live-watch
-  cancel-in-progress: true
+  # 排队不打断：新触发（另一档 cron/guard 补拉）在旧 run 健康运行时排队等待，
+  # 而不是 cancel 重启——避免无谓打断；旧 run 收盘退出后，排队的 run 启动并因
+  # 已过收盘秒退。需要「改参数重启」时：手动 cancel 运行中的 run 再 dispatch。
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -64,7 +71,8 @@ jobs:
           cache: pip
       - name: Install package
         run: pip install -e .
-      - name: 常驻盯盘（每 INTERVAL 秒，新触发推送到跟踪 issue）
+      - name: 常驻盯盘（自适应轮询，风控即推/买点摘要合并推）
         run: |
           python scripts/live_check.py --watch --interval "$INTERVAL" --notify \
+            --min-interval 20 --max-interval 180 --digest-window 20 \
             --hard-stop 0.08 --pullback-pct 0.03

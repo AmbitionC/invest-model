@@ -295,17 +295,27 @@ def _build_context(args: argparse.Namespace) -> dict:
             "cash": _account_cash(), "equity": _account_equity()}
 
 
-def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, list, list]:
+def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, list, list, float]:
     """用实时价 rt 评估持仓风控（股票+ETF） + 观察池买点。
 
-    返回 (股票持仓行, 观察行, ETF持仓行, 预警) 四元组；预警为 [(dedup_key, 展示行)]，
-    dedup_key 含状态标签——同一票同一状态只算一次，状态切换才算新预警。
+    返回 (股票持仓行, 观察行, ETF持仓行, 预警, 距触发线最小距离) 五元组；
+    预警为 [(dedup_key, 展示行, 严重级)]，dedup_key 含状态标签——同一票同一状态
+    只算一次，状态切换才算新预警。严重级："crit"=卖出类风控（立即推送），
+    "batch"=买点/提示类（合并摘要推送）。最小距离用于自适应轮询频率。
     """
     holds = ctx["holds"]; levels = ctx["levels"]
     trailing_only = ctx["trailing_only"]; g_of = ctx["g_of"]
     cash = ctx.get("cash", 0.0); equity = ctx.get("equity", 0.0) or 0.0
     buy_w = getattr(args, "buy_weight", 0.05)
     hold_rows, watch_rows, etf_rows, alerts = [], [], [], []
+    dists: list[float] = []   # 各票距最近触发线的相对距离（仅未触发的正距离）
+
+    def _track(px: float, *lvls: float | None) -> None:
+        for lv in lvls:
+            if lv and lv > 0 and px > 0:
+                d = abs(px / lv - 1.0)
+                if d > 1e-6:
+                    dists.append(d)
     for _, h in holds.iterrows():
         c = h["code"]; q = rt.get(c, {}); lv = levels.get(c, {})
         px = q.get("price"); pre = q.get("pre_close"); cost = float(h["cost_price"] or 0)
@@ -325,6 +335,8 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         else:
             st, hit = ("持有(MA20移动止盈)" if ex else "持有"), False
         hold_rows.append((q.get("name", c), px, chg, cost, pnl, stop, ma20, st))
+        if not hit:
+            _track(px, None if ex else stop, ma20 * 0.995 if ma20 else None)
         if hit:
             # 挂单信号：清仓类给「卖 全部股数 限价≈现价，占比→0，回笼资金」；逼近只提示不给单
             if "逼近" in st:
@@ -333,8 +345,9 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
                 cw = (sh * px / equity) if equity else 0.0
                 ticket = (f" → 卖 {int(sh)}股 市价/限价≈{px:.2f} 清"
                           f"(占{cw:.1%}→0,回笼≈{sh * px:.0f})")
+            sev = "batch" if "逼近" in st else "crit"
             alerts.append((f"H:{c}:{st}",
-                           f"🔴 持仓 {q.get('name', c)} {px:.2f}({chg:+.1%}) — {st}{ticket}"))
+                           f"🔴 持仓 {q.get('name', c)} {px:.2f}({chg:+.1%}) — {st}{ticket}", sev))
     for c in ctx["watch"]:
         q = rt.get(c, {}); lv = levels.get(c, {}); px = q.get("price")
         if not px or not lv:
@@ -352,12 +365,15 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         else:
             st, hit = "上方运行，等回踩MA20", False
         watch_rows.append((q.get("name", c), g_of.get(c, ""), px, ma20, hi20, st))
+        if not hit and "趋势未上" not in st:
+            _track(px, ma20, hi20)
         if hit:
             # 挂单信号：回踩位挂 MA20、突破位挂 20日高，按目标占比定量（股数/金额/占比）
             lvl = ma20 if "回踩" in st else hi20
             ticket = " → " + _buy_ticket(lvl, cash, equity, buy_w)
             alerts.append((f"W:{c}:{st}",
-                           f"🟢 观察 {q.get('name', c)}({g_of.get(c, '')}) {px:.2f} — {st}{ticket}"))
+                           f"🟢 观察 {q.get('name', c)}({g_of.get(c, '')}) {px:.2f} — {st}{ticket}",
+                           "batch"))
     # ETF 持仓风控：无移动止盈白名单概念，一律按 硬止损 + 破MA20 管
     for e in ctx.get("etf_holds", []):
         c = e["code"]; q = rt.get(c, {}); lv = ctx["etf_levels"].get(c, {})
@@ -376,6 +392,8 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         else:
             st, hit = "持有", False
         etf_rows.append((e["name"], px, chg, cost, pnl, stop, ma20, st))
+        if not hit:
+            _track(px, stop, ma20 * 0.995 if ma20 else None)
         if hit:
             if "逼近" in st:
                 ticket = ""
@@ -383,9 +401,11 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
                 cw = (e["shares"] * px / equity) if equity else 0.0
                 ticket = (f" → 卖 {int(e['shares'])}份 市价/限价≈{px:.3f} 减/清"
                           f"(占{cw:.1%}→0,回笼≈{e['shares'] * px:.0f})")
+            sev = "batch" if "逼近" in st else "crit"
             alerts.append((f"E:{c}:{st}",
-                           f"🟠 ETF持仓 {e['name']} {px:.3f}({chg:+.1%}) — {st}{ticket}"))
-    return hold_rows, watch_rows, etf_rows, alerts
+                           f"🟠 ETF持仓 {e['name']} {px:.3f}({chg:+.1%}) — {st}{ticket}", sev))
+    min_dist = min(dists) if dists else float("inf")
+    return hold_rows, watch_rows, etf_rows, alerts, min_dist
 
 
 _GH_API = "https://api.github.com"
@@ -484,13 +504,45 @@ def _seed_seen(cache: list) -> set[str]:
     return seen
 
 
-def _watch(args: argparse.Namespace) -> None:
-    """常驻盯盘：交易时段内每 interval 秒轮询一次，只在出现「新」触发时推送。
+def _next_interval(min_dist: float, base: int, lo: int, hi: int) -> int:
+    """自适应轮询间隔：距最近触发线 <1% 时提频到 lo，<3% 用 base，更远放宽到 hi。
 
-    午休/盘前自动暂停，收盘（15:00 后）或非交易日自动退出，避免空转占用 job。
+    效果：临界时刻更敏锐（不错过止损/买点），平静时段少打 API（限频友好），
+    整体消耗反而低于固定 base 间隔。
+    """
+    if min_dist <= 0.01:
+        return lo
+    if min_dist <= 0.03:
+        return base
+    return hi
+
+
+def _should_flush(has_crit: bool, pending_n: int, pending_age_s: float,
+                  digest_s: float, hm: int) -> bool:
+    """摘要缓冲是否该推送：
+    - 出现关键预警（卖出类风控）→ 立即推，顺带清空缓冲；
+    - 缓冲最早一条达到 digest 窗口龄期 → 合并推一封；
+    - 临近收盘（14:45 后）→ 强制清空，不让当日机会过夜。
+    """
+    if has_crit:
+        return True
+    if pending_n <= 0:
+        return False
+    return pending_age_s >= digest_s or hm >= 885
+
+
+def _watch(args: argparse.Namespace) -> None:
+    """常驻盯盘：交易时段内轮询，预警分级推送——卖出类风控立即推，
+    买点/提示类进缓冲按 --digest-window 合并推送（减少邮件打扰、不漏关键信号）。
+
+    轮询间隔自适应：距任一触发线 <1% 提频到 --min-interval，平静时放宽到
+    --max-interval。午休/盘前自动暂停，收盘（15:00 后）或非交易日自动退出。
     均线基准与持仓/观察池只在首个交易周期取一次并全天复用；每周期仅刷新实时价。
     """
     interval = max(15, args.interval)
+    lo = max(10, args.min_interval)
+    hi = max(interval, args.max_interval)
+    digest_s = max(0, args.digest_window) * 60
     # 交易日守卫：cron 每工作日 09:25 起，节假日（trade_cal is_open=0）直接退出，不空转占用额度。
     today = _now_cst().strftime("%Y%m%d")
     if _is_trading_day(today) is False:
@@ -498,10 +550,13 @@ def _watch(args: argparse.Namespace) -> None:
         return
     ctx = None
     issue = [None]
-    # 跨重启去重：从今日 issue 评论恢复「已推送」集合，重启/重跑不重复推同一信号
+    # 跨重启去重：从今日 issue 评论恢复「已推送」集合，重启/重跑不重复推同一信号。
+    # 摘要缓冲里「已检测未推送」的条目不写 marker，重启后会重新检测进缓冲，不丢。
     seen: set[str] = _seed_seen(issue) if args.notify else set()
     if seen:
         print(f"↺ 已从今日评论恢复 {len(seen)} 条已推送信号（重启不重复推，仅新增/变化才推）")
+    pending: list[tuple[str, str]] = []      # 摘要缓冲 [(key, line)]
+    pending_since: datetime | None = None    # 缓冲最早一条的入队时间
     while True:
         now = _now_cst()
         hm = now.hour * 60 + now.minute
@@ -529,7 +584,7 @@ def _watch(args: argparse.Namespace) -> None:
         # 下轮重试，绝不让全天常驻 job 因一次瞬时错误崩溃。
         try:
             rt = _fetch_rt(ctx)
-            _, _, _, alerts = _scan(ctx, rt, args)
+            _, _, _, alerts, min_dist = _scan(ctx, rt, args)
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ {now:%H:%M} CST 本轮取数/评估失败，跳过：{repr(e)[:160]}")
             time.sleep(interval)
@@ -542,19 +597,39 @@ def _watch(args: argparse.Namespace) -> None:
             line = f"🔎 ETF实时自检：{n}/{len(got)} 取到现价（{detail}）{tail}"
             print(line)
             key = f"ETFSELF:{today}:{n}"    # 含结果数，状态变化即重发一次；去重跨重启
-            if args.notify and key not in seen:
+            if key not in seen:            # 自检属提示类：进摘要缓冲，不单发邮件
                 seen.add(key)
-                _gh_notify(issue, now, line, [key])
-        new = [(k, line) for k, line in alerts if k not in seen]
-        for k, _ in new:
+                if not pending:
+                    pending_since = now
+                pending.append((key, line))
+        # 分级：卖出类风控(crit)立即推；买点/提示类(batch)进缓冲合并推
+        new = [(k, line, sev) for k, line, sev in alerts if k not in seen]
+        for k, _, _ in new:
             seen.add(k)
+        crit = [(k, line) for k, line, sev in new if sev == "crit"]
+        batch = [(k, line) for k, line, sev in new if sev != "crit"]
+        if batch:
+            if not pending:
+                pending_since = now
+            pending.extend(batch)
         if new:
-            body = "\n".join(line for _, line in new)
-            print(f"⏰ {now:%H:%M} CST 新触发 {len(new)} 项：\n{body}")
-            if args.notify:
-                _gh_notify(issue, now, body, [k for k, _ in new])
+            print(f"⏰ {now:%H:%M} CST 新触发 {len(new)} 项"
+                  f"（即时 {len(crit)} / 缓冲 {len(batch)}，缓冲积压 {len(pending)}）：\n"
+                  + "\n".join(line for _, line, _ in new))
         else:
-            print(f"✓ {now:%H:%M} CST 无新触发（累计已报 {len(seen)}）")
+            print(f"✓ {now:%H:%M} CST 无新触发（累计已报 {len(seen)}，缓冲积压 {len(pending)}）")
+        age = (now - pending_since).total_seconds() if pending_since else 0.0
+        if args.notify and _should_flush(bool(crit), len(pending), age, digest_s, hm):
+            items = crit + pending
+            if items:
+                head = ("🚨 即时风控预警" if crit else
+                        f"📬 摘要（{len(pending)} 条买点/提示，窗口 {args.digest_window}min）")
+                body = head + "\n\n" + "\n".join(line for _, line in items)
+                _gh_notify(issue, now, body, [k for k, _ in items])
+                pending, pending_since = [], None
+        elif crit and not args.notify:
+            pass                            # 未开推送时 crit 已随日志打印
+        interval = _next_interval(min_dist, max(15, args.interval), lo, hi)
         time.sleep(interval)
 
 
@@ -571,7 +646,14 @@ def main() -> None:
     ap.add_argument("--watch", action="store_true",
                     help="常驻盯盘：交易时段内每 --interval 秒轮询，只报新触发")
     ap.add_argument("--interval", type=int, default=60,
-                    help="--watch 轮询间隔秒数（默认 60）")
+                    help="--watch 常态轮询间隔秒数（默认 60；距触发线远近自适应升降频）")
+    ap.add_argument("--min-interval", type=int, default=20,
+                    help="距任一触发线 <1%% 时的提频间隔秒数（默认 20）")
+    ap.add_argument("--max-interval", type=int, default=180,
+                    help="距所有触发线 >3%% 时的降频间隔秒数（默认 180，限频友好）")
+    ap.add_argument("--digest-window", type=int, default=20,
+                    help="买点/提示类预警的摘要合并窗口（分钟，默认 20；"
+                         "卖出类风控不受此限、始终立即推送；0=全部立即推）")
     ap.add_argument("--notify", action="store_true",
                     help="--watch 时把新触发追加到跟踪 issue（需 GITHUB_TOKEN/REPOSITORY）")
     args = ap.parse_args()
@@ -587,13 +669,13 @@ def main() -> None:
 
     ctx = _build_context(args)
     rt = _fetch_rt(ctx)
-    hold_rows, watch_rows, etf_hold_rows, alerts = _scan(ctx, rt, args)
+    hold_rows, watch_rows, etf_hold_rows, alerts, _ = _scan(ctx, rt, args)
 
     if args.alert:
         ts = f"{now:%H:%M} CST"
         if alerts:
             print(f"⏰ {ts} 触发 {len(alerts)} 项：")
-            print("\n".join(line for _, line in alerts))
+            print("\n".join(line for _, line, _sev in alerts))
         else:
             print(f"✓ {ts} 无触发（持仓未碰止损/破位，观察池未到买点）")
         return

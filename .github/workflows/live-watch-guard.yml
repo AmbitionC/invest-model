@@ -1,0 +1,53 @@
+name: live-watch-guard
+
+# 盯盘看门狗：盘中多个时点检查 live-watch 是否在跑，没有就 workflow_dispatch 拉起。
+#
+# 为什么用看门狗而不是在 live-watch 里堆多档 cron 兜底：
+#   - GitHub schedule 不保证准点（高峰延迟/偶尔整档跳过），单靠 cron 一定有漏网天；
+#   - live-watch 的 concurrency cancel-in-progress 下，多档 cron 会把「健康运行中」的
+#     实例无谓打断重启（重新取上下文、丢当轮扫描）；看门狗只在「确实没人在盯」时拉起，
+#     不打扰健康实例。
+#   - 看门狗本身的 schedule 也可能延迟——无妨，它晚到几分钟照样能补拉；四个时点
+#     全部被跳过的概率可忽略。
+#
+# 检查动作只读 Actions API + 可能 dispatch 一次，几秒结束，消耗可忽略。
+# 非交易日：live-watch 被拉起后由脚本内 trade_cal 守卫秒退，看门狗无需自带日历。
+
+on:
+  schedule:
+    # 北京时间 09:32 / 09:55 / 10:30 / 13:10（UTC+8）：
+    # 覆盖「09:25 主档没起」「起了但早盘崩了」「午后进程挂了」三类缺口。
+    - cron: "32 1 * * 1-5"
+    - cron: "55 1 * * 1-5"
+    - cron: "30 2 * * 1-5"
+    - cron: "10 5 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  actions: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: 检查 live-watch 是否在跑，缺则拉起
+        run: |
+          set -e
+          # 收盘后（北京 14:50 后）不再拉起：剩余时段太短，没有盯的价值
+          hm=$(TZ=Asia/Shanghai date +%H%M)
+          if [ "$hm" -gt 1450 ]; then
+            echo "⏹ 北京时间 $hm 已近收盘，不拉起。"
+            exit 0
+          fi
+          in_progress=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/live-watch.yml/runs?status=in_progress&per_page=1" --jq '.total_count')
+          queued=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/live-watch.yml/runs?status=queued&per_page=1" --jq '.total_count')
+          echo "live-watch: in_progress=$in_progress queued=$queued"
+          if [ "$in_progress" -eq 0 ] && [ "$queued" -eq 0 ]; then
+            echo "🚨 无 live-watch 在跑，dispatch 拉起（脚本自带交易日/收盘守卫）"
+            gh workflow run live-watch.yml
+          else
+            echo "✓ live-watch 正常在跑，不打扰。"
+          fi
