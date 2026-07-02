@@ -60,3 +60,38 @@ GitHub 官方也明确 schedule 是"尽力而为"。因此：
 
 live-watch 的并发策略是「排队不打断」：外部触发与仓库内档位重叠时只排队，
 不会打断已在跑的健康实例，也不会重复报警（去重集从当日 issue 评论恢复）。
+
+## 盯盘迁出 GitHub Actions（成本必读）
+
+**常驻盯盘在 GitHub runner 上跑，空转等待也按分钟计费**：每交易日 ~320 分钟，
+免费额度 2000 分钟/月约 6 个交易日耗尽，超额 $0.008/分钟（≈¥18/交易日）。
+盘后任务（data-update ~15min/日、plan-notify ~10min/日、周六全量 ~90min）
+合计每月仅 ~1000 分钟，留在 Actions 没问题。**只需把 live-watch 迁出去。**
+
+### 方案 A：自己的电脑/服务器跑脚本（推荐，零成本，顺带解决准点问题）
+
+脚本自包含，任何能出网的机器都能跑：
+
+```bash
+# 1) 环境变量（.env 或 export）：
+#    INVEST_DB_URL=mysql+pymysql://...   TUSHARE_TOKEN=...   TUSHARE_HTTP_URL=...
+#    GITHUB_TOKEN=<PAT: 本仓库 Issues: Read and write>   GITHUB_REPOSITORY=AmbitionC/invest-model
+# 2) crontab（工作日 09:20 启动；脚本自带节假日守卫/收盘退出/去重，与云端行为一致）：
+20 9 * * 1-5  cd /path/to/invest-model && python scripts/live_check.py --watch --notify \
+    --min-interval 20 --max-interval 180 --digest-window 20 \
+    --hard-stop 0.08 --pullback-pct 0.03 >> logs/live_watch.log 2>&1
+# 3) 迁移完成后：GitHub 仓库 Settings → Variables 设 LIVE_WATCH_ON_ACTIONS=0
+```
+
+预警仍推到同一个 GitHub issue（邮件不变）；本地/云端切换随时可逆（删掉该 Variable 即回云端）。
+
+### 方案 B：自托管 runner（零代码改动，分钟数免费）
+
+在常开机器装 GitHub self-hosted runner，把 live-watch.yml 的 `runs-on` 改成
+`[self-hosted]`——自托管 runner 不消耗 Actions 分钟额度，工作流逻辑零改动。
+
+### 方案 C：留在云端付费
+
+维持现状 ≈ 每月超额 6000 分钟 ≈ $48/月。不建议；若临时接受，请在
+Settings → Billing 给 Actions 设一个小额预算（如 $10）而非 $0——$0 会在额度
+耗尽后**冻结全部工作流**（盘后计划/数据更新一并停摆）。

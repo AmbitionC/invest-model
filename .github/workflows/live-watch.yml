@@ -45,6 +45,11 @@ permissions:
 
 jobs:
   watch:
+    # ⛔ 成本开关：常驻盯盘每交易日消耗 ~320 分钟 Actions 额度（免费 2000/月，
+    # 约 6 个交易日耗尽）。在 Settings → Variables 设 LIVE_WATCH_ON_ACTIONS=0
+    # 即停用本工作流的所有触发（迁移到本地/自托管后使用，见
+    # docs/scheduled_update.md「盯盘迁出 GitHub Actions」）。
+    if: vars.LIVE_WATCH_ON_ACTIONS != '0'
     runs-on: ubuntu-latest
     # 覆盖整个交易时段（09:30-15:00 约 5.5h）；python 到 15:00 会自动退出，不会空转到超时。
     timeout-minutes: 360

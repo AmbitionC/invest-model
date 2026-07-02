@@ -28,6 +28,8 @@ permissions:
 
 jobs:
   guard:
+    # 与 live-watch 共用成本开关：LIVE_WATCH_ON_ACTIONS=0 时看门狗也不再补拉
+    if: vars.LIVE_WATCH_ON_ACTIONS != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
