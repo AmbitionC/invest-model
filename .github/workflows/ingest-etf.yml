@@ -5,9 +5,10 @@ name: ingest-etf
 # 需 Tushare（fund_daily+fund_adj）；仅 master 触发。
 
 on:
-  schedule:
-    # 工作日 16:50 北京(=08:50 UTC)，收盘后、data-update(17:00)/plan(17:30) 之前
-    - cron: "50 8 * * 1-5"
+  # ⚠️ 定时触发已迁移至阿里云 FC 定时函数（fe-journey-faas 仓库 s.yaml 里的
+  # invest-scheduler / invest-live-watch，代码在本仓库 faas/ 目录）。
+  # 迁移原因：Actions 免费额度不足 + schedule 实测延迟 2.8~5.8 小时。
+  # 本 workflow 仅保留手动触发作兜底，详见 docs/scheduled_update.md「统一 FaaS 定时调度」。
   workflow_dispatch: {}
   push:
     branches: [master]

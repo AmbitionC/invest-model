@@ -1,5 +1,6 @@
 """统一日志配置"""
 
+import os
 import sys
 from pathlib import Path
 
@@ -19,11 +20,11 @@ def setup_logger() -> None:
     cfg = load_config()
     log_cfg = cfg.get("logging", {})
     level = log_cfg.get("level", "INFO")
-    log_dir = Path(log_cfg.get("dir", "./logs"))
+    # INVEST_LOG_DIR：FaaS/容器等代码目录只读的环境把日志文件指到 /tmp
+    log_dir = Path(os.getenv("INVEST_LOG_DIR") or log_cfg.get("dir", "./logs"))
 
     if not log_dir.is_absolute():
         log_dir = get_project_root() / log_dir
-    log_dir.mkdir(parents=True, exist_ok=True)
 
     logger.remove()
 
@@ -32,6 +33,13 @@ def setup_logger() -> None:
         level=level,
         format="<green>{time:HH:mm:ss}</green> | <level>{level:<7}</level> | <cyan>{message}</cyan>",
     )
+
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.warning(f"日志目录 {log_dir} 不可写，仅输出到控制台：{e}")
+        _configured = True
+        return
 
     logger.add(
         log_dir / "invest-model-{time:YYYYMMDD}.log",

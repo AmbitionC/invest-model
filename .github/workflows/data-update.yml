@@ -7,11 +7,10 @@ name: data-update
 # 未配 Secrets 前任务只会失败、无副作用。
 
 on:
-  schedule:
-    # 工作日 17:00 北京时间(=09:00 UTC) 增量更新
-    - cron: "0 9 * * 1-5"
-    # 周六 18:00 北京时间(=10:00 UTC) 全量刷新因子/预测
-    - cron: "0 10 * * 6"
+  # ⚠️ 定时触发已迁移至阿里云 FC 定时函数（fe-journey-faas 仓库 s.yaml 里的
+  # invest-scheduler / invest-live-watch，代码在本仓库 faas/ 目录）。
+  # 迁移原因：Actions 免费额度不足 + schedule 实测延迟 2.8~5.8 小时。
+  # 本 workflow 仅保留手动触发作兜底，详见 docs/scheduled_update.md「统一 FaaS 定时调度」。
   workflow_dispatch:
     inputs:
       mode:

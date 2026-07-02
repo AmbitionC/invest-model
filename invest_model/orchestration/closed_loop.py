@@ -13,8 +13,10 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
@@ -297,8 +299,14 @@ class ClosedLoop:
         return run_id
 
     def _export(self, res, run_id: int) -> None:
-        out_dir = get_project_root() / "results"
-        out_dir.mkdir(exist_ok=True)
+        # INVEST_RESULTS_DIR：FaaS 等代码目录只读的环境把结果指到 /tmp；
+        # 目录不可写时跳过导出（指标已入库 backtest_run，文件仅是本地便览）。
+        out_dir = Path(os.getenv("INVEST_RESULTS_DIR") or get_project_root() / "results")
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.warning(f"results 目录 {out_dir} 不可写，跳过 latest.json 导出：{e}")
+            return
         from invest_model.orchestration.health import compute_health
 
         last_reb = self.reb()[-1] if self.reb() else None

@@ -1,44 +1,42 @@
-# 追加到 fe-journey-faas 的 s.yaml（Serverless Devs v3 / fc3 组件）——
-# 新建独立函数 invest-live-watch，与 fe-journey 服务端函数完全解耦：
-#   独立代码包 / 独立环境变量 / 独立内存超时 / 独立触发器，
-#   仅共用阿里云账号、地域，以及（若 RDS 走内网）同一套 VPC 配置。
-# 部署互不影响：fe-journey 发版不会动本函数，反之亦然。
+# ⚠️ 本文件已升级为「实际生效配置」的说明副本 ——
+# 真实资源配置在 fe-journey-faas 仓库的 s.yaml（resources: investLiveWatch /
+# investScheduler），push master 即由其 CI（deploy-invest-scheduler job）自动：
+#   checkout 本仓库 → bash faas/package.sh ./invest-dist → s deploy 两个 FC 函数。
+# 这里只保留最小骨架供参考/手动部署；完整触发器与环境变量清单见 fe-journey-faas。
 #
-# 代码来源：invest-model 仓库执行 `bash faas/package.sh` 产出
-#   dist/faas-build/（目录）或 dist/invest-live-watch.zip（上传用）。
-
-resources:
-  invest-live-watch:
-    component: fc3
-    props:
-      region: cn-hangzhou               # ← 改成与你 RDS/fe-journey 相同地域
-      functionName: invest-live-watch
-      description: A股盘中盯盘（无状态定时扫描，预警推 GitHub issue→邮件）
-      runtime: python3.10
-      handler: faas/live_watch_handler.handler
-      memorySize: 512
-      timeout: 120                       # ETF 均线取数偶发重试，给足余量
-      code: ../invest-model/dist/faas-build   # ← package.sh 的产物路径，按实际调整
-      environmentVariables:
-        INVEST_DB_URL: ${env(INVEST_DB_URL)}       # mysql+pymysql://...
-        TUSHARE_TOKEN: ${env(TUSHARE_TOKEN)}
-        TUSHARE_HTTP_URL: ${env(TUSHARE_HTTP_URL)} # 如 https://minitick.top/
-        GITHUB_TOKEN: ${env(INVEST_GH_PAT)}        # fine-grained PAT：仅 invest-model Issues RW
-        GITHUB_REPOSITORY: AmbitionC/invest-model
-        DIGEST_WINDOW: "20"                        # 买点/提示摘要窗口（分钟）
-        ONCE_STEP: "3"                             # 与下方定时器间隔一致
-      # RDS 走内网（推荐，与 fe-journey 服务端同配置即可）：
-      # vpcConfig:
-      #   vpcId: vpc-xxxx
-      #   vSwitchIds: [vsw-xxxx]
-      #   securityGroupId: sg-xxxx
-      # RDS 走公网：需在 RDS 白名单放行 FC 出口 IP（或函数配 NAT 固定 IP）
-      triggers:
-        - triggerName: market-hours
-          triggerType: timer
-          qualifier: LATEST
-          triggerConfig:
-            # FC cron 为 UTC：每 3 分钟，01:00-07:59 UTC = 北京 09:00-15:59 工作日。
-            # 盘前/午休/节假日由脚本守卫毫秒级退出，空转成本可忽略。
-            cronExpression: "0 0/3 1-7 ? * MON-FRI"
-            enable: true
+# 两个函数、一份代码包（faas/package.sh 产物），与 fe-journey 完全解耦：
+#
+# resources:
+#   investLiveWatch:                 # 盯盘：512MB / 120s
+#     component: fc3
+#     props:
+#       region: cn-hangzhou
+#       functionName: invest-live-watch
+#       runtime: python3.10
+#       handler: faas/scheduler_handler.handler
+#       code: ./invest-dist
+#       triggers:
+#         - triggerType: timer
+#           triggerConfig: { cronExpression: '0 0/3 1-7 ? * MON-FRI',  # UTC
+#                            enable: true, payload: 'live_watch' }
+#
+#   investScheduler:                 # 快照提醒/ETF入库/日更+计划/周度重建+复盘：4GB / 3h
+#     component: fc3
+#     props:
+#       functionName: invest-scheduler
+#       runtime: python3.10
+#       handler: faas/scheduler_handler.handler
+#       code: ./invest-dist
+#       triggers:                    # payload = faas/jobs.py 的 job 名（cron 均为 UTC）
+#         - { cronExpression: '0 20 7 ? * MON-FRI', payload: 'snapshot_remind' }       # 15:20
+#         - { cronExpression: '0 50 8 ? * MON-FRI', payload: 'ingest_etf' }            # 16:50
+#         - { cronExpression: '0 0 9 ? * MON-FRI',  payload: 'daily_update_plan' }     # 17:00
+#         - { cronExpression: '0 0 10 ? * SAT',     payload: 'weekly_rebuild_review' } # 周六18:00
+#
+# 环境变量（在 fe-journey-faas 的 GitHub Secrets/Variables 配置，随部署注入）：
+#   INVEST_DB_URL（或 DB_HOST/DB_USER/DB_PASS+INVEST_DB_NAME）
+#   TUSHARE_TOKEN  TUSHARE_HTTP_URL
+#   INVEST_GH_PAT（fine-grained PAT：仅本仓库 Issues RW → 函数内 GITHUB_TOKEN）
+#   可选：ACCOUNT_CASH  PLAN_ARGS  LIVE_WATCH_MENTION
+#   只读文件系统适配（s.yaml 已内置）：INVEST_LOG_DIR=/tmp/logs
+#                                     INVEST_RESULTS_DIR=/tmp/invest-results

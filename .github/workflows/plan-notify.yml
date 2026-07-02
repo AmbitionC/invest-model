@@ -8,15 +8,16 @@ name: plan-notify
 # 依赖 data-update 已把当日数据/预测刷进 MySQL。未配 Secrets 前只失败、无副作用。
 
 on:
+  # ⚠️ 定时触发已迁移至阿里云 FC 定时函数（fe-journey-faas 仓库 s.yaml 里的
+  # invest-scheduler / invest-live-watch，代码在本仓库 faas/ 目录）。
+  # 迁移原因：Actions 免费额度不足 + schedule 实测延迟 2.8~5.8 小时。
+  # 本 workflow 仅保留手动触发作兜底，详见 docs/scheduled_update.md「统一 FaaS 定时调度」。
   # 主触发：data-update 完成即链式出计划——实测本仓库 schedule 延迟 2.8~5.8h，
   # 两个独立 cron 会叠加两层延迟；链式后只吃 data-update 一层延迟，且天然保证
   # 「先有当日数据、再出计划」的顺序。cron 档保留作兜底（data-update 整档被跳过时）。
   workflow_run:
     workflows: [data-update]
     types: [completed]
-  schedule:
-    # 工作日 17:30 北京时间(=09:30 UTC)，盘后数据更新之后（兜底档）
-    - cron: "30 9 * * 1-5"
   workflow_dispatch: {}
 
 concurrency:

@@ -5,9 +5,10 @@ name: review
 # 仅读 DB。触发：周六定时 / 手动 / 改 ops/review.trigger 后 push（仅 master）。
 
 on:
-  schedule:
-    # 周六 11:30 UTC(=19:30 北京)——data-update 周六 10:00 重建模型之后
-    - cron: "30 11 * * 6"
+  # ⚠️ 定时触发已迁移至阿里云 FC 定时函数（fe-journey-faas 仓库 s.yaml 里的
+  # invest-scheduler / invest-live-watch，代码在本仓库 faas/ 目录）。
+  # 迁移原因：Actions 免费额度不足 + schedule 实测延迟 2.8~5.8 小时。
+  # 本 workflow 仅保留手动触发作兜底，详见 docs/scheduled_update.md「统一 FaaS 定时调度」。
   workflow_dispatch: {}
   push:
     branches: [master]
