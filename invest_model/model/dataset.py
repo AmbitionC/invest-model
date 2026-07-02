@@ -50,20 +50,26 @@ def next_rebalance_map(reb_dates: list[str]) -> dict[str, str]:
 
 
 def forward_returns(engine, t0: str, t1: str, codes: list[str]) -> pd.Series:
-    """从 t0 收盘到 t1 收盘的区间收益，index=code。"""
+    """从 t0 收盘到 t1 收盘的区间收益，index=code。
+
+    t1 无行情的票（区间内停牌/退市）用其 ≤t1 的最后成交价计算，而非剔除——
+    否则退市前的崩跌会被排除出 IC 与训练标签，系统性高估因子有效性。
+    """
     repo = BaseRepository(engine)
     df = repo.read_sql(
         "SELECT code, trade_date, close FROM stock_daily "
-        "WHERE trade_date IN (:a,:b)",
+        "WHERE trade_date>=:a AND trade_date<=:b",
         {"a": t0, "b": t1},
     )
     if df.empty:
         return pd.Series(dtype=float)
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
-    wide = df.pivot(index="code", columns="trade_date", values="close")
-    if t0 not in wide.columns or t1 not in wide.columns:
+    wide = df.pivot(index="trade_date", columns="code", values="close").sort_index()
+    if t0 not in wide.index:
         return pd.Series(dtype=float)
-    ret = wide[t1] / wide[t0] - 1.0
+    p0 = wide.loc[t0]
+    p1 = wide.ffill().iloc[-1]          # 每票 ≤t1 的最后成交价
+    ret = p1 / p0 - 1.0
     if codes:
         ret = ret.reindex(codes)
     return ret.dropna()
