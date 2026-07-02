@@ -248,12 +248,14 @@ class ClosedLoop:
                                  ensure_ascii=False),
             "metrics": json.dumps(res.metrics, ensure_ascii=False),
         }
-        self.repo.execute_sql(
-            "INSERT INTO backtest_run (name,strategy,start_date,end_date,rebalance_days,top_k,params,metrics) "
-            "VALUES (:name,:strategy,:start_date,:end_date,:rebalance_days,:top_k,:params,:metrics)",
-            run_row,
-        )
-        run_id = int(self.repo.read_sql("SELECT MAX(run_id) AS m FROM backtest_run")["m"].iloc[0])
+        from sqlalchemy import text
+        with self.repo.engine.begin() as conn:
+            cursor = conn.execute(text(
+                "INSERT INTO backtest_run (name,strategy,start_date,end_date,rebalance_days,top_k,params,metrics) "
+                "VALUES (:name,:strategy,:start_date,:end_date,:rebalance_days,:top_k,:params,:metrics)"
+            ), run_row)
+            # lastrowid 取本次插入的自增 ID；SELECT MAX() 在并发写入下有竞态
+            run_id = int(cursor.lastrowid)
         nav = res.nav_df.copy()
         nav.insert(0, "run_id", run_id)
         self.repo.bulk_insert("backtest_nav", nav[["run_id", "trade_date", "nav", "ret", "turnover", "position_count"]])

@@ -304,7 +304,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         "n_holdings": len(held_codes),
         "unrealized_pnl_pct": round(unreal, 4),
         "gross_target": round(gross, 4),
-        # 注：实盘缺账户峰值，用「持仓整体浮亏」近似账户级 -7% 风控提示
+        # 注：实盘缺账户峰值，用「持仓整体浮亏」近似账户级回撤(rc.account_dd_stop)风控提示
         "risk_off": bool(rc.enabled and rc.account_dd_stop and unreal <= -rc.account_dd_stop),
         "model_ic_mean": m_ic_mean, "model_ic_ir": m_ic_ir, "model_hit": m_hit,
         "model_conf_label": _conf_label(model_trust, m_ic_ir),

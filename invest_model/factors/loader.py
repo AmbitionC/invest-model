@@ -59,16 +59,19 @@ class FactorDataLoader:
         px = px[px["code"].isin(codes)]
         wide = px.pivot(index="trade_date", columns="code", values="close").sort_index()
 
-        def mom(n: int) -> pd.Series:
-            if len(wide) <= n:
+        def mom(n: int, skip: int = 0) -> pd.Series:
+            """近 n 日动量；skip>0 时跳过最近 skip 日（剔除近端反转段）。"""
+            if len(wide) <= n + skip:
                 return pd.Series(np.nan, index=wide.columns)
-            return wide.iloc[-1] / wide.iloc[-1 - n] - 1.0
+            return wide.iloc[-1 - skip] / wide.iloc[-1 - skip - n] - 1.0
 
         rets = wide.pct_change()
         feat = pd.DataFrame({
             "mom_20": mom(20),
-            "mom_60": mom(60),
-            "mom_120": mom(120),
+            # 中期动量跳过最近 5 日：与 reversal_5 解耦（否则两因子在同一段
+            # 数据上方向相反地打架），也是经典动量（12-1 型）的标准构造。
+            "mom_60": mom(60, skip=5),
+            "mom_120": mom(120, skip=5),
             "ret_5": mom(5),
             "vol_20": rets.tail(20).std(),
         })
@@ -89,13 +92,16 @@ class FactorDataLoader:
             v[c] = pd.to_numeric(v[c], errors="coerce")
         return v
 
-    # ── point-in-time 财务（ann_date <= t 的最新一期）──
+    # ── point-in-time 财务（ann_date <= t 的最新一期，且不早于 t-540 天）──
     def _fina_pit(self, trade_date: str, codes: set[str]) -> pd.DataFrame:
+        # 时效下限：超过 ~1.5 年未披露视为失效（停止披露常是退市前兆，
+        # 陈年 ROE 不应继续参与打分），顺带避免每次全表扫描。
+        stale = (pd.to_datetime(trade_date) - pd.Timedelta(days=540)).strftime("%Y%m%d")
         f = self.repo.read_sql(
             "SELECT code, ann_date, report_date, roe, roa, gross_margin, "
             "revenue_yoy, profit_yoy FROM stock_fina_indicator "
-            "WHERE ann_date<=:d",
-            {"d": trade_date},
+            "WHERE ann_date<=:d AND ann_date>=:lo",
+            {"d": trade_date, "lo": stale},
         )
         if f.empty:
             return pd.DataFrame()

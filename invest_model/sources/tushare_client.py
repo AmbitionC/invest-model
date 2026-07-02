@@ -14,19 +14,23 @@ from invest_model.sources.base import BaseSource
 logger = get_logger()
 
 
+# 全局限频时钟：所有接口方法共享。若每个方法各自计时，多方法混合调用时
+# 总 QPS 会超过 rate_limit_per_min 配置的上限。
+_LAST_CALL = [0.0]
+
+
 def _rate_limit(func):
-    """限频装饰器：根据配置控制调用频率"""
-    last_call = [0.0]
+    """限频装饰器：根据配置控制调用频率（跨方法全局共享）"""
 
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         cfg = load_config()
         rpm = cfg.get("sources", {}).get("tushare", {}).get("rate_limit_per_min", 480)
         min_interval = 60.0 / rpm
-        elapsed = time.time() - last_call[0]
+        elapsed = time.time() - _LAST_CALL[0]
         if elapsed < min_interval:
             time.sleep(min_interval - elapsed)
-        last_call[0] = time.time()
+        _LAST_CALL[0] = time.time()
         return func(self, *args, **kwargs)
 
     return wrapper
@@ -143,11 +147,22 @@ class TushareClient(BaseSource):
     @_retry
     @_rate_limit
     def get_stock_list(self) -> pd.DataFrame:
-        df = self.pro.stock_basic(
-            exchange="", list_status="L",
-            fields="ts_code,symbol,name,area,industry,market,list_date"
-        )
-        return df
+        """全量股票列表：在市(L) + 退市(D) + 暂停上市(P)。
+
+        只拉 L 会让退市股在 stock_info 缺元信息（name/industry/list_date 全空），
+        导致 ST/次新过滤失效、行业中性化落入 NA 桶——幸存者偏差的数据源头。
+        """
+        frames = []
+        for status in ("L", "D", "P"):
+            df = self.pro.stock_basic(
+                exchange="", list_status=status,
+                fields="ts_code,symbol,name,area,industry,market,list_date"
+            )
+            if df is not None and not df.empty:
+                frames.append(df)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True).drop_duplicates("ts_code")
 
     @_retry
     @_rate_limit
