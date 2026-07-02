@@ -95,3 +95,26 @@ live-watch 的并发策略是「排队不打断」：外部触发与仓库内档
 维持现状 ≈ 每月超额 6000 分钟 ≈ $48/月。不建议；若临时接受，请在
 Settings → Billing 给 Actions 设一个小额预算（如 $10）而非 $0——$0 会在额度
 耗尽后**冻结全部工作流**（盘后计划/数据更新一并停摆）。
+
+## 方案 A'：FaaS 定时盯盘（一个函数搞定，彻底脱离 GitHub Actions）
+
+不想在 GitHub 里触发任何东西？一个阿里云函数计算（FC）函数 + 一个定时触发器即可。
+架构从「常驻轮询进程」改为「**定时逐次无状态扫描**」：每 3 分钟被拉起、扫一轮、
+几秒退出。去重无需任何存储——脚本本来就从当日 issue 评论的隐藏标记恢复
+「已推送」集合（GitHub 在此只当**通知收件箱**，不触发任何 workflow）。
+
+1. **函数**：入口 `faas/live_watch_handler.py::handler`，Python 3.10+，
+   建议内存 512MB、超时 120s。代码包 = 本仓库 `invest_model/ scripts/ faas/ config/`
+   + `pip install -r faas/requirements.txt -t .`（比整包轻，不含 xgboost 等）。
+2. **环境变量**：见 handler 文件头注释（DB/Tushare/GitHub PAT 五个必填）。
+3. **定时触发器**（FC cron 是 UTC）：`0 0/3 1-7 ? * MON-FRI`
+   ——每 3 分钟、北京 09:00-15:59；盘前/午休/节假日由脚本守卫毫秒级退出。
+4. **行为**：卖出类风控（止损/破位）当次扫描立即推送；买点/提示类按
+   `DIGEST_WINDOW`（默认 20 分钟）墙钟边界合并成摘要（未推的下次扫描会重新
+   检测到，等价于缓冲，无状态安全）；14:45 后一律即推。
+5. **切换**：FC 验证正常后，GitHub 仓库 Settings → Variables 设
+   `LIVE_WATCH_ON_ACTIONS=0` 停掉云端 live-watch/看门狗。随时可逆。
+
+成本：约 110 次调用/交易日 × 数秒 × 512MB ≈ 每月几百 GB·s，在 FC 免费额度内；
+且 FC 在国内访问 tushare/腾讯行情比 GitHub 海外 runner 更快更稳。
+本地验证：配好 .env 后 `python scripts/live_check.py --once --notify` 跑一次即模拟一个 tick。

@@ -531,6 +531,99 @@ def _should_flush(has_crit: bool, pending_n: int, pending_age_s: float,
     return pending_age_s >= digest_s or hm >= 885
 
 
+def _once_flush_batch(hm: int, digest_min: int, step_min: int) -> bool:
+    """once 模式（FaaS 定时逐次扫描）本次是否推送 batch 类预警。
+
+    无状态设计：batch 预警不推就不写去重标记，下次扫描会重新检测到——
+    等价于"缓冲"，只在每 digest_min 分钟边界后的首个扫描 tick 统一推送。
+    14:45 后一律推（尾盘清仓不过夜）；digest_min<=0 → 每次都推。
+    """
+    if digest_min <= 0 or hm >= 885:
+        return True
+    return (hm % digest_min) < max(1, step_min)
+
+
+def _is_trading_day_db(repo: BaseRepository, day: str) -> bool | None:
+    """查库内 trade_calendar 判交易日（once 模式用，免 Tushare 初始化开销）。"""
+    try:
+        df = repo.read_sql(
+            "SELECT is_open FROM trade_calendar WHERE cal_date=:d", {"d": day})
+    except Exception:  # noqa: BLE001
+        return None
+    if df.empty:
+        return None
+    return int(df["is_open"].iloc[0]) == 1
+
+
+def _once(args: argparse.Namespace) -> dict:
+    """单次无状态扫描（FaaS 定时触发用）：取数→评估→分级推送→退出。
+
+    去重集从当日 issue 评论恢复（_seed_seen），跨调用不重复报警；
+    crit（卖出类风控）每次都推，batch（买点/提示）按 _once_flush_batch 的
+    墙钟边界合并推。非交易时段/非交易日毫秒级退出。
+    """
+    now = _now_cst()
+    hm = now.hour * 60 + now.minute
+    if now.weekday() >= 5:
+        return {"skipped": "weekend"}
+    if not (568 <= hm <= 902):                  # 09:28 前 / 15:02 后
+        return {"skipped": "off-hours"}
+    if 690 < hm < 780:                          # 午休
+        return {"skipped": "lunch-break"}
+    engine = make_engine(args.db) if args.db else make_engine()
+    if _is_trading_day_db(BaseRepository(engine), now.strftime("%Y%m%d")) is False:
+        return {"skipped": "holiday"}
+
+    ctx = _build_context(args)
+    issue: list = [None]
+    seen = _seed_seen(issue) if args.notify else set()
+    rt = _fetch_rt(ctx)
+    _, _, _, alerts, _ = _scan(ctx, rt, args)
+    new = [(k, line, sev) for k, line, sev in alerts if k not in seen]
+    crit = [(k, line) for k, line, sev in new if sev == "crit"]
+    batch = [(k, line) for k, line, sev in new if sev != "crit"]
+    # ETF 实时自检（每日一次，提示类）
+    if ctx["etf_codes"]:
+        got = [(c, rt.get(c, {}).get("price")) for c in ctx["etf_codes"]]
+        n_ok = sum(1 for _, p in got if p)
+        key = f"ETFSELF:{now:%Y%m%d}:{n_ok}"
+        if key not in seen:
+            batch.append((key, f"🔎 ETF实时自检：{n_ok}/{len(got)} 取到现价"))
+    flush = bool(crit) or _once_flush_batch(hm, args.digest_window, args.once_step)
+    items = crit + (batch if flush else [])
+    if items:
+        head = ("🚨 即时风控预警" if crit
+                else f"📬 摘要（{len(batch)} 条买点/提示，窗口 {args.digest_window}min）")
+        body = head + "\n\n" + "\n".join(line for _, line in items)
+        print(body)
+        if args.notify:
+            _gh_notify(issue, now, body, [k for k, _ in items])
+    else:
+        print(f"✓ {now:%H:%M} CST 无新触发（已推 {len(seen)}，待摘要 {len(batch)}）")
+    return {"new": len(new), "pushed": len(items), "held_for_digest": 0 if flush else len(batch)}
+
+
+def run_once(**overrides) -> dict:
+    """FaaS handler 入口：全部参数走环境变量（可用 overrides 覆盖），执行一次扫描。
+
+    环境变量：INVEST_DB_URL / TUSHARE_TOKEN / TUSHARE_HTTP_URL /
+    GITHUB_TOKEN / GITHUB_REPOSITORY（推 issue 评论 → 邮件），可选
+    LIVE_HARD_STOP / LIVE_PULLBACK / LIVE_BUY_WEIGHT / DIGEST_WINDOW / ONCE_STEP。
+    """
+    args = argparse.Namespace(
+        db=None,
+        hard_stop=float(os.getenv("LIVE_HARD_STOP", "0.08")),
+        pullback_pct=float(os.getenv("LIVE_PULLBACK", "0.03")),
+        buy_weight=float(os.getenv("LIVE_BUY_WEIGHT", "0.05")),
+        digest_window=int(os.getenv("DIGEST_WINDOW", "20")),
+        once_step=int(os.getenv("ONCE_STEP", "3")),
+        notify=True,
+    )
+    for k, v in overrides.items():
+        setattr(args, k, v)
+    return _once(args)
+
+
 def _watch(args: argparse.Namespace) -> None:
     """常驻盯盘：交易时段内轮询，预警分级推送——卖出类风控立即推，
     买点/提示类进缓冲按 --digest-window 合并推送（减少邮件打扰、不漏关键信号）。
@@ -645,6 +738,10 @@ def main() -> None:
                     help="只报触发/逼近项 + 交易时段感知（盯盘轮询用）")
     ap.add_argument("--watch", action="store_true",
                     help="常驻盯盘：交易时段内每 --interval 秒轮询，只报新触发")
+    ap.add_argument("--once", action="store_true",
+                    help="单次无状态扫描后退出（FaaS 定时触发用；去重靠 issue 评论恢复）")
+    ap.add_argument("--once-step", type=int, default=3,
+                    help="--once 模式的定时器间隔（分钟），用于摘要边界判定（默认 3）")
     ap.add_argument("--interval", type=int, default=60,
                     help="--watch 常态轮询间隔秒数（默认 60；距触发线远近自适应升降频）")
     ap.add_argument("--min-interval", type=int, default=20,
@@ -658,6 +755,9 @@ def main() -> None:
                     help="--watch 时把新触发追加到跟踪 issue（需 GITHUB_TOKEN/REPOSITORY）")
     args = ap.parse_args()
 
+    if args.once:
+        print(_once(args))
+        return
     if args.watch:
         _watch(args)
         return

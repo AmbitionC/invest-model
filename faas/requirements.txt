@@ -1,0 +1,9 @@
+# FaaS 盯盘函数的最小依赖（比整包 setup.py 轻：不装 xgboost/scikit-learn/pyarrow）
+pandas>=2.0.0
+numpy>=1.24.0
+sqlalchemy>=2.0.0
+pymysql>=1.1.0
+tushare>=1.2.89
+loguru>=0.7.0
+python-dotenv>=1.0.0
+pyyaml>=6.0
