@@ -118,6 +118,11 @@ def compute_metrics(
                 var = np.var(br)
                 if var > 0:
                     m.beta = float(cov / var)
-                    m.alpha = m.annual_return - (m.beta * (m.benchmark_annual_return or 0.0))
+                    # alpha 用与基准相同的重叠窗口年化策略收益，避免两边窗口不一致
+                    pnav = merged["nav"].astype(float).values
+                    strat_ann = float(
+                        (pnav[-1] / pnav[0]) ** (1.0 / max(years, 1e-9)) - 1.0
+                    )
+                    m.alpha = strat_ann - (m.beta * (m.benchmark_annual_return or 0.0))
 
     return m

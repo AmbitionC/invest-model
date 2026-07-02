@@ -47,8 +47,9 @@ class ICCombiner:
         else:
             w = mean_ic
         w = w.reindex(FACTORS).fillna(0.0)
-        # 数值稳健：去极端、保留符号强度
-        return w
+        # 数值稳健：截断极端权重（小样本期某因子 IC 序列 std 极小时 ICIR 会爆表，
+        # 不截断会让单因子主导整个合成分），保留符号强度。
+        return w.clip(-3.0, 3.0)
 
     def score(self, exposures: pd.DataFrame, weights: pd.Series) -> pd.Series:
         """exposures：index=code, cols=factors。返回合成分（再做一次截面 zscore）。"""
