@@ -36,6 +36,19 @@ FACTOR_DIRECTION: dict[str, int] = {
 
 FACTORS: list[str] = list(FACTOR_DIRECTION.keys())
 
+# ── 候选因子（影子观察）──
+# 与正式因子同样计算暴露、落库、记 rank-IC（health/复盘可见），但**不参与**
+# 合成打分与 ranker 训练——晋升前先攒 ≥12 期 IC 观察其有效性与稳定性。
+# 晋升 = 把因子从 CANDIDATE_DIRECTION 移入 FACTOR_DIRECTION（属模型层变更，需评审）。
+CANDIDATE_DIRECTION: dict[str, int] = {
+    # 北向持股占比 ~20 交易日变化（百分点）。先验：外资加仓为正。
+    # 注意数据依赖 hk_hold（港交所披露）；若披露口径变化导致断供，
+    # 该因子暴露为 NaN，影子模式下无任何下游影响。
+    "nb_ratio_chg_20": +1,
+}
+
+CANDIDATE_FACTORS: list[str] = list(CANDIDATE_DIRECTION.keys())
+
 
 def _safe_inv(s: pd.Series) -> pd.Series:
     s = pd.to_numeric(s, errors="coerce")
@@ -81,6 +94,9 @@ def compute_factors(raw: pd.DataFrame) -> pd.DataFrame:
     out["small_size"] = -ln_circ
 
     out["low_turnover"] = -_to_series(raw.get("turnover_rate"), idx)
+
+    # 候选因子（影子观察，不参与打分；无数据时整列 NaN，落库时被 dropna 自然跳过）
+    out["nb_ratio_chg_20"] = _to_series(raw.get("nb_ratio_chg_20"), idx)
 
     # 辅助列（供中性化使用）
     ind = raw.get("industry")

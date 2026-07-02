@@ -43,6 +43,9 @@ class FactorDataLoader:
         df = df.join(valuation)
         df = df.join(fina)
         df = df.join(price_feat)
+        nb = self._northbound(trade_date, code_set)
+        if not nb.empty:
+            df = df.join(nb)
         return df
 
     # ── 价格衍生因子 ──
@@ -91,6 +94,41 @@ class FactorDataLoader:
         for c in v.columns:
             v[c] = pd.to_numeric(v[c], errors="coerce")
         return v
+
+    # ── 北向持股占比变化（候选因子影子观察）──
+    def _northbound(self, trade_date: str, codes: set[str]) -> pd.DataFrame:
+        """nb_ratio_chg_20：北向持股占流通股本比例的 ~20 交易日变化（百分点）。
+
+        无 stock_hk_hold 表/无数据（本地合成库、未回填时）返回空——候选因子
+        整列 NaN，影子模式下对打分与组合无任何影响。
+        """
+        try:
+            if not self.repo.table_exists("stock_hk_hold"):
+                return pd.DataFrame()
+        except Exception:  # noqa: BLE001
+            return pd.DataFrame()
+        start = (pd.to_datetime(trade_date) - pd.Timedelta(days=45)).strftime("%Y%m%d")
+        df = self.repo.read_sql(
+            "SELECT code, trade_date, ratio FROM stock_hk_hold "
+            "WHERE trade_date>=:s AND trade_date<=:d",
+            {"s": start, "d": trade_date},
+        )
+        if df.empty:
+            return pd.DataFrame()
+        df = df[df["code"].isin(codes)]
+        df["ratio"] = pd.to_numeric(df["ratio"], errors="coerce")
+        wide = df.pivot(index="trade_date", columns="code", values="ratio").sort_index()
+        if len(wide) < 15:                      # 窗口内交易日太少，不出信号
+            return pd.DataFrame()
+
+        def _chg(s: pd.Series) -> float:
+            v = s.dropna()
+            # 至少覆盖窗口的 2/3，避免新进标的用极短区间放大变化
+            return float(v.iloc[-1] - v.iloc[0]) if len(v) >= 10 else np.nan
+
+        out = wide.apply(_chg).rename("nb_ratio_chg_20").to_frame()
+        out.index.name = "code"
+        return out
 
     # ── point-in-time 财务（ann_date <= t 的最新一期，且不早于 t-540 天）──
     def _fina_pit(self, trade_date: str, codes: set[str]) -> pd.DataFrame:

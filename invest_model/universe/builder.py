@@ -70,6 +70,21 @@ class UniverseBuilder:
             self.uni_repo.save_snapshot(snap)
         return codes
 
+    def _pit_names(self, trade_date: str) -> dict[str, str]:
+        """{code: trade_date 当时的证券名称}。取 start_date<=t 的最新一条变更记录。"""
+        try:
+            if not self.repo.table_exists("stock_namechange"):
+                return {}
+            df = self.repo.read_sql(
+                "SELECT ts_code AS code, name, start_date FROM stock_namechange "
+                "WHERE start_date<=:d", {"d": trade_date})
+        except Exception:  # noqa: BLE001
+            return {}
+        if df.empty:
+            return {}
+        df = df.sort_values(["code", "start_date"]).groupby("code").tail(1)
+        return {str(c): str(n) for c, n in zip(df["code"], df["name"]) if n}
+
     def _load_cross_section(self, trade_date: str) -> pd.DataFrame:
         """组装当日截面：行情(成交/量) + 元信息(名称/行业/上市日) + 估值(circ_mv) + 20日均额。"""
         start = (pd.to_datetime(trade_date) - pd.Timedelta(days=self.cfg.amount_window * 2 + 10)).strftime("%Y%m%d")
@@ -98,6 +113,12 @@ class UniverseBuilder:
         info = self.repo.read_sql(
             "SELECT ts_code AS code, name, industry, list_date FROM stock_info"
         )
+        # point-in-time 名称：用 namechange 历史把 name 替换为 trade_date 当时的名称，
+        # 使 ST 过滤按当时状态判定（曾 ST 已摘帽的不放行历史截面、现 ST 历史正常的
+        # 不被追溯误杀）。无 namechange 数据（本地合成库等）回退 stock_info 现名。
+        pit = self._pit_names(trade_date)
+        if pit:
+            info["name"] = [pit.get(c, n) for c, n in zip(info["code"], info["name"])]
         # 估值（流通市值）
         fund = self.repo.read_sql(
             "SELECT code, circ_mv FROM stock_fundamental WHERE trade_date=:d",

@@ -14,10 +14,8 @@ import pandas as pd
 def exclude_st(df: pd.DataFrame) -> pd.DataFrame:
     """剔除 ST/*ST。
 
-    已知局限：name 来自 stock_info 当前快照，非 point-in-time——历史上曾 ST
-    现已摘帽的票会被历史截面误放行，反之被追溯误杀。严格修复需引入
-    namechange 历史名称表；退市股（stock_basic list_status=D）保留的是
-    退市时名称，多数带 *ST，能被本过滤器正确识别。
+    name 由 UniverseBuilder 提供：有 stock_namechange 表时为 point-in-time
+    当时名称（按当时 ST 状态判定），否则回退 stock_info 现名快照。
     """
     if "name" not in df.columns:
         return df

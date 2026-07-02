@@ -16,16 +16,26 @@ def compute_health(engine, version: str, method: str = "alla", recent: int = 6,
     health: dict = {}
     warnings: list[str] = []
 
-    # 因子 IC（近 recent 期均值，按 |mean| 排序的前若干）
+    # 因子 IC（近 recent 期均值，按 |mean| 排序的前若干）；候选因子单列展示——
+    # 它们只影子观察不参与打分，IC 攒够即可评估是否晋升（见 factors/library.py）。
+    from invest_model.factors.library import CANDIDATE_FACTORS
     ic = frepo.get_ic_log()
     if not ic.empty:
         ic["rank_ic"] = pd.to_numeric(ic["rank_ic"], errors="coerce")
         recent_dates = sorted(ic["trade_date"].unique())[-recent:]
         rec = ic[ic["trade_date"].isin(recent_dates)]
         m = rec.groupby("factor_name")["rank_ic"].mean().sort_values(key=abs, ascending=False)
-        health["recent_factor_ic"] = {k: round(float(v), 4) for k, v in m.items()}
+        cand = set(CANDIDATE_FACTORS)
+        health["recent_factor_ic"] = {k: round(float(v), 4) for k, v in m.items()
+                                      if k not in cand}
+        health["candidate_factor_ic"] = {k: round(float(v), 4) for k, v in m.items()
+                                         if k in cand}
         all_m = ic.groupby("factor_name")["rank_ic"].mean()
         health["factor_ic_full"] = {k: round(float(v), 4) for k, v in all_m.items()}
+        # 候选因子晋升观测：IC 期数（≥12 期才够评估）
+        n_periods = ic[ic["factor_name"].isin(cand)].groupby("factor_name")["trade_date"].nunique()
+        if not n_periods.empty:
+            health["candidate_ic_periods"] = {k: int(v) for k, v in n_periods.items()}
 
     # universe 覆盖
     uni = repo.read_sql(

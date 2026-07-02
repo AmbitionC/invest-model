@@ -209,6 +209,39 @@ class TushareClient(BaseSource):
 
     @_retry
     @_rate_limit
+    def get_namechange(self) -> pd.DataFrame:
+        """全量历史名称变更（point-in-time ST 识别用）。表小（~2万行），分页拉全。"""
+        frames, offset, page = [], 0, 5000
+        while offset <= 100000:
+            df = self.pro.namechange(
+                limit=page, offset=offset,
+                fields="ts_code,name,start_date,end_date,change_reason")
+            if df is None or df.empty:
+                break
+            frames.append(df)
+            if len(df) < page:
+                break
+            offset += page
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    @_retry
+    @_rate_limit
+    def get_hk_hold(self, trade_date: str) -> pd.DataFrame:
+        """北向（沪深股通）个股持股快照，按交易日全市场一次拉取。
+
+        候选因子 nb_ratio_chg_20 的数据源；港股通闭市日返回空属正常。
+        """
+        df = self.pro.hk_hold(
+            trade_date=trade_date,
+            fields="ts_code,trade_date,name,vol,ratio,exchange")
+        if df is not None and not df.empty:
+            df = df.rename(columns={"ts_code": "code"})
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
     def get_index_weight(self, index_code: str, start_date: str, end_date: str) -> pd.DataFrame:
         """指数成分与权重（月度快照）。基准/可选 universe 用。"""
         df = self.pro.index_weight(

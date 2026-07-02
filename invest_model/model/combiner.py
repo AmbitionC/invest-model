@@ -52,7 +52,11 @@ class ICCombiner:
         return w.clip(-3.0, 3.0)
 
     def score(self, exposures: pd.DataFrame, weights: pd.Series) -> pd.Series:
-        """exposures：index=code, cols=factors。返回合成分（再做一次截面 zscore）。"""
+        """exposures：index=code, cols=factors。返回合成分（再做一次截面 zscore）。
+
+        只用 FACTORS 列——候选因子（CANDIDATE_FACTORS）的暴露虽同表落库、IC 同表
+        记录，但晋升前不进入打分（影子观察机制，见 factors/library.py）。
+        """
         cols = [f for f in FACTORS if f in exposures.columns]
         X = exposures[cols].copy()
         # 缺失填 0（已是 zscore，0=截面均值，中性）

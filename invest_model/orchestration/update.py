@@ -31,10 +31,12 @@ def _missing_dates(repo: BaseRepository, table: str, all_dates: list[str]) -> li
 
 def run_data_update(engine, start: str, end: str, quarters: list[str] | None = None) -> dict:
     """增量更新行情底座。返回各表写入行数统计。"""
+    from invest_model.data import create_schema
     from invest_model.sources.tushare_client import TushareClient
 
     client = TushareClient()
     repo = BaseRepository(engine)
+    create_schema(engine)   # 幂等补建新增表（stock_namechange / stock_hk_hold 等）
     stats: dict[str, int] = {}
 
     # 交易日历
@@ -54,6 +56,34 @@ def run_data_update(engine, start: str, end: str, quarters: list[str] | None = N
             "stock_info",
             info[["ts_code", "symbol", "name", "area", "industry", "market", "list_date"]],
             ["ts_code"])
+
+    # 历史名称变更（point-in-time ST 识别）：表小，每次全量刷、幂等 upsert。
+    # 拉取失败不阻断主流程——universe 构建会自动回退用 stock_info 现名。
+    try:
+        nc = client.get_namechange()
+        if not nc.empty:
+            nc = nc.drop_duplicates(["ts_code", "start_date"])
+            stats["stock_namechange"] = repo.upsert(
+                "stock_namechange",
+                nc[["ts_code", "name", "start_date", "end_date", "change_reason"]],
+                ["ts_code", "start_date"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"namechange 拉取失败（跳过，PIT ST 过滤回退现名）：{e}")
+
+    # 北向个股持股（hk_hold）：候选因子 nb_ratio_chg_20 数据源，按缺失日增量。
+    # 港股通闭市日返回空属正常（该日会在下次运行时再试一次，成本可忽略）。
+    n = 0
+    try:
+        for d in _missing_dates(repo, "stock_hk_hold", open_dates):
+            df = client.get_hk_hold(d)
+            if not df.empty:
+                df["ratio"] = pd.to_numeric(df.get("ratio"), errors="coerce")
+                n += repo.upsert("stock_hk_hold",
+                                 df[["code", "trade_date", "vol", "ratio"]],
+                                 ["code", "trade_date"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"hk_hold 拉取中断（已入库 {n} 行，下次续拉）：{e}")
+    stats["stock_hk_hold"] = n
 
     # 全市场日线（按缺失日 bulk）
     n = 0

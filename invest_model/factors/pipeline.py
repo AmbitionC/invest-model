@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from invest_model.factors.library import FACTORS, compute_factors
+from invest_model.factors.library import CANDIDATE_FACTORS, FACTORS, compute_factors
 from invest_model.factors.loader import FactorDataLoader
 from invest_model.factors.processor import process_factors
 from invest_model.logger import get_logger
@@ -28,7 +28,9 @@ class FactorPipeline:
         factors = compute_factors(raw)
         processed = process_factors(factors, neutralize=neutralize)
         if persist and not processed.empty:
-            self.repo.save_exposures_wide(trade_date, processed, FACTORS)
+            # 候选因子暴露一并落库（供 IC 影子观察）；打分层只读 FACTORS
+            cols = [f for f in FACTORS + CANDIDATE_FACTORS if f in processed.columns]
+            self.repo.save_exposures_wide(trade_date, processed, cols)
         return processed
 
     def compute_dates(self, date_codes: dict[str, list[str]],

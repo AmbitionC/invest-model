@@ -127,6 +127,23 @@ stock_northbound_flow = Table(
     Column("south_money", Numeric(18, 4)),
 )
 
+stock_namechange = Table(
+    "stock_namechange", metadata,
+    Column("ts_code", String(16), primary_key=True),
+    Column("start_date", String(8), primary_key=True),   # 该名称启用日
+    Column("name", String(32)),
+    Column("end_date", String(8)),                        # 该名称停用日（最新名为空）
+    Column("change_reason", String(64)),
+)
+
+stock_hk_hold = Table(
+    "stock_hk_hold", metadata,
+    Column("code", String(16), primary_key=True),
+    Column("trade_date", String(8), primary_key=True),
+    Column("vol", Numeric(20, 2)),      # 北向持股量(股)
+    Column("ratio", Numeric(10, 4)),    # 占流通股本比例(%)
+)
+
 stock_margin = Table(
     "stock_margin", metadata,
     Column("code", String(16), primary_key=True),

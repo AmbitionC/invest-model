@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from invest_model.factors.library import FACTORS
+from invest_model.factors.library import CANDIDATE_FACTORS, FACTORS
 
 # 不做市值中性化的因子（规模因子本身）
 _SKIP_SIZE_NEUTRAL = {"small_size"}
@@ -61,7 +61,8 @@ def process_factors(factor_df: pd.DataFrame, neutralize: bool = True) -> pd.Data
         dummies = pd.get_dummies(industry.fillna("NA"), prefix="ind", dtype=float)
 
     out = pd.DataFrame(index=factor_df.index)
-    for f in FACTORS:
+    # 候选因子与正式因子同流程处理（去极值/中性化/标准化），但打分层不使用
+    for f in FACTORS + CANDIDATE_FACTORS:
         if f not in factor_df.columns:
             continue
         s = winsorize_mad(factor_df[f])
