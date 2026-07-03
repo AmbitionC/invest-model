@@ -32,6 +32,11 @@ class RiskConfig:
     intraday_valid_days: int = 3         # 早午盘信号默认有效交易日数
     time_stop_days: int = 0              # 时间止损：买入 N 日横盘未创新高→减仓（0=关闭）
     time_stop_keep: float = 0.5          # 触发时保留比例（0.5=减半，0=离场）
+    profit_protect: bool = True          # 盈利保护：浮盈达标后按「自峰值回撤」锁盈
+    pp_trigger: float = 0.15             # 持有期峰值收盘较成本浮盈达此值 → 保护启动
+    pp_trim_dd: float = 0.08             # 自峰值回撤达此值 → 减半锁盈
+    pp_exit_dd: float = 0.12             # 自峰值回撤达此值 → 清仓止盈
+    pp_trim_keep: float = 0.5            # 减半档保留比例
 
 
 def ma_tail(series: pd.Series, n: int) -> float:
@@ -154,6 +159,64 @@ def time_stop(hold_hist: pd.Series, cfg: RiskConfig, prev_tier: int = 0) -> Exit
         return ExitDecision(act, keep, f"时间止损({cfg.time_stop_days}日横盘未创新高)",
                             new_tier=max(prev_tier, 1))
     return None
+
+
+def pp_step(close: float, peak: float, cost: float, cfg: RiskConfig, cur_tier: int) -> int:
+    """单日推进盈利保护档位（单调，只升不降）。0=未触发 1=减半锁盈 2=清仓止盈。
+
+    peak 为持有期内截至当日的最高收盘。峰值较成本浮盈未达 pp_trigger 时保护不启动。
+    """
+    if not (np.isfinite(close) and np.isfinite(peak) and peak > 0 and cost > 0):
+        return cur_tier
+    if peak / cost - 1 < cfg.pp_trigger:
+        return cur_tier
+    dd = 1 - close / peak
+    if dd >= cfg.pp_exit_dd:
+        return max(cur_tier, 2)
+    if dd >= cfg.pp_trim_dd:
+        return max(cur_tier, 1)
+    return cur_tier
+
+
+def replay_pp_tier(hold_hist: pd.Series, cost: float, cfg: RiskConfig,
+                   start_tier: int = 0) -> int:
+    """自建仓日起逐日回放，重建盈利保护档位（与 replay_tier 同构）。"""
+    s = pd.to_numeric(hold_hist, errors="coerce").dropna()
+    if s.empty or not cost or not np.isfinite(cost) or cost <= 0:
+        return start_tier
+    tier, peak = start_tier, float("-inf")
+    for c in s.to_numpy(dtype=float):
+        peak = max(peak, c)
+        tier = pp_step(c, peak, cost, cfg, tier)
+    return tier
+
+
+def profit_protect(hold_hist: pd.Series, cost: float, cfg: RiskConfig,
+                   prev_tier: int = 0) -> ExitDecision | None:
+    """盈利保护（回撤止盈）：浮盈曾达 pp_trigger 后，价格自持有期峰值回撤
+    达 pp_trim_dd → 减半锁盈；达 pp_exit_dd → 清仓止盈。
+
+    补上原体系「浮盈只有 MA20 追踪、可回吐 30%+ 才触发」的缺口——
+    高位票在跌回 MA20 之前就先把利润锁住。hold_hist 为自建仓日起(含评估日)
+    的收盘序列；prev_tier 为回放至前一日的档位。返回 None 表示不触发。
+    """
+    if not cfg.profit_protect or prev_tier >= 2:
+        return None
+    s = pd.to_numeric(hold_hist, errors="coerce").dropna()
+    if s.empty or not cost or not np.isfinite(cost) or cost <= 0:
+        return None
+    close, peak = float(s.iloc[-1]), float(s.max())
+    tier = pp_step(close, peak, cost, cfg, prev_tier)
+    if tier <= prev_tier:
+        return None
+    dd = 1 - close / peak
+    if tier >= 2:
+        return ExitDecision("exit", 0.0,
+                            f"盈利保护止盈(自峰值回撤{dd:.0%}≥{cfg.pp_exit_dd:.0%})",
+                            new_tier=tier)
+    return ExitDecision("trim", cfg.pp_trim_keep,
+                        f"盈利保护减半(自峰值回撤{dd:.0%}≥{cfg.pp_trim_dd:.0%})",
+                        new_tier=tier)
 
 
 def trend_ok_close(close_hist: pd.Series, cfg: RiskConfig) -> bool:

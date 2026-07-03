@@ -16,7 +16,8 @@ import pandas as pd
 
 from invest_model.logger import get_logger
 from invest_model.orchestration.closed_loop import ClosedLoop, LoopConfig
-from invest_model.portfolio.risk import evaluate_holding, replay_tier, time_stop
+from invest_model.portfolio.risk import (evaluate_holding, profit_protect,
+                                         replay_pp_tier, replay_tier, time_stop)
 from invest_model.repositories.holding_repo import HoldingRepo
 from invest_model.signals.buypoint import BuyPointConfig, detect_buypoints
 
@@ -257,12 +258,21 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                     tw, reason = 0.0, dec.reason
                 elif dec.action == "trim":
                     tw, reason = cw * dec.keep_frac, dec.reason
-                # 时间止损（手册第3步）：仅在已知真实建仓日、且未触发其它风控时检查
-                elif entry_map[c]:
-                    ts = time_stop(hold_hist, rc, prev_tier=prev)
-                    if ts is not None:
-                        tw = 0.0 if ts.action == "exit" else cw * ts.keep_frac
-                        reason = ts.reason
+                # 盈利保护（回撤止盈）：浮盈达标后自峰值回撤锁盈——先于时间止损检查。
+                # 补 MA20 追踪对高位票「回吐 30%+ 才触发」的缺口（如 巨化 54.8→49.4 无动作）。
+                elif entry_map[c] and not hold_hist.empty:
+                    pp_prev = replay_pp_tier(hold_hist[hold_hist.index < cur_day],
+                                             cost_map[c], rc)
+                    ppd = profit_protect(hold_hist, cost_map[c], rc, prev_tier=pp_prev)
+                    if ppd is not None:
+                        tw = 0.0 if ppd.action == "exit" else cw * ppd.keep_frac
+                        reason = ppd.reason
+                    else:
+                        # 时间止损（手册第3步）：仅在未触发其它风控时检查
+                        ts = time_stop(hold_hist, rc, prev_tier=prev)
+                        if ts is not None:
+                            tw = 0.0 if ts.action == "exit" else cw * ts.keep_frac
+                            reason = ts.reason
             if not np.isfinite(stop_price) and cost_map[c] > 0:
                 stop_price = cost_map[c] * (1 - rc.hard_stop_pct)
 
@@ -297,6 +307,37 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     # ── 账户层 ──
     cost_basis = sum(cost_map[c] * shares_map[c] for c in held_codes)
     unreal = (sum(mv.values()) - cost_basis) / cost_basis if cost_basis > 0 else 0.0
+
+    # 账户级风险提示：执行对账（上一日计划的清仓是否执行）/ 行业与单票集中度 / 仓位 vs 目标
+    hints: list[str] = []
+    try:
+        prev_plan = loop.repo.read_sql(
+            "SELECT code, name, reason FROM action_plan "
+            "WHERE plan_date=(SELECT MAX(plan_date) FROM action_plan WHERE plan_date<:d) "
+            "AND action='sell'", {"d": dt})
+        stale = [str(r["name"] or r["code"]) for _, r in prev_plan.iterrows()
+                 if r["code"] in held_codes]
+        if stale:
+            hints.append(f"上一交易日计划清仓未执行：{'、'.join(stale)}（纪律高于观点，优先处理）")
+    except Exception:  # noqa: BLE001 - 首日无历史计划等情况不阻断
+        pass
+    try:
+        ind_map = loop.industry_map()
+        ind_w: dict[str, float] = {}
+        for c in held_codes:
+            ind_w[ind_map.get(c) or "未知"] = ind_w.get(ind_map.get(c) or "未知", 0.0) + cur_w.get(c, 0.0)
+        for ind, w in sorted(ind_w.items(), key=lambda kv: -kv[1]):
+            if ind != "未知" and w > 0.35:
+                hints.append(f"行业集中度：{ind} 合计 {w:.0%} 超 35% 上限，回避同涨同跌")
+        heavy = [(names.get(c, c), w) for c, w in cur_w.items() if w > 0.20]
+        for nm, w in sorted(heavy, key=lambda kv: -kv[1]):
+            hints.append(f"单票集中度：{nm} {w:.0%} 超 20% 上限，建议分批降至上限内")
+    except Exception:  # noqa: BLE001
+        pass
+    invested = sum(mv.values()) / equity
+    if invested - gross > 0.10:
+        hints.append(f"实际仓位 {invested:.0%} 高于目标 {gross:.0%}，无现金缓冲，补足前不开新仓")
+
     account = {
         "plan_date": dt, "equity": round(equity, 2),
         "invested_pct": round(sum(mv.values()) / equity, 4),
@@ -308,6 +349,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         "risk_off": bool(rc.enabled and rc.account_dd_stop and unreal <= -rc.account_dd_stop),
         "model_ic_mean": m_ic_mean, "model_ic_ir": m_ic_ir, "model_hit": m_hit,
         "model_conf_label": _conf_label(model_trust, m_ic_ir),
+        "risk_hints": " | ".join(hints) if hints else None,
     }
 
     rows = rows + watch_rows

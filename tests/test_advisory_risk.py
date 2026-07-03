@@ -26,6 +26,9 @@ from invest_model.portfolio import PortfolioConfig, RiskConfig, fuse_targets
 from invest_model.portfolio.risk import (
     evaluate_holding,
     keep_from_step,
+    pp_step,
+    profit_protect,
+    replay_pp_tier,
     replay_tier,
     step_tier,
     time_stop,
@@ -108,6 +111,41 @@ def test_time_stop_sideways_trims():
     assert time_stop(up, RiskConfig(time_stop_days=8)) is None
     # 已启动移动止盈(prev_tier>0) → 不属时间止损
     assert time_stop(s, RiskConfig(time_stop_days=8), prev_tier=1) is None
+
+
+def test_pp_not_armed_below_trigger():
+    # 峰值浮盈不足 15% → 保护不启动，即使随后回撤很深也不触发（那是止损的事）
+    s = pd.Series([100, 110, 100.0], index=["0", "1", "2"])
+    assert profit_protect(s, cost=100, cfg=RiskConfig()) is None
+    assert pp_step(100, peak=110, cost=100, cfg=RiskConfig(), cur_tier=0) == 0
+
+
+def test_pp_trim_then_exit_monotonic():
+    cfg = RiskConfig()  # pp_trigger=0.15 trim=0.08 exit=0.12
+    # 成本100 涨到 130（+30% 已启动保护），回撤 8%→减半
+    s = pd.Series([100, 115, 130, 119.0], index=[str(i) for i in range(4)])  # dd≈8.5%
+    d = profit_protect(s, cost=100, cfg=cfg)
+    assert d is not None and d.action == "trim" and d.new_tier == 1 and "盈利保护" in d.reason
+    # 前一日已减半（prev_tier=1），当日回撤仍在 8~12% 区间 → 不重复触发
+    assert profit_protect(s, cost=100, cfg=cfg, prev_tier=1) is None
+    # 回撤达 12% → 清仓止盈（即使已在档1）
+    s2 = pd.Series([100, 115, 130, 114.0], index=[str(i) for i in range(4)])  # dd≈12.3%
+    d2 = profit_protect(s2, cost=100, cfg=cfg, prev_tier=1)
+    assert d2 is not None and d2.action == "exit" and d2.new_tier == 2
+    # 已清仓档（prev_tier=2）→ 永不再触发
+    assert profit_protect(s2, cost=100, cfg=cfg, prev_tier=2) is None
+
+
+def test_pp_replay_and_juhua_scenario():
+    cfg = RiskConfig()
+    # 巨化式场景：成本38.8 → 峰值54.8（+41%），跌到 49.35 时自峰值回撤 ≈10%
+    s = pd.Series([38.8, 45, 50, 54.83, 49.35], index=[str(i) for i in range(5)])
+    prev = replay_pp_tier(s.iloc[:-1], cost=38.8, cfg=cfg)   # 截至昨日：无回撤 → 档0
+    assert prev == 0
+    d = profit_protect(s, cost=38.8, cfg=cfg, prev_tier=prev)
+    assert d is not None and d.action == "trim"              # 回撤10% ≥8% → 减半锁盈
+    # 旧规则对照：MA20 追踪要跌回 ~35.7 才动，会回吐全部超额利润
+    assert replay_pp_tier(s, cost=38.8, cfg=cfg) == 1
 
 
 def _seed_ohlcv(engine, code, closes, vols, opens=None):

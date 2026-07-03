@@ -340,6 +340,7 @@ action_plan_account = Table(
     Column("model_ic_ir", Numeric(10, 6)),
     Column("model_hit", Numeric(8, 4)),
     Column("model_conf_label", String(32)),
+    Column("risk_hints", String(512)),                      # 执行对账/集中度/仓位偏离等账户级提示
     _created_at(),
 )
 
@@ -415,6 +416,7 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "model_rank": "DECIMAL(10,6)",
         "model_view": "VARCHAR(32)",
     },
+    "action_plan_account": {"risk_hints": "VARCHAR(512)"},
 }
 
 

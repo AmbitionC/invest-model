@@ -56,6 +56,31 @@ def _levels(repo: BaseRepository, codes: list[str], dt: str) -> dict[str, dict]:
     return out
 
 
+def _entry_peaks(repo: BaseRepository, holds: pd.DataFrame, dt: str) -> dict[str, float]:
+    """每只持仓自建仓日以来的最高收盘（盈利保护「自峰值回撤」的峰值基准）。
+
+    无 entry_date 的持仓取不到峰值 → 不参与盈利保护（宁缺勿误报）。
+    """
+    out: dict[str, float] = {}
+    if holds is None or holds.empty or "entry_date" not in holds.columns:
+        return out
+    for _, h in holds.iterrows():
+        ed = str(h.get("entry_date") or "").strip()
+        if not ed:
+            continue
+        try:
+            df = repo.read_sql(
+                "SELECT MAX(close) mx FROM stock_daily "
+                "WHERE code=:c AND trade_date>=:e AND trade_date<=:d",
+                {"c": h["code"], "e": ed, "d": dt})
+            v = pd.to_numeric(df["mx"].iloc[0], errors="coerce")
+            if pd.notna(v) and float(v) > 0:
+                out[h["code"]] = float(v)
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 def _fund_levels(pro, code: str, dt: str) -> dict | None:
     """ETF/基金前复权均线基准：{ma20, ma60, ma60_up, hi20, last, adj_ok}。
 
@@ -290,6 +315,7 @@ def _build_context(args: argparse.Namespace) -> dict:
         watch = list(sel["code"])
     watch = [c for c in watch if c not in held and c not in exit_codes]
     levels = _levels(repo, held + watch, dt)
+    peaks = _entry_peaks(repo, holds, dt)     # 持有期峰值收盘（盈利保护基准）
     g_of = dict(zip(reco["code"], reco["grade"])) if not reco.empty else {}
     # ETF 持仓：成本读快照（CSV 或 DB），均线基准用 fund_daily 前复权（可转债不盯，用户上市即卖）
     etf_holds = _load_etf_holdings(repo)
@@ -302,7 +328,7 @@ def _build_context(args: argparse.Namespace) -> dict:
             if lv is not None:
                 etf_levels[e["code"]] = lv
     return {"engine": engine, "repo": repo, "dt": dt, "holds": holds,
-            "watch": watch, "levels": levels, "g_of": g_of,
+            "watch": watch, "levels": levels, "peaks": peaks, "g_of": g_of,
             "trailing_only": trailing_only, "codes": held + watch,
             "etf_holds": etf_holds, "etf_levels": etf_levels,
             "etf_codes": [e["code"] for e in etf_holds],
@@ -340,21 +366,35 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         pnl = (px / cost - 1) if cost else 0
         stop = cost * (1 - args.hard_stop); ma20 = lv.get("ma20")
         ex = c in trailing_only            # 移动止盈白名单：不套硬止损
+        # 盈利保护基准：持有期峰值收盘（EOD）与盘中现价取高
+        peak = max(ctx.get("peaks", {}).get(c, 0.0), px)
+        pp_on = bool(cost) and args.pp_trigger and peak / cost - 1 >= args.pp_trigger
         if not ex and pnl <= -args.hard_stop:
             st, hit = "⚠️ 已触发硬止损，清仓", True
         elif ma20 and px < ma20 * 0.995:   # 0.5% 缓冲，避免贴线来回抖动
             st, hit = ("破MA20移动止盈，确认清仓" if ex else "破MA20，盘后确认清仓"), True
+        elif pp_on and 1 - px / peak >= args.pp_exit_dd:
+            st, hit = f"⚠️ 盈利保护：自峰值回撤超{args.pp_exit_dd:.0%}，止盈离场", True
+        elif pp_on and 1 - px / peak >= args.pp_trim_dd:
+            st, hit = f"⚠️ 盈利保护：自峰值回撤超{args.pp_trim_dd:.0%}，减半锁盈", True
         elif not ex and pnl <= -args.hard_stop + 0.02:
             st, hit = "逼近止损，盯紧", True
         else:
             st, hit = ("持有(MA20移动止盈)" if ex else "持有"), False
         hold_rows.append((q.get("name", c), px, chg, cost, pnl, stop, ma20, st))
         if not hit:
-            _track(px, None if ex else stop, ma20 * 0.995 if ma20 else None)
+            _track(px, None if ex else stop, ma20 * 0.995 if ma20 else None,
+                   peak * (1 - args.pp_trim_dd) if pp_on else None)
         if hit:
-            # 挂单信号：清仓类给「卖 全部股数 限价≈现价，占比→0，回笼资金」；逼近只提示不给单
+            # 挂单信号：清仓类给「卖 全部股数 限价≈现价，占比→0，回笼资金」；
+            # 盈利保护减半给「卖一半锁盈」；逼近只提示不给单
             if "逼近" in st:
                 ticket = ""
+            elif "减半" in st:
+                half = int(sh // 200) * 100
+                cw = (sh * px / equity) if equity else 0.0
+                ticket = (f" → 卖 {half}股 限价≈{px:.2f} 锁盈一半"
+                          f"(占{cw:.1%}→{cw / 2:.1%},回笼≈{half * px:.0f})" if half else "")
             else:
                 cw = (sh * px / equity) if equity else 0.0
                 ticket = (f" → 卖 {int(sh)}股 市价/限价≈{px:.2f} 清"
@@ -664,6 +704,9 @@ def run_once(**overrides) -> dict:
     args = argparse.Namespace(
         db=None,
         hard_stop=float(os.getenv("LIVE_HARD_STOP", "0.08")),
+        pp_trigger=float(os.getenv("LIVE_PP_TRIGGER", "0.15")),
+        pp_trim_dd=float(os.getenv("LIVE_PP_TRIM", "0.08")),
+        pp_exit_dd=float(os.getenv("LIVE_PP_EXIT", "0.12")),
         pullback_pct=float(os.getenv("LIVE_PULLBACK", "0.03")),
         buy_weight=float(os.getenv("LIVE_BUY_WEIGHT", "0.05")),
         digest_window=int(os.getenv("DIGEST_WINDOW", "20")),
@@ -784,6 +827,12 @@ def main() -> None:
     ap.add_argument("--db", default=None,
                     help="DB URL；省略则读环境变量 INVEST_DB_URL/DB_*（生产 MySQL）")
     ap.add_argument("--hard-stop", type=float, default=0.08)
+    ap.add_argument("--pp-trigger", type=float, default=float(os.getenv("LIVE_PP_TRIGGER", "0.15")),
+                    help="盈利保护启动阈值：持有期峰值较成本浮盈达此值后开始盯回撤")
+    ap.add_argument("--pp-trim-dd", type=float, default=float(os.getenv("LIVE_PP_TRIM", "0.08")),
+                    help="自峰值回撤达此值 → 减半锁盈")
+    ap.add_argument("--pp-exit-dd", type=float, default=float(os.getenv("LIVE_PP_EXIT", "0.12")),
+                    help="自峰值回撤达此值 → 清仓止盈")
     ap.add_argument("--pullback-pct", type=float, default=0.03)
     ap.add_argument("--buy-weight", type=float, default=0.05,
                     help="买入类挂单的单只目标占比（占账户总权益，默认 5%%）")
