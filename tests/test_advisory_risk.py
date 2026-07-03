@@ -179,6 +179,17 @@ def test_armed_ladder_trim_then_exit():
     assert armed_ladder(s2, s2.index[0], 100, RiskConfig(armed_trail=False)) is None
 
 
+def test_armed_ladder_duplicate_index_snapshot_day():
+    # 生产场景回归：当日 EOD 收盘 + 券商快照价并存 → 索引重复，不得抛错
+    cfg = RiskConfig()
+    up = [100, 103, 106, 109, 112, 115, 118, 121, 124, 127]
+    idx = _idx(11)
+    s = pd.Series(up + [120.0], index=idx)
+    s = pd.concat([s, pd.Series({idx[-1]: 119.5})])   # 快照价与 EOD 同键
+    d = armed_ladder(s, idx[0], 100, cfg)
+    assert d is not None and d.action == "trim" and "破MA5" in d.reason
+
+
 def test_armed_ladder_respects_entry_date():
     cfg = RiskConfig()
     # 建仓前的历史破位不算：entry 在高位之后，持有期内峰值浮盈不足 → 不触发

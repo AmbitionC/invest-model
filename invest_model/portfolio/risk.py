@@ -232,19 +232,22 @@ def replay_ladder_tier(close_hist: pd.Series, entry_date: str, cost: float,
     s = pd.to_numeric(close_hist, errors="coerce")
     if s.empty or not entry_date or not cost or not np.isfinite(cost) or cost <= 0:
         return start_tier
-    ma5 = s.rolling(5).mean()
-    ma10 = s.rolling(10).mean()
+    # 全部按位置取值：持仓当日会同时有 EOD 收盘 + 券商快照两行（索引重复），
+    # 标签取值(.loc)在重复索引下返回 Series 而非标量。
+    ma5 = s.rolling(5).mean().to_numpy()
+    ma10 = s.rolling(10).mean().to_numpy()
+    vals = s.to_numpy(dtype=float)
+    keys = [str(k) for k in s.index]
     tier, peak = start_tier, float("-inf")
-    for idx, c in s.items():
-        if str(idx) < entry_date or not np.isfinite(c):
+    for i, c in enumerate(vals):
+        if keys[i] < entry_date or not np.isfinite(c):
             continue
         peak = max(peak, c)
         if peak / cost - 1 < cfg.pp_trigger:
             continue
-        m5, m10 = float(ma5.loc[idx]), float(ma10.loc[idx])
-        if np.isfinite(m10) and c < m10:
+        if np.isfinite(ma10[i]) and c < ma10[i]:
             tier = max(tier, 2)
-        elif np.isfinite(m5) and c < m5:
+        elif np.isfinite(ma5[i]) and c < ma5[i]:
             tier = max(tier, 1)
     return tier
 
