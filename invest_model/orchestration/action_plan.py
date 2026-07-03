@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -16,7 +17,7 @@ import pandas as pd
 
 from invest_model.logger import get_logger
 from invest_model.orchestration.closed_loop import ClosedLoop, LoopConfig
-from invest_model.portfolio.risk import (evaluate_holding, profit_protect,
+from invest_model.portfolio.risk import (armed_ladder, evaluate_holding, profit_protect,
                                          replay_pp_tier, replay_tier, time_stop)
 from invest_model.repositories.holding_repo import HoldingRepo
 from invest_model.signals.buypoint import BuyPointConfig, detect_buypoints
@@ -90,6 +91,79 @@ def _close_hist(loop: ClosedLoop, code: str, start: str, dt: str) -> pd.Series:
 def _round_lot(shares: float) -> float:
     """A 股按 100 股取整（卖出允许零股，这里统一向最接近的手取整）。"""
     return float(round(shares / 100.0) * 100)
+
+
+def _trailing_only() -> set[str]:
+    """移动止盈白名单（config/trailing_only.txt）：核心主升浪仓，只按破MA20管，
+    豁免硬止损与盈利保护（与 scripts/live_check.py 同一份名单、同一语义）。"""
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[2] / "config" / "trailing_only.txt"
+    if not p.exists():
+        return set()
+    try:
+        return {ln.split("#")[0].strip() for ln in p.read_text(encoding="utf-8").splitlines()
+                if ln.split("#")[0].strip()}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _update_policy_shadow(loop: ClosedLoop, dt: str, reco: pd.DataFrame, bps: dict) -> None:
+    """研报速通影子验证：逐日更新两条虚拟净值，供 4~6 周后复核该政策。
+
+    fast＝信号次一交易日收盘直入；gate＝旧严格闸门首次触发日收盘入（未触发即空仓）。
+    只记 research A/B 级、近 90 天的信号；每计划日刷新 last_close 与两侧收益。
+    """
+    if reco is None or reco.empty or "source_type" not in reco.columns:
+        return
+    back = (pd.to_datetime(dt) - pd.Timedelta(days=90)).strftime("%Y%m%d")
+    sig = reco[(reco["source_type"] == "research") & (reco["grade"].isin({"A", "B"}))
+               & (reco["rec_date"].astype(str) >= back)]
+    if sig.empty:
+        return
+    exist = pd.DataFrame()
+    if loop.repo.table_exists("policy_shadow"):
+        exist = loop.repo.read_sql(
+            "SELECT * FROM policy_shadow WHERE signal_date>=:b", {"b": back})
+    ex_map = {(str(r["signal_date"]), str(r["code"])): dict(r)
+              for _, r in exist.iterrows()} if not exist.empty else {}
+
+    def _close_at(code: str, day: str) -> float | None:
+        df = loop.repo.read_sql(
+            "SELECT close FROM stock_daily WHERE code=:c AND trade_date=:d",
+            {"c": code, "d": day})
+        if df.empty:
+            return None
+        v = pd.to_numeric(df["close"].iloc[0], errors="coerce")
+        return float(v) if pd.notna(v) and v > 0 else None
+
+    out = []
+    for _, s in sig.iterrows():
+        key = (str(s["rec_date"]), str(s["code"]))
+        row = ex_map.get(key) or {"signal_date": key[0], "code": key[1],
+                                  "grade": str(s["grade"]), "d0_date": None,
+                                  "d0_close": None, "gate_date": None, "gate_close": None}
+        if not row.get("d0_close"):
+            d0 = loop.repo.read_sql(
+                "SELECT MIN(trade_date) AS d FROM stock_daily "
+                "WHERE code=:c AND trade_date>:s AND trade_date<=:d",
+                {"c": key[1], "s": key[0], "d": dt})["d"].iloc[0]
+            if d0 is not None:
+                row["d0_date"], row["d0_close"] = str(d0), _close_at(key[1], str(d0))
+        bp = bps.get(key[1])
+        if not row.get("gate_close") and bp is not None and getattr(bp, "is_buy", False):
+            row["gate_date"], row["gate_close"] = dt, _close_at(key[1], dt)
+        last = _close_at(key[1], dt)
+        if last:
+            row["last_date"], row["last_close"] = dt, last
+            d0c = pd.to_numeric(row.get("d0_close"), errors="coerce")
+            gtc = pd.to_numeric(row.get("gate_close"), errors="coerce")
+            row["fast_ret"] = round(last / float(d0c) - 1, 6) if pd.notna(d0c) and d0c else None
+            row["gate_ret"] = round(last / float(gtc) - 1, 6) if pd.notna(gtc) and gtc else None
+        out.append({k: row.get(k) for k in (
+            "signal_date", "code", "grade", "d0_date", "d0_close", "gate_date",
+            "gate_close", "last_date", "last_close", "fast_ret", "gate_ret")})
+    if out:
+        loop.repo.upsert("policy_shadow", pd.DataFrame(out), ["signal_date", "code"])
 
 
 def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = None,
@@ -172,7 +246,13 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     exit_codes = loop.adv_repo.get_exit_codes(dt)
 
     # ── 观察池 + 复合买点（手册第1-2步）：研报标的先观察，仅买点触发才建议买入 ──
+    # 例外「研报速通」（20260703 数据验证）：research 信号的 α 集中在信号后前几日，
+    # 等回踩=逆向选择（103条信号严格闸只放行2%，研报子集立即买均值+12%）。
+    # A/B 级研报信号 3 个交易日内免闸半仓直入，余下半仓仍走回踩/突破闸补足；
+    # 影子净值落库 policy_shadow 供 4~6 周复核，RESEARCH_FAST_ENTRY=0 一键回退。
     watch_rows: list[dict] = []
+    buy_codes: set[str] = set()
+    fresh_fast: set[str] = set()
     if buypoint:
         reco = loop.adv_repo.get_active_reco(dt)
         # 观察池收敛：A 级全留 + B 级取最近的，总量封顶（避免历史 B 级堆积把观察池撑爆）。
@@ -189,15 +269,35 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             pool = a_codes + b_codes[: max(0, WATCH_POOL_CAP - len(a_codes))]
         bps = detect_buypoints(engine, dt, pool, gross, rank_map, bp_cfg)
         buy_codes = {c for c, bp in bps.items() if bp.is_buy}
-        # 目标里：投顾票未触发买点的 → 移出建议买入、转观察池（持仓的不动，交风控管）
+        fast_on = os.getenv("RESEARCH_FAST_ENTRY", "1").lower() not in ("0", "false")
+        if fast_on and not reco.empty and "source_type" in reco.columns:
+            recent = loop.repo.read_sql(
+                "SELECT DISTINCT trade_date FROM stock_daily WHERE trade_date<=:d "
+                "ORDER BY trade_date DESC LIMIT 3", {"d": dt})
+            cut = str(recent["trade_date"].min()) if len(recent) else dt
+            rr = reco[(reco["source_type"] == "research")
+                      & (reco["grade"].isin({"A", "B"}))
+                      & (reco["rec_date"].astype(str) >= cut)]
+            fresh_fast = {c for c in rr["code"]
+                          if c not in held_codes and c not in exit_codes}
+        # 目标里：投顾票未触发买点的 → 移出建议买入、转观察池（持仓的不动，交风控管；
+        # 研报速通票不移出——免闸直入，但只给一半目标权重）
         for c in list(targets):
             if (meta.get(c, {}) or {}).get("source") == "advisor" \
-                    and c not in buy_codes and c not in held_codes:
+                    and c not in buy_codes and c not in held_codes and c not in fresh_fast:
                 targets.pop(c, None)
-        # 观察池清单（含趋势未过/未现买点等原因），持仓中的不再列观察
+        for c in fresh_fast & set(targets):
+            if c not in buy_codes:            # 闸门已确认的给全额，未确认的先半仓
+                targets[c] = float(targets[c]) * 0.5
+        if persist:
+            try:
+                _update_policy_shadow(loop, dt, reco, bps)
+            except Exception as e:  # noqa: BLE001 - 影子验证失败不阻断计划生成
+                logger.warning(f"policy_shadow 更新失败：{e}")
+        # 观察池清单（含趋势未过/未现买点等原因），持仓中的/已进目标的（研报速通）不再列观察
         wnames = _name_map(loop, [c for c in pool if c not in held_codes])
         for c in pool:
-            if c in buy_codes or c in held_codes:
+            if c in buy_codes or c in held_codes or c in targets:
                 continue
             bp = bps.get(c)
             g = reco.loc[reco["code"] == c, "grade"].iloc[0] if not reco.empty else None
@@ -227,6 +327,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             last_close[rr["code"]] = float(pd.to_numeric(rr["close"], errors="coerce"))
     warm = (pd.to_datetime(dt) - pd.Timedelta(days=150)).strftime("%Y%m%d")
     reset_floor = (pd.to_datetime(dt) - pd.Timedelta(days=35)).strftime("%Y%m%d")  # 档位回放窗口下限(≈1个调仓周期)
+    trail_white = _trailing_only()
     rows: list[dict] = []
     for c in all_codes:
         cw = cur_w.get(c, 0.0)
@@ -263,10 +364,20 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                 elif entry_map[c] and not hold_hist.empty:
                     pp_prev = replay_pp_tier(hold_hist[hold_hist.index < cur_day],
                                              cost_map[c], rc)
-                    ppd = profit_protect(hold_hist, cost_map[c], rc, prev_tier=pp_prev)
-                    if ppd is not None:
-                        tw = 0.0 if ppd.action == "exit" else cw * ppd.keep_frac
-                        reason = ppd.reason
+                    exempt = c in trail_white          # 白名单核心仓：只按破MA20管
+                    ppd = None if exempt else profit_protect(
+                        hold_hist, cost_map[c], rc, prev_tier=pp_prev)
+                    # 盈利后均线梯子：与峰值回撤并行，先触发者生效（回测：回吐 19.8%→13.3%）
+                    lad = None if exempt else armed_ladder(hist, real_entry, cost_map[c], rc)
+                    guard = None
+                    for cand_dec in (ppd, lad):
+                        if cand_dec is None:
+                            continue
+                        if guard is None or (cand_dec.action == "exit" and guard.action != "exit"):
+                            guard = cand_dec
+                    if guard is not None:
+                        tw = 0.0 if guard.action == "exit" else cw * guard.keep_frac
+                        reason = guard.reason
                     else:
                         # 时间止损（手册第3步）：仅在未触发其它风控时检查
                         ts = time_stop(hold_hist, rc, prev_tier=prev)
@@ -294,6 +405,10 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             shares_delta = _round_lot((tw - cw) * equity / px) if px and px > 0 else 0.0
 
         trigger = (f"挂单≈{round(px, 2)}" if action in ("buy", "add") and px else "—")
+        if action == "buy" and c in fresh_fast and c not in buy_codes and px:
+            # 研报速通：不追高开（次日平均跳空+3.2%后日内回落），尾盘建半仓
+            reason = f"研报速通·半仓直入：{reason}"
+            trigger = f"次日尾盘≤{round(px, 2)}建半仓；回踩带补半仓；3日内有效"
         rows.append({
             "plan_date": dt, "code": c, "name": names.get(c, ""),
             "action": action, "cur_weight": round(cw, 4), "tgt_weight": round(tw, 4),
@@ -303,6 +418,39 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             "model_rank": rank_map.get(c),
             "model_view": _model_view(rank_map.get(c), model_trust),
         })
+
+    # ── 再入场（回测：右尾代价补回 2/3）──
+    # 近 45 天内被盈利保护/梯子清仓的票，收盘创出离场以来区间新高 → 半仓接回，
+    # 把「止盈下车后主升浪继续」的踏空补回来（002378 场景）。
+    if rc.enabled and rc.reentry:
+        try:
+            back = (pd.to_datetime(dt) - pd.Timedelta(days=45)).strftime("%Y%m%d")
+            ex_df = loop.repo.read_sql(
+                "SELECT DISTINCT code FROM action_plan WHERE plan_date>=:b AND plan_date<:d "
+                "AND action='sell' AND reason LIKE :r", {"b": back, "d": dt, "r": "盈利保护%"})
+            re_codes = [c for c in ex_df["code"]
+                        if c not in held_codes and c not in targets and c not in exit_codes]
+            re_names = _name_map(loop, re_codes)
+            half_w = round(0.5 * (float(np.mean(list(targets.values()))) if targets else 0.05), 4)
+            for c in re_codes:
+                h = _close_hist(loop, c, back, dt)
+                if len(h) < 5:
+                    continue
+                px = float(h.iloc[-1])
+                if not (np.isfinite(px) and px > 0 and px >= float(h.iloc[:-1].max())):
+                    continue
+                rows.append({
+                    "plan_date": dt, "code": c, "name": re_names.get(c, ""),
+                    "action": "buy", "cur_weight": 0.0, "tgt_weight": half_w,
+                    "shares_delta": _round_lot(half_w * equity / px),
+                    "reason": "创新高确认·半仓再入场（盈利止盈离场后趋势延续）",
+                    "stop_price": round(px * (1 - rc.hard_stop_pct), 3),
+                    "ref_price": round(px, 3), "grade": None,
+                    "trigger": f"挂单≈{round(px, 2)}",
+                    "model_rank": rank_map.get(c),
+                    "model_view": _model_view(rank_map.get(c), model_trust)})
+        except Exception as e:  # noqa: BLE001 - 再入场判定失败不阻断计划生成
+            logger.warning(f"再入场判定失败：{e}")
 
     # ── 账户层 ──
     cost_basis = sum(cost_map[c] * shares_map[c] for c in held_codes)

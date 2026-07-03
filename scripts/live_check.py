@@ -49,10 +49,13 @@ def _levels(repo: BaseRepository, codes: list[str], dt: str) -> dict[str, dict]:
         if len(cl) < 20:
             continue
         ma20 = float(cl.tail(20).mean())
+        ma5 = float(cl.tail(5).mean()) if len(cl) >= 5 else float("nan")
+        ma10 = float(cl.tail(10).mean()) if len(cl) >= 10 else float("nan")
         ma60 = float(cl.tail(60).mean()) if len(cl) >= 60 else float("nan")
         ma60_prev = float(cl.tail(65).head(60).mean()) if len(cl) >= 65 else ma60
         hi20 = float(cl.iloc[-21:-1].max())   # 前 20 日高（不含今日）=突破位
-        out[code] = {"ma20": ma20, "ma60": ma60, "ma60_up": ma60 >= ma60_prev, "hi20": hi20}
+        out[code] = {"ma5": ma5, "ma10": ma10, "ma20": ma20, "ma60": ma60,
+                     "ma60_up": ma60 >= ma60_prev, "hi20": hi20}
     return out
 
 
@@ -373,10 +376,14 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
             st, hit = "⚠️ 已触发硬止损，清仓", True
         elif ma20 and px < ma20 * 0.995:   # 0.5% 缓冲，避免贴线来回抖动
             st, hit = ("破MA20移动止盈，确认清仓" if ex else "破MA20，盘后确认清仓"), True
-        elif pp_on and 1 - px / peak >= args.pp_exit_dd:
+        elif pp_on and not ex and 1 - px / peak >= args.pp_exit_dd:
             st, hit = f"⚠️ 盈利保护：自峰值回撤超{args.pp_exit_dd:.0%}，止盈离场", True
-        elif pp_on and 1 - px / peak >= args.pp_trim_dd:
+        elif pp_on and not ex and lv.get("ma10") and px < lv["ma10"]:
+            st, hit = "⚠️ 盈利保护：破MA10（盈利后梯子），止盈离场", True
+        elif pp_on and not ex and 1 - px / peak >= args.pp_trim_dd:
             st, hit = f"⚠️ 盈利保护：自峰值回撤超{args.pp_trim_dd:.0%}，减半锁盈", True
+        elif pp_on and not ex and lv.get("ma5") and px < lv["ma5"]:
+            st, hit = "⚠️ 盈利保护：破MA5（盈利后梯子），减半锁盈", True
         elif not ex and pnl <= -args.hard_stop + 0.02:
             st, hit = "逼近止损，盯紧", True
         else:
@@ -384,7 +391,8 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         hold_rows.append((q.get("name", c), px, chg, cost, pnl, stop, ma20, st))
         if not hit:
             _track(px, None if ex else stop, ma20 * 0.995 if ma20 else None,
-                   peak * (1 - args.pp_trim_dd) if pp_on else None)
+                   peak * (1 - args.pp_trim_dd) if pp_on and not ex else None,
+                   lv.get("ma5") if pp_on and not ex else None)
         if hit:
             # 挂单信号：清仓类给「卖 全部股数 限价≈现价，占比→0，回笼资金」；
             # 盈利保护减半给「卖一半锁盈」；逼近只提示不给单

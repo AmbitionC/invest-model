@@ -37,6 +37,8 @@ class RiskConfig:
     pp_trim_dd: float = 0.08             # 自峰值回撤达此值 → 减半锁盈
     pp_exit_dd: float = 0.12             # 自峰值回撤达此值 → 清仓止盈
     pp_trim_keep: float = 0.5            # 减半档保留比例
+    armed_trail: bool = True             # 盈利后梯子：浮盈达 pp_trigger 后破MA5减半/破MA10清仓
+    reentry: bool = True                 # 盈利止盈离场后 30 日内创新高 → 半仓再入场
 
 
 def ma_tail(series: pd.Series, n: int) -> float:
@@ -217,6 +219,55 @@ def profit_protect(hold_hist: pd.Series, cost: float, cfg: RiskConfig,
     return ExitDecision("trim", cfg.pp_trim_keep,
                         f"盈利保护减半(自峰值回撤{dd:.0%}≥{cfg.pp_trim_dd:.0%})",
                         new_tier=tier)
+
+
+def replay_ladder_tier(close_hist: pd.Series, entry_date: str, cost: float,
+                       cfg: RiskConfig, start_tier: int = 0) -> int:
+    """盈利后均线梯子档位回放（单调）。0=未触发 1=破MA5减半 2=破MA10清仓。
+
+    close_hist 为含均线预热的完整市场收盘序列（index=trade_date 升序）；
+    仅在持有期(index>=entry_date)内、且峰值浮盈已达 pp_trigger 后判定破位——
+    回测显示"从建仓日就收紧 MA5/10"会把刚启动的票洗掉，盈利后再收紧才是甜点位。
+    """
+    s = pd.to_numeric(close_hist, errors="coerce")
+    if s.empty or not entry_date or not cost or not np.isfinite(cost) or cost <= 0:
+        return start_tier
+    ma5 = s.rolling(5).mean()
+    ma10 = s.rolling(10).mean()
+    tier, peak = start_tier, float("-inf")
+    for idx, c in s.items():
+        if str(idx) < entry_date or not np.isfinite(c):
+            continue
+        peak = max(peak, c)
+        if peak / cost - 1 < cfg.pp_trigger:
+            continue
+        m5, m10 = float(ma5.loc[idx]), float(ma10.loc[idx])
+        if np.isfinite(m10) and c < m10:
+            tier = max(tier, 2)
+        elif np.isfinite(m5) and c < m5:
+            tier = max(tier, 1)
+    return tier
+
+
+def armed_ladder(close_hist: pd.Series, entry_date: str, cost: float,
+                 cfg: RiskConfig) -> ExitDecision | None:
+    """盈利后均线梯子当日决策：与 profit_protect 并行的更快技术止盈。
+
+    浮盈曾达 pp_trigger 后：收盘破 MA10 → 清仓；破 MA5 → 减半（各只触发一次，档位单调）。
+    返回 None 表示今日无新触发。
+    """
+    if not cfg.armed_trail:
+        return None
+    s = pd.to_numeric(close_hist, errors="coerce").dropna()
+    if len(s) < 2:
+        return None
+    prev = replay_ladder_tier(s.iloc[:-1], entry_date, cost, cfg)
+    now = replay_ladder_tier(s, entry_date, cost, cfg, start_tier=prev)
+    if now <= prev:
+        return None
+    if now >= 2:
+        return ExitDecision("exit", 0.0, "盈利保护破MA10清仓(盈利后梯子)", new_tier=now)
+    return ExitDecision("trim", cfg.pp_trim_keep, "盈利保护破MA5减半(盈利后梯子)", new_tier=now)
 
 
 def trend_ok_close(close_hist: pd.Series, cfg: RiskConfig) -> bool:

@@ -344,6 +344,24 @@ action_plan_account = Table(
     _created_at(),
 )
 
+# 研报速通影子验证：fast(信号次日收盘直入) vs gate(旧严格闸门) 两条虚拟净值，
+# 供上线 4~6 周后复核「研报直入」政策；RESEARCH_FAST_ENTRY=0 可随时回退。
+policy_shadow = Table(
+    "policy_shadow", metadata,
+    Column("signal_date", String(8), primary_key=True),    # 信号 rec_date
+    Column("code", String(16), primary_key=True),
+    Column("grade", String(2)),
+    Column("d0_date", String(8)),                           # fast 入场日（信号次一交易日）
+    Column("d0_close", Numeric(18, 4)),
+    Column("gate_date", String(8)),                         # 严格闸门首次触发日（可为空=从未触发）
+    Column("gate_close", Numeric(18, 4)),
+    Column("last_date", String(8)),
+    Column("last_close", Numeric(18, 4)),
+    Column("fast_ret", Numeric(12, 6)),
+    Column("gate_ret", Numeric(12, 6)),
+    _created_at(),
+)
+
 # 每日持仓快照（时间序列，供复盘/净值曲线；逐持仓一行）。
 holding_snapshot = Table(
     "holding_snapshot", metadata,

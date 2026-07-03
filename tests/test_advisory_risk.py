@@ -24,10 +24,12 @@ from invest_model.orchestration import ClosedLoop, LoopConfig
 from invest_model.orchestration.action_plan import build_action_plan
 from invest_model.portfolio import PortfolioConfig, RiskConfig, fuse_targets
 from invest_model.portfolio.risk import (
+    armed_ladder,
     evaluate_holding,
     keep_from_step,
     pp_step,
     profit_protect,
+    replay_ladder_tier,
     replay_pp_tier,
     replay_tier,
     step_tier,
@@ -146,6 +148,42 @@ def test_pp_replay_and_juhua_scenario():
     assert d is not None and d.action == "trim"              # 回撤10% ≥8% → 减半锁盈
     # 旧规则对照：MA20 追踪要跌回 ~35.7 才动，会回吐全部超额利润
     assert replay_pp_tier(s, cost=38.8, cfg=cfg) == 1
+
+
+def _idx(n, start=0):
+    return [f"202601{i + start:02d}" for i in range(1, n + 1)]
+
+
+def test_armed_ladder_only_after_trigger():
+    cfg = RiskConfig()
+    # 上行但峰值浮盈<15% → 破 MA5 也不触发（保护未启动，别把刚启动的票洗掉）
+    s = pd.Series([100, 102, 104, 106, 108, 110, 104.0], index=_idx(7))
+    assert replay_ladder_tier(s, entry_date=s.index[0], cost=100, cfg=cfg) == 0
+    assert armed_ladder(s, s.index[0], 100, cfg) is None
+
+
+def test_armed_ladder_trim_then_exit():
+    cfg = RiskConfig()
+    # 涨到 127（+27%，保护启动）后回落：先破 MA5 → 减半；继续破 MA10 → 清仓
+    up = [100, 103, 106, 109, 112, 115, 118, 121, 124, 127]
+    s1 = pd.Series(up + [120.0], index=_idx(11))      # 120 < MA5=122，仍在 MA10 上
+    d1 = armed_ladder(s1, s1.index[0], 100, cfg)
+    assert d1 is not None and d1.action == "trim" and "破MA5" in d1.reason
+    s2 = pd.Series(up + [120, 112.0], index=_idx(12))  # 112 < MA10≈116 → 清仓
+    d2 = armed_ladder(s2, s2.index[0], 100, cfg)
+    assert d2 is not None and d2.action == "exit" and "破MA10" in d2.reason
+    # 已在档1（昨日破5），今日仍只破5 → 不重复触发
+    s3 = pd.Series(up + [120, 121.0], index=_idx(12))
+    assert armed_ladder(s3, s3.index[0], 100, cfg) is None
+    # 关闭开关 → 永不触发
+    assert armed_ladder(s2, s2.index[0], 100, RiskConfig(armed_trail=False)) is None
+
+
+def test_armed_ladder_respects_entry_date():
+    cfg = RiskConfig()
+    # 建仓前的历史破位不算：entry 在高位之后，持有期内峰值浮盈不足 → 不触发
+    s = pd.Series([80, 100, 130, 125, 118, 112.0], index=_idx(6))
+    assert replay_ladder_tier(s, entry_date=s.index[3], cost=125, cfg=cfg) == 0
 
 
 def _seed_ohlcv(engine, code, closes, vols, opens=None):
@@ -360,3 +398,85 @@ def test_backtest_risk_overlay_runs(engine):
             "SELECT COUNT(*) FROM backtest_trades t JOIN backtest_run r ON t.run_id=r.run_id "
             "WHERE r.name='cs_rk_on' AND t.action='sell'")).scalar()
     assert sells > 0
+
+
+# ───────────────────────── 研报速通 / 影子验证 / 再入场 ─────────────────────────
+
+def test_research_fast_entry_and_shadow(engine, monkeypatch):
+    """新鲜 research A 信号：严格闸未触发也应半仓直入，并落 policy_shadow 影子行。"""
+    repo = AdvisorRepo(engine)
+    repo.execute_sql("DELETE FROM advisor_reco")
+    repo.execute_sql("DELETE FROM policy_shadow")
+    repo.execute_sql("DELETE FROM action_plan")
+    HoldingRepo(engine).clear()
+    codes = _some_codes(engine, 8)
+    fresh, stale = codes[6], codes[7]
+    last_dt = repo.read_sql("SELECT MAX(trade_date) d FROM stock_daily")["d"].iloc[0]
+
+    repo.save_reco(pd.DataFrame([
+        {"rec_date": str(last_dt), "code": fresh, "source_type": "research",
+         "grade": "A", "direction": "long", "valid_until": None},
+        {"rec_date": "20220101", "code": stale, "source_type": "research",
+         "grade": "A", "direction": "long", "valid_until": None},   # 早已过 3 日窗口
+    ]))
+    cfg = LoopConfig(version="plan_fast", start=START, end=END,
+                     risk=RiskConfig(enabled=True),
+                     universe=UniverseConfig(method="alla"),
+                     portfolio=PortfolioConfig(advisor_led=True, advisory_name_cap=0.3))
+    monkeypatch.setenv("RESEARCH_FAST_ENTRY", "1")
+    plan = build_action_plan(engine, cfg, cash=100000, buypoint=True)
+    by_code = {r["code"]: r for r in plan.rows}
+    # 新鲜研报票：免闸直入（若恰巧闸门也触发则为全额 buy，同样接受）
+    assert fresh in by_code and by_code[fresh]["action"] == "buy"
+    row = by_code[fresh]
+    if "研报速通" in row["reason"]:
+        assert "半仓" in row["trigger_hint"] if "trigger_hint" in row else "半仓" in row["trigger"]
+    # 影子表：新鲜信号有行、d0 尚未到（rec_date=最新日 → d0 是未来）或已填充
+    sh = repo.read_sql("SELECT * FROM policy_shadow WHERE code=:c", {"c": fresh})
+    assert len(sh) == 1
+    # 回退开关：关闭后新鲜票不再免闸（严格闸未触发时应回到观察池）
+    monkeypatch.setenv("RESEARCH_FAST_ENTRY", "0")
+    plan2 = build_action_plan(engine, cfg, cash=100000, buypoint=True, persist=False)
+    by2 = {r["code"]: r for r in plan2.rows}
+    if fresh in by2:
+        assert "研报速通" not in str(by2[fresh].get("reason", ""))
+
+
+def test_reentry_after_profit_exit(engine):
+    """盈利保护清仓后创新高 → 半仓再入场行。"""
+    from invest_model.repositories.base import BaseRepository
+    repo = BaseRepository(engine)
+    repo.execute_sql("DELETE FROM advisor_reco")
+    HoldingRepo(engine).clear()
+    # 造一只 45 日单边上行、末日创新高的票
+    dts = list(repo.read_sql(
+        "SELECT DISTINCT trade_date FROM stock_daily ORDER BY trade_date DESC LIMIT 50"
+    )["trade_date"])[::-1]
+    px = [10 + 0.1 * i for i in range(len(dts))]
+    rows = pd.DataFrame({"code": "RE1.SH", "trade_date": dts,
+                         "open": px, "high": [p * 1.01 for p in px],
+                         "low": [p * 0.99 for p in px], "close": px,
+                         "volume": [1e6] * len(dts), "amount": [1e7] * len(dts)})
+    repo.upsert("stock_daily", rows, ["code", "trade_date"])
+    # 一周前的计划里被盈利保护清仓
+    repo.upsert("action_plan", pd.DataFrame([{
+        "plan_date": dts[-6], "code": "RE1.SH", "name": "再入场测试",
+        "action": "sell", "cur_weight": 0.05, "tgt_weight": 0.0, "shares_delta": -1000,
+        "reason": "盈利保护止盈(自峰值回撤13%≥12%)", "stop_price": None,
+        "ref_price": px[-6], "grade": "A", "trigger_hint": "—",
+        "model_rank": None, "model_view": None}]), ["plan_date", "code"])
+    cfg = LoopConfig(version="plan_re", start=START, end=END,
+                     risk=RiskConfig(enabled=True, reentry=True),
+                     universe=UniverseConfig(method="alla"),
+                     portfolio=PortfolioConfig(advisor_led=True))
+    plan = build_action_plan(engine, cfg, cash=100000, buypoint=False, persist=False)
+    re_rows = [r for r in plan.rows if r["code"] == "RE1.SH"]
+    assert re_rows and re_rows[0]["action"] == "buy" and "再入场" in re_rows[0]["reason"]
+    assert re_rows[0]["tgt_weight"] > 0
+    # 开关关闭 → 无再入场行
+    cfg2 = LoopConfig(version="plan_re2", start=START, end=END,
+                      risk=RiskConfig(enabled=True, reentry=False),
+                      universe=UniverseConfig(method="alla"),
+                      portfolio=PortfolioConfig(advisor_led=True))
+    plan2 = build_action_plan(engine, cfg2, cash=100000, buypoint=False, persist=False)
+    assert not [r for r in plan2.rows if r["code"] == "RE1.SH"]
