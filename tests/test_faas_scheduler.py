@@ -109,6 +109,10 @@ def test_post_comment_creates_issue_and_comments(monkeypatch):
     monkeypatch.setattr(gh_notify, "_req", fake)
     res = gh_notify.post_issue_comment("📈 每日操作计划", "seed", "## 2026-07-02 盘后操作计划\n\nX")
     assert res == {"posted": True, "issue": 42, "reason": "ok"}
+    # 所有推送评论末尾带 @提及（走 mentions 通知通道，不依赖 Watch 级别）
+    posted_bodies = [pl["body"] for c, pl in fake.posted if "/issues/42/comments" in c and pl]
+    assert posted_bodies and posted_bodies[0].startswith("## 2026-07-02 盘后操作计划")
+    assert posted_bodies[0].rstrip().endswith("cc @AmbitionC")
     assert any("POST /repos/AmbitionC/invest-model/issues" == c and p["title"] == "📈 每日操作计划"
                for c, p in fake.posted)
     assert any("/issues/42/comments" in c for c, _ in fake.posted)

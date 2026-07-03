@@ -43,6 +43,17 @@ def _req(method: str, url: str, token: str, payload: dict | None = None):
     return json.loads(body) if body else {}
 
 
+def _mention(repo: str) -> str:
+    """要 @ 的人：NOTIFY_MENTION / LIVE_WATCH_MENTION 环境变量，缺省 @仓库主。
+
+    评论由机器人小号发出时，@提及走「Participating, @mentions」通知通道触发邮件，
+    不依赖收件人对仓库的 Watch 级别（快照提醒/计划/复盘/告警此前无提及，
+    Watch 未设 All Activity 就静默，故所有推送统一带提及）。
+    """
+    return (os.getenv("NOTIFY_MENTION") or os.getenv("LIVE_WATCH_MENTION")
+            or f"@{repo.split('/')[0]}")
+
+
 def _find_or_create_issue(token: str, repo: str, title: str, seed_body: str) -> int:
     q = urllib.parse.quote(f'repo:{repo} is:issue is:open in:title "{title}"')
     found = _req("GET", f"{_GH_API}/search/issues?q={q}", token)
@@ -79,8 +90,9 @@ def post_issue_comment(title: str, seed_body: str, comment_body: str,
             print(f"  已存在以「{dedupe_prefix}」开头的评论，跳过（防重）。")
             return {"posted": False, "issue": number, "reason": "duplicate"}
 
+    # 提及放末尾：开头保留「## 日期 …」防重前缀（dedupe_prefix 用 startswith 判断）
     _req("POST", f"{_GH_API}/repos/{repo}/issues/{number}/comments", token,
-         {"body": comment_body})
+         {"body": f"{comment_body}\n\ncc {_mention(repo)}"})
     print(f"  → 已推送到 issue #{number}「{title}」")
     return {"posted": True, "issue": number, "reason": "ok"}
 
