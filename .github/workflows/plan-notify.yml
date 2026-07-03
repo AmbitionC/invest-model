@@ -19,6 +19,10 @@ on:
     workflows: [data-update]
     types: [completed]
   workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/plan-notify.trigger'   # 手动兜底：改此文件即重出当日计划（与其它 workflow 同模式）
 
 concurrency:
   group: plan-notify
