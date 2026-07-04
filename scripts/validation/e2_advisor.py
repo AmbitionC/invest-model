@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -72,8 +74,10 @@ def build_forward(repo: BaseRepository, recos: pd.DataFrame) -> pd.DataFrame:
 
     # 行业均值：对每个 (entry,exit) 用全市场同业均值。为控成本，按需拉全 A 在这些日期的收盘。
     # 这里用「推荐票所属行业」的市场同业：查 stock_info 行业 → 拉该行业全部 code 在 need_dates 收盘。
+    # 行业相对超额需拉全行业同业收盘面板，公网 RDS 下极重 → 默认关闭，
+    # 置环境变量 VALIDATION_INDUSTRY_REL=1 才启用；否则主口径退基准相对（便宜、同样严谨）。
     ind_universe = {}
-    if imap and repo.table_exists("stock_info"):
+    if os.environ.get("VALIDATION_INDUSTRY_REL") and imap and repo.table_exists("stock_info"):
         inds = sorted({v for v in imap.values() if v})
         if inds:
             iph = ",".join(f":i{k}" for k in range(len(inds)))
