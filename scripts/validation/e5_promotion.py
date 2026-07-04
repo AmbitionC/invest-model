@@ -26,24 +26,26 @@ BASELINE_HINT = "ic_v1"           # 基线版本名包含该串
 CAND_FACTOR = "nb_ratio_chg_20"   # 影子候选因子
 
 
-def _latest_per_name(repo: BaseRepository) -> pd.DataFrame:
+def _all_runs(repo: BaseRepository) -> pd.DataFrame:
     if not repo.table_exists("backtest_run"):
         return pd.DataFrame()
     df = repo.read_sql(
         "SELECT run_id, name, start_date, end_date, metrics FROM backtest_run ORDER BY run_id")
     if df.empty:
         return df
-    # 解析 metrics JSON
+
     def _m(x):
         try:
             return json.loads(x) if x else {}
         except Exception:
             return {}
     df["m"] = df["metrics"].apply(_m)
-    # 每个 name 取最新 run（run_id 最大）+ 该 name 的运行次数
     df["n_runs"] = df.groupby("name")["run_id"].transform("count")
-    latest = df.sort_values("run_id").groupby("name", as_index=False).tail(1)
-    return latest
+    return df
+
+
+def _latest_per_name(df: pd.DataFrame) -> pd.DataFrame:
+    return df.sort_values("run_id").groupby("name", as_index=False).tail(1)
 
 
 def _g(m: dict, *keys, default=np.nan) -> float:
@@ -56,7 +58,8 @@ def _g(m: dict, *keys, default=np.nan) -> float:
     return default
 
 
-def _cmp_row(name: str, m: dict, bm: dict, n_runs: int) -> tuple[list, str, str]:
+def _cmp_row(name: str, m: dict, bm: dict, n_runs: int,
+             cand_sharpes: list, base_sharpe_ref: float) -> tuple[list, str, str]:
     t_c, t_b = _g(m, "turnover_total"), _g(bm, "turnover_total")
     a_c, a_b = _g(m, "annual_return"), _g(bm, "annual_return")
     s_c, s_b = _g(m, "sharpe"), _g(bm, "sharpe")
@@ -65,17 +68,34 @@ def _cmp_row(name: str, m: dict, bm: dict, n_runs: int) -> tuple[list, str, str]
     d_ann = a_c - a_b
     d_shp = s_c - s_b
     d_dd = dd_c - dd_b  # 正=恶化
-    # 红线 / 门槛
-    if np.isfinite(d_dd) and d_dd > 0.05:
+    # 一致性：多少次运行的 Sharpe 打赢基线参考
+    n_beat = sum(1 for s in cand_sharpes if np.isfinite(s) and s >= base_sharpe_ref - 1e-9)
+
+    # 两条晋升路径（任一净收益且不破红线，且连续 ≥4 期一致）：
+    #   (a) 换手路径：换手↓10% 且 年化/Sharpe 不差；
+    #   (b) 夏普路径：Sharpe 明显更高(≥+0.10) 且 换手/MaxDD 不显著变差。
+    red_line = np.isfinite(d_dd) and d_dd > 0.05
+    turn_path = (np.isfinite(d_turn) and d_turn <= -0.10
+                 and (not np.isfinite(d_ann) or d_ann >= -0.005)
+                 and (not np.isfinite(d_shp) or d_shp >= -0.05))
+    sharpe_path = (np.isfinite(d_shp) and d_shp >= 0.10
+                   and (not np.isfinite(d_turn) or d_turn <= 0.10)
+                   and not red_line)
+    net_better = turn_path or sharpe_path
+    consistent = (n_runs >= 4 and n_beat >= max(4, int(np.ceil(0.75 * n_runs))))
+
+    if red_line:
         verdict = "🛑 reject（MaxDD 较基线恶化 >5pp，触红线）"
-    elif (np.isfinite(d_turn) and d_turn <= -0.10
-          and (not np.isfinite(d_ann) or d_ann >= -0.005)
-          and (not np.isfinite(d_shp) or d_shp >= -0.05)):
-        verdict = (f"✅ promote（换手 {d_turn:+.0%} 显著更低且年化/Sharpe 不差）"
-                   f"{' — 但运行仅 %d 次，文档建议连续 4 期确认' % n_runs if n_runs < 4 else ''}")
+    elif net_better and consistent:
+        path = "换手" if turn_path else "Sharpe"
+        verdict = f"✅ promote（{path}路径净收益 + {n_beat}/{n_runs} 期一致跑赢，达文档门槛）"
+    elif net_better:
+        path = "换手" if turn_path else f"Sharpe(Δ{d_shp:+.2f}/年化Δ{d_ann:+.1%})"
+        verdict = (f"⏳ hold — **在路上**（{path}路径净收益，但仅 {n_runs} 次运行、"
+                   f"{n_beat} 次跑赢；文档要求连续 4 期，等下次周度重建自动补齐）")
     else:
-        verdict = "⏳ hold（未同时满足 换手↓10% + 年化/Sharpe 不差）"
-    row = [name, n_runs,
+        verdict = "⏳ hold（未见稳定净收益：换手未↓10% 且 Sharpe 未↑0.10）"
+    row = [name, f"{n_beat}/{n_runs}",
            f"{t_c:.1f}" if np.isfinite(t_c) else "NA",
            f"{d_turn:+.0%}" if np.isfinite(d_turn) else "NA",
            pct(a_c), f"{d_ann:+.1%}" if np.isfinite(d_ann) else "NA",
@@ -108,7 +128,8 @@ def _factor_promotion(repo: BaseRepository) -> str:
 
 def run(repo: BaseRepository) -> str:
     L = ["## E5 —— 影子版本 / 候选因子 晋升检查（读累积治理数据）", ""]
-    latest = _latest_per_name(repo)
+    allruns = _all_runs(repo)
+    latest = _latest_per_name(allruns) if not allruns.empty else allruns
     if latest.empty:
         L.append("- backtest_run 无数据：影子/基线回测尚未产出（build-model 未跑或库空）。")
     else:
@@ -118,6 +139,7 @@ def run(repo: BaseRepository) -> str:
             L.append(f"- 未找到基线（name 含 '{BASELINE_HINT}'）；现有版本：{names}。")
         else:
             bm = latest[latest["name"] == base]["m"].iloc[0]
+            base_sharpe_ref = _g(bm, "sharpe")
             L.append(f"- 基线：`{base}`（turnover_total={_g(bm,'turnover_total'):.1f}、"
                      f"annual={pct(_g(bm,'annual_return'))}、sharpe={_g(bm,'sharpe'):+.2f}、"
                      f"MaxDD={abs(_g(bm,'max_drawdown'))*100:.1f}%）。")
@@ -125,12 +147,15 @@ def run(repo: BaseRepository) -> str:
             for _, r in latest.iterrows():
                 if r["name"] == base:
                     continue
-                row, verdict, nm = _cmp_row(r["name"], r["m"], bm, int(r["n_runs"]))
+                cand_sharpes = [_g(mm, "sharpe")
+                                for mm in allruns[allruns["name"] == r["name"]]["m"]]
+                row, verdict, nm = _cmp_row(r["name"], r["m"], bm, int(r["n_runs"]),
+                                            cand_sharpes, base_sharpe_ref)
                 rows.append(row); verdicts.append(f"  - `{nm}`：{verdict}")
             if rows:
                 L.append("")
                 L.append(md_table(
-                    ["候选版本", "运行次数", "换手", "Δ换手", "年化", "Δ年化", "Sharpe", "ΔSharpe", "MaxDD"],
+                    ["候选版本", "跑赢/次数", "换手", "Δ换手", "年化", "Δ年化", "Sharpe", "ΔSharpe", "MaxDD"],
                     rows))
                 L += ["", "### 晋升裁决（换手影子）"] + verdicts
             else:
