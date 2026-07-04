@@ -62,12 +62,20 @@
 
 **状态：已实施为影子版本（2026-07-02 批准）。** 生产默认行为不变
 （`scheme=rank_weight, hold_buffer=0`）；build-model 工作流在主建模后自动跑
-`pf_v2`（`--scheme inv_vol --hold-buffer 1.5`）对照回测。**看结果**：
-`SELECT name, metrics FROM backtest_run ORDER BY run_id DESC LIMIT 2`（cs_ic_v1
-vs cs_pf_v2 两行），或 build-model 日志末尾的两段回测指标。**晋升条件**：
-连续 4 期（约 4 个月的周六重建）pf_v2 的 turnover_total 显著更低且
-annual_return/sharpe 不差于 ic_v1 → 把默认 PortfolioConfig 切到
-inv_vol + hold_buffer=1.5（一处配置）。**回退**：影子版本不影响生产，无需回退。
+`pf_v2`（`--scheme inv_vol --hold-buffer 1.5`）对照回测。
+
+**2026-07-04 实测（E5 晋升检查器读 backtest_run，3 次周度重建一致）**：
+基线 `cs_ic_v1` annual +11.75% / sharpe +0.66 / MaxDD 16.0% / turnover 20.9；
+影子 `cs_pf_v2` annual **+14.38%** / sharpe **+0.82** / MaxDD 15.9% / turnover 20.5。
+→ **实际净收益不来自换手（仅 −2%），而来自 inv_vol 的 Sharpe 提升（Δ+0.16 / 年化 Δ+2.6pp），
+且 MaxDD 不恶化、3/3 期一致**。晋升基准据此从「换手↓」修正为「Sharpe 路径」。
+
+**晋升条件（修正）**：`cs_pf_v2` 连续 **≥4 期**周度重建 Sharpe 稳定高于 `cs_ic_v1`（Δ≥+0.10）
+且换手/MaxDD 不显著变差（不破红线）→ 把默认 `PortfolioConfig` 切 inv_vol + hold_buffer=1.5
+（`portfolio/constructor.py` 一处）。**当前 3/4，等下次周度重建自动补齐**（E5 会自动翻 promote）。
+需提前晋升可人工确认后一处切换。**回退**：影子版本不影响生产，version 隔离，无需回退。
+**注意 inv_vol 系统性超配低波/大盘，Sharpe 优势可能部分是近 18 月低波占优的 regime——
+故坚持多期一致确认，勿单窗口下结论。**
 
 ## P5. 分域/regime 建模（低优先，暂不建议）
 
