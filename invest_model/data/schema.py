@@ -362,6 +362,22 @@ policy_shadow = Table(
     _created_at(),
 )
 
+# 投顾信号实战战绩记分卡：按「来源×等级」统计信号买入后的真实前瞻收益。
+# 这才是"跟着系统到底有没有用"的真答案（量化回测衡量的是参谋、不是实盘）。
+signal_scorecard = Table(
+    "signal_scorecard", metadata,
+    Column("as_of", String(8), primary_key=True),          # 统计基准日 YYYYMMDD
+    Column("bucket", String(24), primary_key=True),        # research/A、intraday、ALL 等
+    Column("label", String(32)),                           # 展示名（研报A级 等）
+    Column("n", Integer),                                  # 样本信号数
+    Column("win_rate", Numeric(8, 4)),                     # 买入→最新 收益为正的比例
+    Column("mean_ret", Numeric(12, 6)),                    # 平均前瞻收益（信号次日买→最新）
+    Column("median_ret", Numeric(12, 6)),
+    Column("mean_excess", Numeric(12, 6)),                 # 相对沪深300同窗口的超额均值
+    Column("mean_hold_days", Numeric(10, 2)),              # 平均持有交易日（信号至今）
+    _created_at(),
+)
+
 # 每日持仓快照（时间序列，供复盘/净值曲线；逐持仓一行）。
 holding_snapshot = Table(
     "holding_snapshot", metadata,

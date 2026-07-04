@@ -1,0 +1,40 @@
+name: signal-scorecard
+
+# 投顾信号实战战绩记分卡：统计投顾信号买入后的真实前瞻收益，落库 signal_scorecard。
+# 日更任务已链式执行；本 workflow 供手动补算。仅读 advisor_reco/stock_daily/index_daily、写 signal_scorecard。
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/signal-scorecard.trigger'
+
+concurrency:
+  group: signal-scorecard
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  scorecard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 统计投顾信号实战战绩
+        run: python scripts/build_signal_scorecard.py

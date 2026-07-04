@@ -138,8 +138,20 @@ def job_daily_update_plan() -> dict:
     _run_cli(pipe_main, ["run_pipeline.py", "--mode", "update",
                          "--start", _PIPELINE_START])
     fear = _persist_fear_daily()
-    return {"job": "daily_update_plan", "update": "ok", "fear": fear,
+    sc = _build_signal_scorecard()
+    return {"job": "daily_update_plan", "update": "ok", "fear": fear, "scorecard": sc,
             **_build_and_post_plan()}
+
+
+def _build_signal_scorecard() -> str:
+    """投顾信号实战战绩记分卡（best-effort，失败不阻断当日任务）。"""
+    try:
+        from scripts.build_signal_scorecard import main as sc_main
+        _run_cli(sc_main, ["build_signal_scorecard.py"])
+        return "ok"
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN signal_scorecard 落库失败：{e}")
+        return f"err:{repr(e)[:60]}"
 
 
 # ── 周六全量重建 + P4 影子回测 + 复盘（data-update all档 + review 链）────
