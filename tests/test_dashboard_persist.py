@@ -119,3 +119,42 @@ def test_action_plan_column_patch_on_old_table(tmp_path):
     assert df["trigger_hint"].iloc[0].startswith("回踩")
     assert float(df["model_rank"].iloc[0]) == 0.92
     assert "★" in df["model_view"].iloc[0]
+
+
+def test_fear_gauge_preloaded_frames_match_query(tmp_path):
+    """backfill 用的预载切片路径必须与直接查库路径结果完全一致。"""
+    import numpy as np
+    import pandas as pd
+    from invest_model.repositories.base import BaseRepository
+    from invest_model.signals.fear import fear_gauge
+
+    eng = _engine(tmp_path)
+    repo = BaseRepository(eng)
+    dates = [f"202605{d:02d}" for d in range(1, 29)]  # 28 个连续日
+    rng = np.random.default_rng(3)
+    srows = []
+    for code in [f"{i:06d}.SZ" for i in range(60)]:
+        px = 10.0
+        for dt in dates:
+            chg = float(rng.normal(0, 2))
+            px = max(1.0, px * (1 + chg / 100))
+            srows.append({"code": code, "trade_date": dt, "open": px, "high": px,
+                          "low": px, "close": round(px, 3), "pct_chg": round(chg, 4),
+                          "volume": 1e5, "amount": 1e6})
+    repo.upsert("stock_daily", pd.DataFrame(srows), ["code", "trade_date"])
+    ipx = 4000.0
+    irows = []
+    for dt in dates:
+        ipx *= 1 + float(rng.normal(0, 0.5)) / 100
+        irows.append({"code": "000300.SH", "trade_date": dt, "open": ipx, "high": ipx,
+                      "low": ipx, "close": round(ipx, 3), "pct_chg": 0.1,
+                      "volume": 1e8, "amount": 1e9})
+    repo.upsert("index_daily", pd.DataFrame(irows), ["code", "trade_date"])
+
+    stock_df = repo.read_sql("SELECT code, trade_date, close, pct_chg FROM stock_daily")
+    idx_df = repo.read_sql("SELECT code, trade_date, close FROM index_daily")
+    for dt in dates[-5:]:
+        a = fear_gauge(eng, dt)
+        b = fear_gauge(eng, dt, stock_df=stock_df, idx_df=idx_df)
+        assert abs(a["score"] - b["score"]) < 1e-9, dt
+        assert a["components"] == b["components"], dt

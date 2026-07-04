@@ -30,16 +30,27 @@ def _lin(x: float, lo: float, hi: float) -> float:
     return float(np.clip((x - lo) / (hi - lo) * 100.0, 0.0, 100.0))
 
 
-def fear_gauge(engine, dt: str | None = None, benchmark: str = "000300.SH") -> dict:
+def fear_gauge(engine, dt: str | None = None, benchmark: str = "000300.SH",
+               stock_df: pd.DataFrame | None = None,
+               idx_df: pd.DataFrame | None = None) -> dict:
+    """恐慌指数（0–100，越高越恐慌）。
+
+    stock_df / idx_df：可选预载全量数据（列同各自 SELECT）。传入时按日期窗口切片，
+    不再查库——供 backfill 批量回填一次性载入、逐日复用，避免每日一次全市场查询。
+    """
     repo = BaseRepository(engine)
     if not dt:
         dt = repo.read_sql("SELECT MAX(trade_date) d FROM stock_daily")["d"].iloc[0]
 
     # ── 指数：动量(距MA125) + 波动率(20日年化) ──
     istart = (pd.to_datetime(dt) - pd.Timedelta(days=420)).strftime("%Y%m%d")
-    idx = repo.read_sql(
-        "SELECT trade_date, close FROM index_daily WHERE code=:c AND trade_date>=:s AND trade_date<=:d ORDER BY trade_date",
-        {"c": benchmark, "s": istart, "d": dt})
+    if idx_df is None:
+        idx = repo.read_sql(
+            "SELECT trade_date, close FROM index_daily WHERE code=:c AND trade_date>=:s AND trade_date<=:d ORDER BY trade_date",
+            {"c": benchmark, "s": istart, "d": dt})
+    else:
+        idx = idx_df[(idx_df["code"] == benchmark) & (idx_df["trade_date"] >= istart)
+                     & (idx_df["trade_date"] <= dt)].sort_values("trade_date")
     c = pd.to_numeric(idx["close"], errors="coerce").dropna()
     ma125 = c.tail(125).mean() if len(c) >= 125 else c.mean()
     dev_mom = float(c.iloc[-1] / ma125 - 1) if ma125 else 0.0
@@ -48,9 +59,13 @@ def fear_gauge(engine, dt: str | None = None, benchmark: str = "000300.SH") -> d
 
     # ── 全市场：宽度 + 涨跌停 + 新高新低 ──
     sstart = (pd.to_datetime(dt) - pd.Timedelta(days=200)).strftime("%Y%m%d")
-    df = repo.read_sql(
-        "SELECT code, trade_date, close, pct_chg FROM stock_daily WHERE trade_date>=:s AND trade_date<=:d",
-        {"s": sstart, "d": dt})
+    if stock_df is None:
+        df = repo.read_sql(
+            "SELECT code, trade_date, close, pct_chg FROM stock_daily WHERE trade_date>=:s AND trade_date<=:d",
+            {"s": sstart, "d": dt})
+    else:
+        df = stock_df[(stock_df["trade_date"] >= sstart)
+                      & (stock_df["trade_date"] <= dt)].copy()
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
     df["pct_chg"] = pd.to_numeric(df["pct_chg"], errors="coerce")
     today = df[df["trade_date"] == dt].dropna(subset=["pct_chg"])
