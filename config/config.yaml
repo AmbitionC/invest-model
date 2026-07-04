@@ -31,7 +31,8 @@ model:
     neutralize: true        # 行业 + 市值中性化
   portfolio:
     top_n: 30
-    scheme: rank_weight     # equal | rank_weight | score_weight
+    scheme: inv_vol         # P4 已晋升默认（波动倒数加权，2026-07-04）| rank_weight | equal | score_weight
+    hold_buffer: 1.5        # P4 换手缓冲：已持有且排名在 top_n×1.5 内保留（压换手，0=关）
     max_weight: 0.08        # 单票上限
     industry_cap: 0.30      # 单行业上限
   timing:

@@ -11,12 +11,16 @@ import pandas as pd
 @dataclass
 class PortfolioConfig:
     top_n: int = 30
-    scheme: str = "rank_weight"     # equal | rank_weight | score_weight | inv_vol
+    # P4 晋升（2026-07-04）：inv_vol 波动倒数加权 + 换手缓冲作默认。依据 backtest_run 影子
+    # cs_pf_v2 连续 3 期一致优于基线 cs_ic_v1：年化 +11.75%→+14.38%、Sharpe +0.66→+0.82、
+    # MaxDD 不恶化、换手持平（E5 裁决见 issue #14、docs/model_change_proposals.md P4）。
+    # 实盘 build_action_plan 无 --scheme 参数，此默认即实盘权重口径。回退=改回 rank_weight / 0.0。
+    scheme: str = "inv_vol"         # equal | rank_weight | score_weight | inv_vol
     max_weight: float = 0.08        # 单票上限
     industry_cap: float | None = 0.30  # 单行业上限（可选，None=不限）
     # 缓冲区换手抑制（P4，0=关闭）：已持有且排名仍在 top_n×hold_buffer 内的票
     # 保留不换出，名额剩余部分按排名递补——排名小幅波动不再触发换仓，直接压换手。
-    hold_buffer: float = 0.0
+    hold_buffer: float = 1.5
     # ── 投顾为主融合（advisor_led=True 时生效）──
     advisor_led: bool = False
     # 分级 conviction 权重（归一化前）。默认 A=2×B 且 A 顶到 advisory_name_cap，
