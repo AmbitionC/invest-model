@@ -70,12 +70,16 @@
 → **实际净收益不来自换手（仅 −2%），而来自 inv_vol 的 Sharpe 提升（Δ+0.16 / 年化 Δ+2.6pp），
 且 MaxDD 不恶化、3/3 期一致**。晋升基准据此从「换手↓」修正为「Sharpe 路径」。
 
-**晋升条件（修正）**：`cs_pf_v2` 连续 **≥4 期**周度重建 Sharpe 稳定高于 `cs_ic_v1`（Δ≥+0.10）
-且换手/MaxDD 不显著变差（不破红线）→ 把默认 `PortfolioConfig` 切 inv_vol + hold_buffer=1.5
-（`portfolio/constructor.py` 一处）。**当前 3/4，等下次周度重建自动补齐**（E5 会自动翻 promote）。
-需提前晋升可人工确认后一处切换。**回退**：影子版本不影响生产，version 隔离，无需回退。
-**注意 inv_vol 系统性超配低波/大盘，Sharpe 优势可能部分是近 18 月低波占优的 regime——
-故坚持多期一致确认，勿单窗口下结论。**
+**✅ 已晋升为生产默认（2026-07-04，用户确认「验证 ok 直接生效」）**：
+把默认 `PortfolioConfig` 切 `scheme=inv_vol, hold_buffer=1.5`（`portfolio/constructor.py`），
+同步 `run_pipeline.py` argparse 默认与 `config/config.yaml`。实盘 `build_action_plan` 无 --scheme
+参数、走 `loop._build_targets`（scheme=inv_vol 时自动算 vol_map），故此默认即**实盘权重口径**。
+- **晋升依据**：`cs_pf_v2` 3 次周度重建一致优于 `cs_ic_v1`（Sharpe Δ+0.17、年化 Δ+2.6pp、
+  MaxDD 不恶化、换手持平；E5 裁决见 issue #14）。
+- **上线前验证**：77 单测全过（含端到端 pipeline smoke）× 新默认；管线复现无异常。
+- **回退**：改回 `scheme=rank_weight, hold_buffer=0.0` 一处即回退（version 隔离，随时可退）。
+- **持续监控红线**：inv_vol 系统性超配低波/大盘，优势可能部分是近 18 月低波 regime；
+  E5 继续每周对比，若后续 Sharpe 转劣于旧口径或 MaxDD 恶化 >5pp → 触红线回退。
 
 ## P5. 分域/regime 建模（低优先，暂不建议）
 
