@@ -1,0 +1,103 @@
+name: validation
+
+# 验证优先方案 Phase 0：在有 prod 凭据 + Tushare 的 runner 上，用真实库跑 E0–E4 预登记对照实验，
+# 产出 go/no-go 报告，回帖到「🧪 验证报告」issue。harness 全程只读 DB（仅 advisor 录入是既有幂等数据生产）。
+#
+# 触发：手动 workflow_dispatch。数据来源沿用 build-model/review 的 secrets。
+# 性能：E2 只算已实现收益、无回测负担；E1/E3/E4 依赖库内已有 stock_daily/model_prediction/factor_exposure
+#      （由 data-update / build-model 定时产出），本 workflow 不重跑重回测，避免云端 >60min 超时。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ingest_advisor:
+        description: "先幂等录入 config/ 下投顾 CSV（确保 advisor_reco 最新）"
+        type: boolean
+        default: true
+  push:
+    branches: [master]
+    paths:
+      - 'ops/validation.trigger'
+
+concurrency:
+  group: validation
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+
+      - name: 幂等录入投顾信号（确保 advisor_reco 最新；容错）
+        if: ${{ inputs.ingest_advisor != 'false' }}
+        run: |
+          shopt -s nullglob
+          for f in config/advisor_research_*.csv config/advisor_signals_*.csv config/advisor_intraday_*.csv; do
+            case "$f" in *template*) continue;; esac
+            python scripts/ingest_advisor.py --kind reco --csv "$f" || echo "WARN 跳过 $f"
+          done
+          for f in config/advisor_theme_*.csv config/advisor_themes_*.csv; do
+            case "$f" in *template*) continue;; esac
+            python scripts/ingest_advisor.py --kind theme --csv "$f" || echo "WARN 跳过 $f"
+          done
+
+      - name: 跑验证 harness（E0–E4，只读）
+        run: |
+          python scripts/validation/run_all.py --out results/validation_report.md
+          echo "================ VALIDATION REPORT ================"
+          cat results/validation_report.md
+
+      - name: Upload report artifact
+        if: ${{ always() && hashFiles('results/validation_report.md') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation_report
+          path: results/validation_report.md
+
+      - name: Post report to tracking issue
+        if: ${{ always() && hashFiles('results/validation_report.md') != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const title = '🧪 验证报告（go/no-go）';
+            const body = fs.readFileSync('results/validation_report.md', 'utf8');
+            const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+            const { owner, repo } = context.repo;
+            const found = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue is:open in:title "${title}"`,
+            });
+            let issue = found.data.items.find(i => i.title === title);
+            if (!issue) {
+              const created = await github.rest.issues.create({
+                owner, repo, title,
+                body: '本 issue 由 validation 工作流追加各杠杆(E1–E4)的真实数据 go/no-go 报告。',
+              });
+              issue = created.data;
+            }
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: issue.number,
+              body: `## ${today} 验证\n\n${body.slice(0, 60000)}`,
+            });
+            core.info(`已在 issue #${issue.number} 追加 ${today} 验证报告。`);
