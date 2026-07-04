@@ -1,0 +1,45 @@
+name: fear-backfill
+
+# 恐慌指数历史回填：为最近 N 个交易日逐日重算并落库 fear_daily，
+# 让仪表盘恐慌曲线立即有历史（日更任务只落当日单点）。
+# 仅读 stock_daily/index_daily、写 fear_daily。触发：手动 / 改 ops/fear-backfill.trigger 后 push（仅 master）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "回填最近多少个交易日"
+        default: "120"
+  push:
+    branches: [master]
+    paths:
+      - 'ops/fear-backfill.trigger'
+
+concurrency:
+  group: fear-backfill
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 回填恐慌指数历史
+        run: python scripts/backfill_fear.py --days "${{ github.event.inputs.days || '120' }}"
