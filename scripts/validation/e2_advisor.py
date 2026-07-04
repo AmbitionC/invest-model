@@ -13,8 +13,6 @@
 
 from __future__ import annotations
 
-import os
-
 import numpy as np
 import pandas as pd
 
@@ -74,10 +72,8 @@ def build_forward(repo: BaseRepository, recos: pd.DataFrame) -> pd.DataFrame:
 
     # 行业均值：对每个 (entry,exit) 用全市场同业均值。为控成本，按需拉全 A 在这些日期的收盘。
     # 这里用「推荐票所属行业」的市场同业：查 stock_info 行业 → 拉该行业全部 code 在 need_dates 收盘。
-    # 行业相对超额需拉全行业同业收盘面板，公网 RDS 下极重 → 默认关闭，
-    # 置环境变量 VALIDATION_INDUSTRY_REL=1 才启用；否则主口径退基准相对（便宜、同样严谨）。
     ind_universe = {}
-    if os.environ.get("VALIDATION_INDUSTRY_REL") and imap and repo.table_exists("stock_info"):
+    if imap and repo.table_exists("stock_info"):
         inds = sorted({v for v in imap.values() if v})
         if inds:
             iph = ",".join(f":i{k}" for k in range(len(inds)))
@@ -174,8 +170,8 @@ def run(repo: BaseRepository) -> str:
         L.append(md_table(["来源", "n", "均值", "中位", "胜率", "聚类t"],
                           _bucket_lines(sub, prefer, "source_type")))
 
-    # 分级排序判定（用 10 日或最长可得窗口）
-    hh = 10 if (fwd["h"] == 10).any() else fwd["h"].max()
+    # 分级排序判定：用**最短等窗口**（最少 rec_date/题材混淆；长窗口高样本档多是早批已涨的确认样本）
+    hh = min(HORIZONS) if (fwd["h"] == min(HORIZONS)).any() else int(fwd["h"].min())
     sub = fwd[fwd["h"] == hh]
     ga = {g: summ(sub[sub["grade"] == g][prefer].tolist())["mean"] for g in ["A", "B", "C"]}
     order_ok = (np.isfinite(ga.get("A", np.nan)) and np.isfinite(ga.get("B", np.nan))
@@ -195,8 +191,10 @@ def run(repo: BaseRepository) -> str:
                "**未过关/存疑**：无桶达到聚类稳健 |t|>2 → 该样本上投顾超额无法与题材 beta 区分，"
                "据此保守分配风险预算，勿假设持久 alpha。")
     L.append(f"- {verdict}")
-    L.append(f"- 备注：聚类 t 按 (主题,rec_date) 聚合，抵消推荐扎堆导致的独立性高估；"
-             f"样本越跨越多年/多轮题材越可信。")
+    L.append(f"- ⚠️ 以 **{hh} 日等窗口**（最短、最少混淆）为主证据；更长窗口的高均值/高 t 多来自"
+             f"「早批已涨」确认样本（rec_date 与题材混淆），**不作主证据**。")
+    L.append(f"- 备注：聚类 t 按 (主题,rec_date) 聚合，抵消扎堆导致的独立性高估；仅单一/少数题材窗口时，"
+             f"即便显著也难与题材 beta 完全区分——样本越跨越多年/多轮题材越可信。")
     return "\n".join(L)
 
 
