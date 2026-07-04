@@ -99,6 +99,7 @@ def main() -> None:
     import e3_validate
     import e4_alpha
     import e5_promotion
+    import e6_advisor_factor
 
     parts = [
         "# 验证报告（go/no-go）：投顾主导 + 量化辅助 各杠杆实证",
@@ -117,6 +118,8 @@ def main() -> None:
         safe("E4", e4_alpha.run, repo),
         "",
         safe("E5", e5_promotion.run, repo),
+        "",
+        safe("E6", e6_advisor_factor.run, repo),
         "",
         "## 数据范围与功效声明（务必先读）",
         safe("power", _power_note, repo),
