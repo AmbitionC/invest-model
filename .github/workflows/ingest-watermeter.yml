@@ -1,0 +1,49 @@
+name: ingest-watermeter
+
+# 录入三水表（信贷/财政/政策资本）与盲区α curated CSV 到生产 MySQL：
+# 每当 config/watermeter_*.csv 或 config/alpha_*.csv 变更(push)即自动 ingest。
+# 幂等 upsert；容错跳过单个文件、不影响其它。仅用 DB（不需要 Tushare）。
+# Secrets：INVEST_DB_URL 优先，否则 DB_*。（镜像 ingest-advisor.yml）
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'config/watermeter_*.csv'
+      - 'config/alpha_*.csv'
+
+concurrency:
+  group: ingest-watermeter
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 录入 watermeter/alpha（容错跳过失败项）
+        run: |
+          shopt -s nullglob
+          for f in config/watermeter_*.csv; do
+            case "$f" in *template*) continue;; esac
+            echo "== watermeter: $f"
+            python scripts/ingest_watermeter.py --kind watermeter --csv "$f" || echo "WARN 跳过 $f"
+          done
+          for f in config/alpha_*.csv; do
+            case "$f" in *template*) continue;; esac
+            echo "== alpha: $f"
+            python scripts/ingest_watermeter.py --kind alpha --csv "$f" || echo "WARN 跳过 $f"
+          done

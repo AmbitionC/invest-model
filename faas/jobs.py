@@ -132,6 +132,51 @@ def _persist_fear_daily() -> str:
         return f"WARN: {e}"
 
 
+def _ingest_and_build_arb() -> str:
+    """套利：录入最新三水表/α CSV + 构建 flow_score（best-effort，失败不阻断出计划）。
+
+    使每日任务出计划前 flow_score/α 就绪（FE 水表页与账本 α 有数据）。
+    水表/α 也可由 ingest-watermeter.yml 单独触发；此处保证每日自洽。
+    """
+    try:
+        import glob
+
+        from invest_model.arb.watermeter import build_flow_scores
+        from invest_model.data import make_engine
+        from scripts.ingest_watermeter import ingest_alpha, ingest_watermeter
+        import pandas as pd
+
+        engine = make_engine()
+        root = _ROOT
+        n_wm = n_a = 0
+        for f in sorted(glob.glob(os.path.join(root, "config", "watermeter_*.csv"))):
+            if "template" in f:
+                continue
+            try:
+                df = pd.read_csv(f, dtype=str).where(lambda x: x.notna(), None)
+                n_wm += ingest_watermeter(engine, df)
+            except Exception as e:  # noqa: BLE001
+                print(f"WARN 水表 {f} 录入跳过：{e}")
+        for f in sorted(glob.glob(os.path.join(root, "config", "alpha_*.csv"))):
+            if "template" in f:
+                continue
+            try:
+                df = pd.read_csv(f, dtype=str).where(lambda x: x.notna(), None)
+                n_a += ingest_alpha(engine, df)
+            except Exception as e:  # noqa: BLE001
+                print(f"WARN α {f} 录入跳过：{e}")
+        # 用最新数据日构建 flow_score
+        from invest_model.repositories.base import BaseRepository
+        d = BaseRepository(engine).read_sql("SELECT MAX(trade_date) m FROM stock_daily")
+        end = str(d["m"].iloc[0]) if not d.empty and d["m"].iloc[0] else None
+        if end:
+            build_flow_scores(engine, end)
+        return f"ok(wm={n_wm},alpha={n_a})"
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN 套利信号构建失败（不阻断）：{e}")
+        return f"err:{repr(e)[:60]}"
+
+
 def job_daily_update_plan() -> dict:
     """增量数据更新成功后链式出计划；更新失败不出计划（避免旧数据误导）。"""
     from scripts.run_pipeline import main as pipe_main
@@ -139,8 +184,9 @@ def job_daily_update_plan() -> dict:
                          "--start", _PIPELINE_START])
     fear = _persist_fear_daily()
     sc = _build_signal_scorecard()
+    arb = _ingest_and_build_arb()
     return {"job": "daily_update_plan", "update": "ok", "fear": fear, "scorecard": sc,
-            **_build_and_post_plan()}
+            "arb": arb, **_build_and_post_plan()}
 
 
 def _build_signal_scorecard() -> str:
