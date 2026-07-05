@@ -410,10 +410,12 @@ class ClosedLoop:
         if mode in ("backtest", "all"):
             return self.backtest()
         if mode == "arb":
-            # 套利账本回测：先补 flow/carry 派生信号，再合成账本净值。
+            # 套利账本回测：先自动补三水表 + flow/carry 派生信号，再合成账本净值。
             from invest_model.arb.carry import build_carry_signals
             from invest_model.arb.watermeter import build_flow_scores
+            from invest_model.arb.watermeter_auto import build_watermeter_auto
             try:
+                build_watermeter_auto(self.engine, self.cfg.end)
                 build_flow_scores(self.engine, self.cfg.end)
                 build_carry_signals(self.engine, self.cfg.end)
             except Exception as e:  # noqa: BLE001

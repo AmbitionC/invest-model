@@ -159,6 +159,17 @@ stock_margin = Table(
     Column("rqchl", Numeric(18, 2)),
 )
 
+# 个股两融明细（融资余额 by 股票 → 聚合行业得信贷水表；margin_detail）。
+stock_margin_detail = Table(
+    "stock_margin_detail", metadata,
+    Column("code", String(16), primary_key=True),
+    Column("trade_date", String(8), primary_key=True),
+    Column("rzye", Numeric(20, 4)),      # 融资余额(元)
+    Column("rqye", Numeric(20, 4)),      # 融券余额
+    Column("rzmre", Numeric(20, 4)),     # 融资买入额
+    Column("rzche", Numeric(20, 4)),     # 融资偿还额
+)
+
 # ── 新模型表 ────────────────────────────────────────────────
 
 universe_snapshot = Table(

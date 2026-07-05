@@ -127,6 +127,20 @@ def run_data_update(engine, start: str, end: str, quarters: list[str] | None = N
             n += repo.upsert("index_daily", df, ["code", "trade_date"])
     stats["index_daily"] = n
 
+    # 个股两融明细（信贷水表：融资余额按行业聚合）。按缺失日增量。
+    n = 0
+    try:
+        for d in _missing_dates(repo, "stock_margin_detail", open_dates):
+            df = client.get_margin_detail(d)
+            if not df.empty:
+                cols = ["code", "trade_date", "rzye", "rqye", "rzmre", "rzche"]
+                n += repo.upsert("stock_margin_detail",
+                                 df[[c for c in cols if c in df.columns]],
+                                 ["code", "trade_date"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"margin_detail 拉取中断（已入库 {n} 行，信贷水表降级）：{e}")
+    stats["stock_margin_detail"] = n
+
     # ── 套利模块数据（best-effort，权限缺失即跳过，对应 sleeve 后续降级为现金）──
 
     # 国债逆回购日行情（defense_A carry）

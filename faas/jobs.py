@@ -133,21 +133,29 @@ def _persist_fear_daily() -> str:
 
 
 def _ingest_and_build_arb() -> str:
-    """套利：录入最新三水表/α CSV + 构建 flow_score（best-effort，失败不阻断出计划）。
+    """套利：自动算三水表 + 可选 α CSV 录入 + 构建 flow_score（best-effort，不阻断出计划）。
 
-    使每日任务出计划前 flow_score/α 就绪（FE 水表页与账本 α 有数据）。
-    水表/α 也可由 ingest-watermeter.yml 单独触发；此处保证每日自洽。
+    三水表默认走市场资金流自动构建（build_watermeter_auto，北向+两融按行业）；
+    config/watermeter_*.csv 仅作可选人工覆盖（模板文件跳过）。盲区 α 仍走 curated CSV。
     """
     try:
         import glob
 
         from invest_model.arb.watermeter import build_flow_scores
+        from invest_model.arb.watermeter_auto import build_watermeter_auto
         from invest_model.data import make_engine
         from scripts.ingest_watermeter import ingest_alpha, ingest_watermeter
         import pandas as pd
 
         engine = make_engine()
         root = _ROOT
+        from invest_model.repositories.base import BaseRepository
+        d = BaseRepository(engine).read_sql("SELECT MAX(trade_date) m FROM stock_daily")
+        end = str(d["m"].iloc[0]) if not d.empty and d["m"].iloc[0] else None
+
+        # 三水表：市场资金流自动构建（主路径）
+        n_auto = build_watermeter_auto(engine, end) if end else 0
+        # 可选人工覆盖（非模板 CSV；默认没有则跳过）
         n_wm = n_a = 0
         for f in sorted(glob.glob(os.path.join(root, "config", "watermeter_*.csv"))):
             if "template" in f:
@@ -165,13 +173,9 @@ def _ingest_and_build_arb() -> str:
                 n_a += ingest_alpha(engine, df)
             except Exception as e:  # noqa: BLE001
                 print(f"WARN α {f} 录入跳过：{e}")
-        # 用最新数据日构建 flow_score
-        from invest_model.repositories.base import BaseRepository
-        d = BaseRepository(engine).read_sql("SELECT MAX(trade_date) m FROM stock_daily")
-        end = str(d["m"].iloc[0]) if not d.empty and d["m"].iloc[0] else None
         if end:
             build_flow_scores(engine, end)
-        return f"ok(wm={n_wm},alpha={n_a})"
+        return f"ok(auto_wm={n_auto},csv_wm={n_wm},alpha={n_a})"
     except Exception as e:  # noqa: BLE001
         print(f"WARN 套利信号构建失败（不阻断）：{e}")
         return f"err:{repr(e)[:60]}"

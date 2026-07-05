@@ -353,6 +353,17 @@ class TushareClient(BaseSource):
 
     @_retry
     @_rate_limit
+    def get_margin_detail(self, trade_date: str) -> pd.DataFrame:
+        """个股两融明细（融资余额 by 股票）→ 聚合行业得信贷水表。"""
+        df = self.pro.margin_detail(
+            trade_date=trade_date,
+            fields="ts_code,trade_date,rzye,rqye,rzmre,rzche")
+        if df is not None and not df.empty:
+            df = df.rename(columns={"ts_code": "code"})
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
     def get_etf_list(self) -> pd.DataFrame:
         df = self.pro.fund_basic(
             market="E", status="L",
