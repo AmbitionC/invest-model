@@ -480,6 +480,17 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         heavy = [(names.get(c, c), w) for c, w in cur_w.items() if w > 0.20]
         for nm, w in sorted(heavy, key=lambda kv: -kv[1]):
             hints.append(f"单票集中度：{nm} {w:.0%} 超 20% 上限，建议分批降至上限内")
+        # E7 拥挤度（HHI+Top-3 聚合口径）：持仓行业按权重 + 投顾 long 信号池按主题，
+        # 补单行业阈值盲区（多个中等行业同题材共振 / 投顾扎堆少数题材同涨同跌）。
+        from invest_model.portfolio.crowding import crowding_hints
+        adv_cat: list[str] = []
+        try:
+            ar = loop.adv_repo.get_active_reco(dt)
+            if not ar.empty and "catalyst" in ar.columns:
+                adv_cat = [str(x) for x in ar.loc[ar["direction"] == "long", "catalyst"]]
+        except Exception:  # noqa: BLE001
+            adv_cat = []
+        hints.extend(crowding_hints(cur_w, ind_map, adv_cat))
     except Exception:  # noqa: BLE001
         pass
     invested = sum(mv.values()) / equity
