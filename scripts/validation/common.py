@@ -157,22 +157,6 @@ def md_table(headers: list[str], rows: list[list]) -> str:
     return "\n".join(out)
 
 
-# 催化剂关键词 → 主题（用于扎堆聚类与分桶；可扩充）
-THEME_KEYWORDS = {
-    "半导体": ["半导体", "芯片", "存储", "晶圆", "封测", "先进制程", "光刻"],
-    "算力/AI": ["算力", "AI", "光模块", "CPO", "英伟达", "液冷", "服务器", "大模型"],
-    "机器人": ["机器人", "减速器", "谐波", "丝杠", "Optimus", "人形", "灵巧手"],
-    "黄金/有色": ["黄金", "贵金属", "金价", "白银", "有色", "铜", "稀土"],
-    "医药": ["创新药", "医药", "CXO", "GLP", "减肥", "疫苗", "器械"],
-    "军工": ["军工", "国防", "导弹", "航空", "航天", "船舶"],
-    "新能源": ["锂电", "光伏", "储能", "电池", "固态", "风电"],
-    "消费": ["白酒", "消费", "食品", "啤酒", "免税", "零售"],
-}
-
-
-def theme_of(catalyst: str) -> str:
-    t = catalyst or ""
-    for th, kws in THEME_KEYWORDS.items():
-        if any(k in t for k in kws):
-            return th
-    return "其他"
+# 催化剂关键词 → 主题：唯一真源在业务代码 invest_model.portfolio.crowding，
+# harness 与实盘 action_plan 共用同一套口径（避免两处漂移）。
+from invest_model.portfolio.crowding import THEME_KEYWORDS, theme_of  # noqa: E402,F401
