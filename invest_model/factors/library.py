@@ -45,6 +45,12 @@ CANDIDATE_DIRECTION: dict[str, int] = {
     # 注意数据依赖 hk_hold（港交所披露）；若披露口径变化导致断供，
     # 该因子暴露为 NaN，影子模式下无任何下游影响。
     "nb_ratio_chg_20": +1,
+    # 投顾立场信号（long A/B/C 打正、reduce/avoid/exit 打负）。先验：看多为正。
+    # E6 实测（issue #14）：对量化 rank_pct 有独立增量偏 IC（+0.077，聚类稳健 t=+2.2）、
+    # 与量化正交（相关 -0.19）；研究亦支持「投顾+因子」融合最优（IR~1.23, arXiv 2502.20489）。
+    # 影子累积 ≥12 期 IC 达门槛后，再提议移入 FACTOR_DIRECTION 或经 fuse_targets/元标签融合。
+    # 数据依赖 advisor_reco；覆盖面窄（仅投顾点名标的），其余截面 NaN=中性。
+    "adv_stance": +1,
 }
 
 CANDIDATE_FACTORS: list[str] = list(CANDIDATE_DIRECTION.keys())
@@ -97,6 +103,7 @@ def compute_factors(raw: pd.DataFrame) -> pd.DataFrame:
 
     # 候选因子（影子观察，不参与打分；无数据时整列 NaN，落库时被 dropna 自然跳过）
     out["nb_ratio_chg_20"] = _to_series(raw.get("nb_ratio_chg_20"), idx)
+    out["adv_stance"] = _to_series(raw.get("adv_stance"), idx)
 
     # 辅助列（供中性化使用）
     ind = raw.get("industry")
