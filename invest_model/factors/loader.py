@@ -46,7 +46,49 @@ class FactorDataLoader:
         nb = self._northbound(trade_date, code_set)
         if not nb.empty:
             df = df.join(nb)
+        adv = self._advisor_stance(trade_date, code_set)
+        if not adv.empty:
+            df = df.join(adv)
         return df
+
+    # ── 投顾立场（候选因子，影子观察）──
+    def _advisor_stance(self, trade_date: str, codes: set[str]) -> pd.DataFrame:
+        """adv_stance：投顾立场信号（候选因子）。取 rec_date<=trade_date 且未失效的最新一条
+        advisor_reco，按 方向×分级 打分：long A=3/B=2/C=1，reduce=-1，avoid/exit=-2；
+        未覆盖标的为 NaN（截面中性）。E6 实测：立场对量化 rank_pct 有独立增量偏 IC（+0.077,
+        聚类稳健 t=+2.2，issue #14）。此处作候选因子起累积多期 IC，晋升门槛见 CANDIDATE 说明。
+        依赖 advisor_reco；无表/无数据整列缺省（影子模式无下游影响，PIT：只用 rec_date<=当日）。"""
+        if not self.repo.table_exists("advisor_reco"):
+            return pd.DataFrame()
+        df = self.repo.read_sql(
+            "SELECT rec_date, code, grade, direction, valid_until FROM advisor_reco "
+            "WHERE rec_date<=:d", {"d": trade_date})
+        if df.empty:
+            return pd.DataFrame()
+        df = df[df["code"].isin(codes)]
+        if df.empty:
+            return pd.DataFrame()
+
+        def _valid(vu: object) -> bool:
+            s = str(vu or "").strip()
+            return (not s) or (trade_date <= s)
+
+        df = df[df["valid_until"].apply(_valid)]
+        if df.empty:
+            return pd.DataFrame()
+        df = df.sort_values("rec_date").groupby("code", as_index=False).tail(1)
+
+        def _score(direction: object, grade: object) -> float:
+            d = str(direction or "").strip().lower()
+            g = str(grade or "").strip().upper()
+            if d == "long":
+                return {"A": 3.0, "B": 2.0, "C": 1.0}.get(g, 1.0)
+            return {"reduce": -1.0, "avoid": -2.0, "exit": -2.0}.get(d, 0.0)
+
+        df["adv_stance"] = [_score(d, g) for d, g in zip(df["direction"], df["grade"])]
+        out = df.set_index("code")[["adv_stance"]]
+        out.index.name = "code"
+        return out
 
     # ── 价格衍生因子 ──
     def _price_features(self, trade_date: str, codes: set[str]) -> pd.DataFrame:
