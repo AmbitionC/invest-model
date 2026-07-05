@@ -259,14 +259,55 @@ def _f(x):
     return v if np.isfinite(v) else None
 
 
+def review_arb(repo: BaseRepository, asof: str) -> list[str]:
+    """套利模块复盘：sleeve 账本 + carry 实现 vs 预期 + α 证伪状态 + 水表兑现。"""
+    if not repo.table_exists("sleeve_target"):
+        return []
+    out: list[str] = ["", "## 五、套利/守恒 sleeve 账本复盘"]
+    sl = repo.read_sql(
+        "SELECT sleeve, target_pct, nav, note FROM sleeve_target "
+        "WHERE plan_date=(SELECT MAX(plan_date) FROM sleeve_target WHERE note='backtest')"
+        " AND note='backtest'")
+    if not sl.empty:
+        out += ["", "| sleeve | 目标占比 | 回测期末净值 |", "|---|---:|---:|"]
+        for _, r in sl.iterrows():
+            nav = _f(r["nav"])
+            out.append(f"| {r['sleeve']} | {(_f(r['target_pct']) or 0):.0%} | "
+                       f"{nav:.3f} |" if nav is not None else
+                       f"| {r['sleeve']} | {(_f(r['target_pct']) or 0):.0%} | — |")
+    # carry 信号数
+    if repo.table_exists("carry_signal"):
+        cs = repo.read_sql(
+            "SELECT sleeve, COUNT(*) n, AVG(expected_carry) ec FROM carry_signal "
+            "WHERE trade_date=(SELECT MAX(trade_date) FROM carry_signal) GROUP BY sleeve")
+        for _, r in cs.iterrows():
+            ec = _f(r["ec"])
+            out.append(f"- carry「{r['sleeve']}」信号 {int(r['n'])} 条"
+                       + (f"，加权预期年化约 {ec:.2%}" if ec else ""))
+    # α 证伪状态
+    if repo.table_exists("alpha_candidate"):
+        ac = repo.read_sql(
+            "SELECT falsified, COUNT(*) n FROM alpha_candidate "
+            "WHERE as_of_date=(SELECT MAX(as_of_date) FROM alpha_candidate) GROUP BY falsified")
+        if not ac.empty:
+            m = {int(r["falsified"]): int(r["n"]) for _, r in ac.iterrows()
+                 if r["falsified"] is not None}
+            out.append(f"- 盲区 α：未证伪 {m.get(0,0)+m.get(-1,0)} 个 / 已证伪(水表反转) {m.get(1,0)} 个"
+                       "（证伪铁律：剥离股价·只看产业侧资金到没到）")
+    if len(out) <= 2:
+        out.append("（暂无套利数据——观察态或数据未就绪）")
+    return out
+
+
 def build_review(repo: BaseRepository, asof: str, horizon: int = 10) -> str:
-    """构建四段复盘 Markdown（单段出错跳过不阻断）。"""
+    """构建五段复盘 Markdown（单段出错跳过不阻断）。"""
     lines = [f"# 复盘报告 — 截至 {asof}", "",
-             "> 闭环校准：投顾说得准不准、模型分位有没有区分力、持仓靠什么赚钱。"]
+             "> 闭环校准：投顾说得准不准、模型分位有没有区分力、持仓靠什么赚钱、套利账本守没守住零杠杆。"]
     for fn in (lambda: review_advisor(repo, asof, horizon),
                lambda: review_model(repo),
                lambda: review_holdings(repo),
-               lambda: review_discipline(repo, asof)):
+               lambda: review_discipline(repo, asof),
+               lambda: review_arb(repo, asof)):
         try:
             lines += fn()
         except Exception as e:  # noqa: BLE001

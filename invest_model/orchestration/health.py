@@ -61,6 +61,45 @@ def compute_health(engine, version: str, method: str = "alla", recent: int = 6,
     if not pf.empty:
         health["portfolio_avg_holdings"] = round(float(pf["n"].mean()), 1)
 
+    # ── 套利模块健康（观察态也可见）──
+    try:
+        _arb_health(repo, health, warnings)
+    except Exception:  # noqa: BLE001 — 套利健康失败不影响主健康
+        pass
+
     health["warnings"] = warnings
     health["trustworthy"] = len(warnings) == 0
     return health
+
+
+def _arb_health(repo: BaseRepository, health: dict, warnings: list[str]) -> None:
+    """套利模块可观测指标：水表影子 IC 期数 / α 命中 / sleeve 越界。"""
+    arb: dict = {}
+    # 水表影子晋升观测：flow_score 攒了多少期（≥12 期才够评估晋升）
+    if repo.table_exists("flow_score"):
+        fp = repo.read_sql("SELECT COUNT(DISTINCT trade_date) n FROM flow_score")
+        if not fp.empty and fp["n"].iloc[0]:
+            arb["watermeter_ic_periods"] = int(fp["n"].iloc[0])
+    # 盲区 α 证伪率
+    if repo.table_exists("alpha_candidate"):
+        ac = repo.read_sql(
+            "SELECT falsified, COUNT(*) n FROM alpha_candidate "
+            "WHERE as_of_date=(SELECT MAX(as_of_date) FROM alpha_candidate) GROUP BY falsified")
+        if not ac.empty:
+            m = {int(r["falsified"]): int(r["n"]) for _, r in ac.iterrows()
+                 if r["falsified"] is not None}
+            total = sum(m.values())
+            arb["alpha_total"] = total
+            arb["alpha_falsified"] = m.get(1, 0)
+    # sleeve 越界（零杠杆红线）：最近一次实盘账本 ledger_ok
+    if repo.table_exists("action_plan_account"):
+        aa = repo.read_sql(
+            "SELECT ledger_ok FROM action_plan_account "
+            "WHERE plan_date=(SELECT MAX(plan_date) FROM action_plan_account)")
+        if not aa.empty and aa["ledger_ok"].iloc[0] is not None:
+            ok = int(aa["ledger_ok"].iloc[0])
+            arb["ledger_ok"] = ok
+            if ok == 0:
+                warnings.append("套利资金账本 Σ>100%（零杠杆红线被触发并已收缩）——请核对 sleeve 分配。")
+    if arb:
+        health["arb"] = arb

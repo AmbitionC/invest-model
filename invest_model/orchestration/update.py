@@ -127,5 +127,96 @@ def run_data_update(engine, start: str, end: str, quarters: list[str] | None = N
             n += repo.upsert("index_daily", df, ["code", "trade_date"])
     stats["index_daily"] = n
 
+    # ── 套利模块数据（best-effort，权限缺失即跳过，对应 sleeve 后续降级为现金）──
+
+    # 国债逆回购日行情（defense_A carry）
+    n = 0
+    try:
+        for d in _missing_dates(repo, "reverse_repo_daily", open_dates):
+            df = client.get_reverse_repo_daily(d)
+            if not df.empty:
+                df["interest_days"] = _repo_interest_days(df["code"], d, cal)
+                cols = ["code", "trade_date", "rate", "close", "pre_close",
+                        "amount", "interest_days"]
+                n += repo.upsert("reverse_repo_daily",
+                                 df[[c for c in cols if c in df.columns]],
+                                 ["code", "trade_date"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"reverse_repo_daily 拉取失败（跳过，逆回购 sleeve 降级）：{e}")
+    stats["reverse_repo_daily"] = n
+
+    # 可转债基础信息（静态，全量刷）
+    try:
+        cb = client.get_cb_basic()
+        if not cb.empty:
+            cb = cb.drop_duplicates(["ts_code"])
+            cols = ["ts_code", "bond_short_name", "stk_code", "list_date",
+                    "delist_date", "conv_price", "maturity_date", "remain_size",
+                    "call_status"]
+            stats["cb_basic"] = repo.upsert("cb_basic",
+                                            cb[[c for c in cols if c in cb.columns]],
+                                            ["ts_code"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"cb_basic 拉取失败（跳过，可转债 sleeve 降级）：{e}")
+
+    # 可转债日行情
+    n = 0
+    try:
+        for d in _missing_dates(repo, "cb_daily", open_dates):
+            df = client.get_cb_daily(d)
+            if not df.empty:
+                cols = ["code", "trade_date", "open", "high", "low", "close",
+                        "pre_close", "pct_chg", "vol", "amount", "cb_value",
+                        "cb_over_rate"]
+                n += repo.upsert("cb_daily", df[[c for c in cols if c in df.columns]],
+                                 ["code", "trade_date"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"cb_daily 拉取中断（已入库 {n} 行，下次续拉）：{e}")
+    stats["cb_daily"] = n
+
+    # 分红/除权事件（红利 carry 精确除权日；按缺失公告日增量）
+    n = 0
+    try:
+        for d in _missing_dates(repo, "dividend_event", open_dates):
+            df = client.get_dividend(d)
+            if not df.empty:
+                df["ann_date"] = d
+                cols = ["code", "ex_date", "ann_date", "end_date", "div_proc",
+                        "cash_div", "cash_div_tax", "record_date", "pay_date"]
+                n += repo.upsert("dividend_event",
+                                 df[[c for c in cols if c in df.columns]],
+                                 ["code", "ex_date"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"dividend_event 拉取中断（已入库 {n} 行，下次续拉）：{e}")
+    stats["dividend_event"] = n
+
     logger.info(f"数据更新完成：{stats}")
     return stats
+
+
+def _repo_interest_days(codes: pd.Series, trade_date: str, cal: pd.DataFrame) -> pd.Series:
+    """逆回购计息天数：资金占用 1 日但计息到下一交易日，跨周末/节假日自动多计。
+
+    GC001（1 天期）在交易日 t 计息天数 = 下一交易日 - t 的自然日差（周四通常为 3）。
+    多天期品种（GC007 等）取品种固有期限与该自然日差的较大值近似。
+    """
+    tenor = {
+        "204001.SH": 1, "131810.SZ": 1,
+        "204002.SH": 2, "131811.SZ": 2,
+        "204003.SH": 3, "204004.SH": 4,
+        "204007.SH": 7, "131800.SZ": 7,
+        "204014.SH": 14, "131809.SZ": 14,
+        "204028.SH": 28, "204091.SH": 91, "204182.SH": 182,
+    }
+    gap = 1
+    try:
+        if not cal.empty:
+            opens = sorted(cal.loc[cal["is_open"] == 1, "cal_date"].tolist())
+            if trade_date in opens:
+                i = opens.index(trade_date)
+                if i + 1 < len(opens):
+                    gap = max(1, (pd.to_datetime(opens[i + 1]) -
+                                  pd.to_datetime(trade_date)).days)
+    except Exception:  # noqa: BLE001
+        gap = 1
+    return codes.map(lambda c: max(tenor.get(c, 1), gap))

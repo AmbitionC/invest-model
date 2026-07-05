@@ -36,7 +36,9 @@ def _quarters(start: str, end: str) -> list[str]:
 def main() -> None:
     ap = argparse.ArgumentParser(description="截面多因子自主闭环")
     ap.add_argument("--mode", default="all",
-                    choices=["update", "universe", "factors", "train", "predict", "backtest", "all"])
+                    choices=["update", "universe", "factors", "train", "predict",
+                             "backtest", "all", "arb"],
+                    help="arb=套利统一资金账本回测（需先 all/predict 出引擎B预测）")
     ap.add_argument("--db", default=None, help="sqlite:///./data/local.db 或留空走 .env 的 MySQL")
     ap.add_argument("--start", default="20210101")
     ap.add_argument("--end", default="")

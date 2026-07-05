@@ -1,0 +1,7 @@
+as_of_date,meter,dimension,key,flow_score,direction,evidence,source,valid_until,raw_excerpt
+20260101,credit,sector,半导体,70,in,科技创新再贷款定向投放、设备更新再贷款落地,央行货币政策报告,,信贷水表：企业中长期贷款投向硬科技
+20260101,fiscal,sector,半导体,80,in,大基金三期出资、以旧换新设备清单纳入,财政部/工信部,,财政水表：半导体设备材料
+20260101,policy_capital,sector,半导体,60,in,国家队ETF增持科技方向、国资委市值管理考核,汇金/国资委,,政策资本水表
+20260101,credit,theme,AI算力,65,in,全球AI资本开支周期、国产算力链信贷支持,产业订单跟踪,,AI算力链资金流入
+20260101,fiscal,theme,AI算力,55,in,专项债投向数据中心/智算中心,发改委,,财政投向算力基建
+20260101,policy_capital,sector,地产链,-70,out,水在往外抽、人口逆风,分析,,逆风板块：资金流出

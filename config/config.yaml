@@ -41,6 +41,23 @@ model:
   rebalance: monthly        # monthly | biweekly
   benchmark: "000300.SH"
 
+# 套利模块（arbitrage）—— 说明性配置，实际开关以环境变量为准（config-as-strategy）。
+# 默认观察态：ARB_ENABLED=0 / ARB_WATERTILT=0。见 invest_model/arb/config.py。
+arb:
+  enabled: false            # 主开关（环境变量 ARB_ENABLED 覆盖）；0=观察态，计划回退纯引擎B
+  watermeter_tilt: false    # 三水表倾斜引擎B（环境变量 ARB_WATERTILT）；影子默认关
+  sleeve:                   # 单一资金池分配上下限（Σ≤100% 零杠杆）
+    defense: [0.50, 0.60]   # 引擎A 防守 carry
+    offense: [0.30, 0.40]   # 引擎B 现有多因子选股（交易）
+    alpha:   [0.05, 0.15]   # 盲区α
+  strategies:               # 逐策略开关（数据缺失自动降级为现金）
+    reverse_repo: true
+    dividend: true
+    convertible: true
+    panic_ammo: true        # 恐慌弹药：fear≥75 把现金→进攻/α
+  fear_ammo_trigger: 75     # 恐慌指数触发阈值
+  watermeter_promote_periods: 12   # 水表影子IC攒够N期方可晋升
+
 logging:
   level: INFO
   dir: ./logs

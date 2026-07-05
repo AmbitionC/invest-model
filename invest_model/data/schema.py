@@ -82,6 +82,8 @@ stock_fundamental = Table(
     Column("circ_mv", Numeric(20, 4)),
     Column("turnover_rate", Numeric(12, 4)),
     Column("turnover_rate_f", Numeric(12, 4)),
+    Column("dv_ratio", Numeric(12, 6)),      # 股息率(%)，红利 carry 用
+    Column("dv_ttm", Numeric(12, 6)),        # TTM 股息率(%)
 )
 
 stock_fina_indicator = Table(
@@ -442,15 +444,186 @@ fear_daily = Table(
     _created_at(),
 )
 
+# ── 套利模块（arbitrage）表 ──────────────────────────────────
+# 说明：套利与交易是同一资金池的一体两面。以下表全部按 (code|id, trade_date) /
+# version 命名空间落库，回测/复盘/看板复用既有骨架。数据缺失时对应 sleeve 预算
+# 划入现金（绝不加杠杆），零杠杆红线无条件成立。
+
+# 国债逆回购日行情（GC001/GC007/… close=年化利率）。
+reverse_repo_daily = Table(
+    "reverse_repo_daily", metadata,
+    Column("code", String(16), primary_key=True),
+    Column("trade_date", String(8), primary_key=True),
+    Column("rate", Numeric(10, 4)),            # 年化利率(%)，交易所逆回购 close 即为此
+    Column("close", Numeric(12, 4)),
+    Column("pre_close", Numeric(12, 4)),
+    Column("amount", Numeric(20, 3)),
+    Column("interest_days", Integer),          # 计息天数（周四 GC001=3）
+    _created_at(),
+)
+
+# 可转债基础信息（静态）。
+cb_basic = Table(
+    "cb_basic", metadata,
+    Column("ts_code", String(16), primary_key=True),
+    Column("bond_short_name", String(48)),
+    Column("stk_code", String(16)),            # 正股代码
+    Column("list_date", String(8)),
+    Column("delist_date", String(8)),
+    Column("conv_price", Numeric(14, 4)),      # 最新转股价
+    Column("maturity_date", String(8)),
+    Column("remain_size", Numeric(20, 4)),     # 剩余规模(万元)
+    Column("call_status", String(16)),         # 强赎状态
+    _created_at(),
+)
+
+# 可转债日行情。
+cb_daily = Table(
+    "cb_daily", metadata,
+    Column("code", String(16), primary_key=True),
+    Column("trade_date", String(8), primary_key=True),
+    Column("open", Numeric(14, 4)),
+    Column("high", Numeric(14, 4)),
+    Column("low", Numeric(14, 4)),
+    Column("close", Numeric(14, 4)),
+    Column("pre_close", Numeric(14, 4)),
+    Column("pct_chg", Numeric(12, 4)),
+    Column("vol", Numeric(20, 2)),
+    Column("amount", Numeric(20, 3)),
+    Column("cb_value", Numeric(14, 4)),        # 纯债价值（可空）
+    Column("cb_over_rate", Numeric(12, 6)),    # 纯债溢价率（可空）
+    _created_at(),
+)
+
+# 分红/除权事件（红利 carry 用）。
+dividend_event = Table(
+    "dividend_event", metadata,
+    Column("code", String(16), primary_key=True),
+    Column("ex_date", String(8), primary_key=True),     # 除权除息日
+    Column("ann_date", String(8)),
+    Column("end_date", String(8)),
+    Column("div_proc", String(16)),            # 实施 | 预案 | ...
+    Column("cash_div", Numeric(14, 6)),        # 税前每股现金分红
+    Column("cash_div_tax", Numeric(14, 6)),
+    Column("record_date", String(8)),
+    Column("pay_date", String(8)),
+    Column("dv_ratio", Numeric(12, 6)),        # 股息率(%)（主取自 daily_basic）
+    _created_at(),
+)
+
+# 三水表信号（人工 CSV 录入：信贷/财政/政策资本）。
+watermeter_signal = Table(
+    "watermeter_signal", metadata,
+    Column("as_of_date", String(8), primary_key=True),
+    Column("meter", String(16), primary_key=True),       # credit|fiscal|policy_capital
+    Column("dimension", String(12), primary_key=True),   # sector|theme
+    Column("key", String(64), primary_key=True),         # 行业/主题名
+    Column("flow_score", Numeric(8, 4)),                 # -100..100
+    Column("direction", String(8)),                      # in|out|flat
+    Column("evidence", Text),                            # 信贷/财政/资本开支/订单锚点=证伪抓手
+    Column("source", String(64)),
+    Column("valid_until", String(8)),
+    Column("raw_excerpt", Text),
+    _created_at(),
+)
+
+# 三水表聚合后的资金流分（派生，按 version）。
+flow_score = Table(
+    "flow_score", metadata,
+    Column("trade_date", String(8), primary_key=True),
+    Column("dimension", String(12), primary_key=True),
+    Column("key", String(64), primary_key=True),
+    Column("version", String(32), primary_key=True),
+    Column("credit", Numeric(10, 6)),
+    Column("fiscal", Numeric(10, 6)),
+    Column("policy", Numeric(10, 6)),
+    Column("composite", Numeric(10, 6)),
+    Column("z", Numeric(10, 6)),
+    _created_at(),
+)
+
+# carry 信号（逆回购/红利/可转债，派生，按 version）。
+carry_signal = Table(
+    "carry_signal", metadata,
+    Column("trade_date", String(8), primary_key=True),
+    Column("sleeve", String(16), primary_key=True),      # reverse_repo|dividend_carry|convertible
+    Column("code", String(16), primary_key=True),
+    Column("version", String(32), primary_key=True),
+    Column("expected_carry", Numeric(12, 6)),            # 年化预期 carry
+    Column("horizon_days", Integer),
+    Column("rank", Integer),
+    Column("metric", Text),                              # json: premium/net_dv/spike_flag 等
+    _created_at(),
+)
+
+# 盲区 α 候选（CSV + 派生，带证伪标记）。
+alpha_candidate = Table(
+    "alpha_candidate", metadata,
+    Column("as_of_date", String(8), primary_key=True),
+    Column("code", String(16), primary_key=True),
+    Column("version", String(32), primary_key=True),
+    Column("theme", String(64)),
+    Column("thesis", Text),
+    Column("falsification_rule", Text),                  # 剥离股价·只看产业侧资金到没到
+    Column("falsified", Integer),                        # 0 否 | 1 是 | -1 未知
+    Column("water_meter", String(16)),
+    Column("grade", String(2)),
+    Column("valid_until", String(8)),
+    Column("evidence", Text),
+    _created_at(),
+)
+
+# 统一资金账本：单一资金池按 sleeve 分配（plan_date/sleeve/version）。
+sleeve_target = Table(
+    "sleeve_target", metadata,
+    Column("plan_date", String(8), primary_key=True),
+    Column("sleeve", String(16), primary_key=True),      # defense_A|offense_B|alpha|cash
+    Column("version", String(32), primary_key=True),
+    Column("target_pct", Numeric(12, 6)),
+    Column("actual_pct", Numeric(12, 6)),
+    Column("min_pct", Numeric(12, 6)),
+    Column("max_pct", Numeric(12, 6)),
+    Column("nav", Numeric(18, 6)),                       # 回测 sleeve 净值（实盘可空）
+    Column("note", String(128)),
+    _created_at(),
+)
+
+# 套利战绩记分卡（结构对齐 signal_scorecard，按 sleeve/meter 分桶）。
+arb_scorecard = Table(
+    "arb_scorecard", metadata,
+    Column("as_of", String(8), primary_key=True),
+    Column("bucket", String(24), primary_key=True),      # defense_A/alpha/credit 等
+    Column("label", String(32)),
+    Column("n", Integer),
+    Column("win_rate", Numeric(8, 4)),
+    Column("mean_ret", Numeric(12, 6)),
+    Column("median_ret", Numeric(12, 6)),
+    Column("mean_excess", Numeric(12, 6)),
+    Column("mean_hold_days", Numeric(10, 2)),
+    _created_at(),
+)
+
+
 # 关键列补丁：老库已存在的表按需补列（create_all 不会改已存在表）。
 _COLUMN_PATCHES: dict[str, dict[str, str]] = {
     "portfolio_target": {"grade": "VARCHAR(2)", "source": "VARCHAR(16)"},
+    "stock_fundamental": {"dv_ratio": "DECIMAL(12,6)", "dv_ttm": "DECIMAL(12,6)"},
     "action_plan": {
         "trigger_hint": "VARCHAR(64)",
         "model_rank": "DECIMAL(10,6)",
         "model_view": "VARCHAR(32)",
+        "sleeve": "VARCHAR(16)",                          # 套利：一张表容纳 A/B/α/可转债
     },
-    "action_plan_account": {"risk_hints": "VARCHAR(512)"},
+    "action_plan_account": {
+        "risk_hints": "VARCHAR(512)",
+        "defense_pct": "DECIMAL(12,6)",
+        "offense_pct": "DECIMAL(12,6)",
+        "alpha_pct": "DECIMAL(12,6)",
+        "sleeve_gross": "DECIMAL(12,6)",
+        "ledger_ok": "INT",
+        "carry_expected": "DECIMAL(12,6)",
+        "fear_score": "DECIMAL(6,2)",
+    },
 }
 
 

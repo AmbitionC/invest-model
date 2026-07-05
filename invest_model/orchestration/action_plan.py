@@ -486,6 +486,46 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     if invested - gross > 0.10:
         hints.append(f"实际仓位 {invested:.0%} 高于目标 {gross:.0%}，无现金缓冲，补足前不开新仓")
 
+    # ── 套利统一资金账本（一体两面）：单一资金池按 A/B/α 分配、强制零杠杆 ──
+    # ARB_ENABLED=0（默认观察态）：不发 arb 行、不缩放引擎 B → 计划与今天逐字一致。
+    arb_rows: list[dict] = []
+    ledger_extra: dict = {}
+    try:
+        from invest_model.arb.config import ArbConfig
+        from invest_model.arb.ledger import build_arb_plan
+        acfg = ArbConfig.from_env()
+        fear_score = None
+        try:
+            from invest_model.signals.fear import fear_gauge
+            fear_score = fear_gauge(engine, dt).get("score")
+        except Exception:  # noqa: BLE001
+            fear_score = None
+        lg = build_arb_plan(engine, dt, acfg, equity, gross, fear_score, held_codes)
+        ledger_extra = lg["account_extra"]
+        if lg.get("viol_hint"):
+            hints.append(lg["viol_hint"])
+        # 引擎 B 行统一标 sleeve；启用态按 offense_scale 缩进 offense 预算
+        oscale = lg.get("offense_scale", 1.0)
+        for r in rows:
+            r.setdefault("sleeve", "offense_B")
+            if acfg.enabled and oscale != 1.0 and r.get("action") in ("buy", "add", "hold"):
+                r["tgt_weight"] = round(float(r.get("tgt_weight") or 0.0) * oscale, 4)
+                if r.get("shares_delta"):
+                    r["shares_delta"] = _round_lot(float(r["shares_delta"]) * oscale)
+        for r in watch_rows:
+            r.setdefault("sleeve", "offense_B")
+        arb_rows = lg.get("arb_rows", [])
+        # sleeve_target 落库（观察态也写，看板可见）
+        if persist and lg.get("sleeve_rows"):
+            try:
+                from invest_model.repositories.arb_repo import LedgerRepo
+                sr = pd.DataFrame(lg["sleeve_rows"])
+                LedgerRepo(engine).save(sr)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"sleeve_target 落库失败（不阻断）：{e}")
+    except Exception as e:  # noqa: BLE001 - 套利账本失败绝不阻断主计划
+        logger.warning(f"套利资金账本构建失败（跳过，回退纯引擎B）：{e}")
+
     account = {
         "plan_date": dt, "equity": round(equity, 2),
         "invested_pct": round(sum(mv.values()) / equity, 4),
@@ -498,15 +538,19 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         "model_ic_mean": m_ic_mean, "model_ic_ir": m_ic_ir, "model_hit": m_hit,
         "model_conf_label": _conf_label(model_trust, m_ic_ir),
         "risk_hints": " | ".join(hints) if hints else None,
+        **ledger_extra,
     }
 
-    rows = rows + watch_rows
+    rows = rows + arb_rows + watch_rows
     plan = ActionPlan(plan_date=dt, rows=rows, account=account)
     if persist and rows:
         cols = ["plan_date", "code", "name", "action", "cur_weight", "tgt_weight",
                 "shares_delta", "reason", "stop_price", "ref_price", "grade",
-                "trigger_hint", "model_rank", "model_view"]
+                "trigger_hint", "model_rank", "model_view", "sleeve"]
         df = pd.DataFrame(rows)
+        if "sleeve" not in df.columns:
+            df["sleeve"] = "offense_B"
+        df["sleeve"] = df["sleeve"].fillna("offense_B")
         df["trigger_hint"] = df["trigger"]  # trigger 为 MySQL 保留字，落库改名
         loop.repo.upsert("action_plan", df[cols], ["plan_date", "code"])
         try:
@@ -612,9 +656,12 @@ def render_markdown(plan: ActionPlan) -> str:
         "（★越多＝模型对该票越决断且历史越准；ETF/无覆盖记「—」）。"
         "**标的由投顾定，模型只做参谋+时机+风控，不选股。**")
 
-    held = [r for r in plan.rows if r["cur_weight"] > 1e-6]
-    buys = [r for r in plan.rows if r["action"] in ("buy", "add") and r["cur_weight"] <= 1e-6]
-    watch = [r for r in plan.rows if r["action"] == "watch"]
+    # 套利 sleeve 行（defense_A/alpha）单列，不混入引擎 B 的买入/持仓/观察
+    arb = [r for r in plan.rows if r.get("sleeve") in ("defense_A", "alpha")]
+    core = [r for r in plan.rows if r.get("sleeve") not in ("defense_A", "alpha")]
+    held = [r for r in core if r["cur_weight"] > 1e-6]
+    buys = [r for r in core if r["action"] in ("buy", "add") and r["cur_weight"] <= 1e-6]
+    watch = [r for r in core if r["action"] == "watch"]
     held.sort(key=lambda r: ({"sell": 0, "trim": 1, "hold": 2}.get(r["action"], 3), -r["cur_weight"]))
     buys.sort(key=lambda r: -r["tgt_weight"])
     watch.sort(key=lambda r: (r["grade"] or "Z", r["code"]))
@@ -631,4 +678,36 @@ def render_markdown(plan: ActionPlan) -> str:
         _table(lines, watch)
     else:
         lines.append("（观察池为空）")
+    _render_ledger(lines, a, arb)
     return "\n".join(lines)
+
+
+def _render_ledger(lines: list[str], a: dict, arb_rows: list[dict]) -> None:
+    """套利统一资金账本段（一体两面）。account 无 sleeve 字段则跳过（向后兼容）。"""
+    if a.get("offense_pct") is None and not arb_rows:
+        return
+    enabled = bool(arb_rows) or (a.get("ledger_ok") is not None)
+    tag = "" if arb_rows else "（观察态·未动用资金）"
+    lines += ["", f"## 四、套利/守恒 sleeve 账本{tag}"]
+    dpct = a.get("defense_pct"); opct = a.get("offense_pct"); apct = a.get("alpha_pct")
+    if opct is not None:
+        ok = "✅零杠杆" if a.get("ledger_ok") else "⚠️超100%已收缩"
+        fear = a.get("fear_score")
+        fear_s = f" | 恐慌指数 {fear:.0f}{'（恐慌弹药↑进攻/α）' if fear and fear >= 75 else ''}" if fear is not None else ""
+        lines.append(
+            f"- 资金池分配：防守A **{(dpct or 0):.0%}** / 进攻B **{(opct or 0):.0%}** / "
+            f"盲区α **{(apct or 0):.0%}** / 现金 **{max(0.0, 1-(dpct or 0)-(opct or 0)-(apct or 0)):.0%}** "
+            f"（{ok}，Σ={a.get('sleeve_gross', 0):.0%}）{fear_s}")
+        ce = a.get("carry_expected")
+        if ce:
+            lines.append(f"- 防守底盘预期 carry（加权年化）：约 {ce:.2%}")
+        lines.append("- 红线：全程自有资金·零杠杆；α 小仓位对赔率、单笔亏得起；跟水不跟价（逻辑止损）。")
+    if arb_rows:
+        lines += ["", "| sleeve | 标的 | 动作 | 目标权重 | 参考价 | 逻辑 |",
+                  "|---|---|---|---:|---:|---|"]
+        for r in sorted(arb_rows, key=lambda x: (x.get("sleeve", ""), -float(x.get("tgt_weight") or 0))):
+            lines.append(
+                f"| {r.get('sleeve')} | {r.get('name')}({r.get('code')}) | {r.get('action')} "
+                f"| {float(r.get('tgt_weight') or 0):.1%} | {r.get('ref_price', '—')} | {r.get('reason', '')} |")
+    else:
+        lines.append("- （启用 `ARB_ENABLED=1` 后此处列出逆回购/红利/可转债/盲区α 的具体挂单。）")

@@ -88,6 +88,29 @@
 
 ---
 
+## P6. 套利模块（引擎 A 防守 carry + 三水表 overlay + 盲区 α + 统一资金账本）
+
+**改动**：新增子包 `invest_model/arb/`，把文档《套利方案 v2》落地为与现有截面多因子
+选股系统（引擎 B / 交易）同属一个资金池的一体两面：引擎 A 防守 carry（国债逆回购 /
+红利 / 可转债双低 / 恐慌弹药）、三水表（信贷/财政/政策资本）倾斜引擎 B 并生成盲区 α，
+统一资金账本按 A(50-60%)/B(30-40%)/α(5-15%) 分配、**机器校验零杠杆**（`ledger_invariant`，
+Σ≤100%）。数据层：逆回购/红利/可转债走 Tushare 自动化，三水表走人工 curated CSV
+（`scripts/ingest_watermeter.py`，同投顾信号约定）。
+
+| 项 | 说明 |
+|---|---|
+| 版本族 | `arb_repo_v1 / arb_div_v1 / arb_cb_v1 / arb_alpha_v1 / arb_flow_v1 / arb_ledger_v1`，与 `cs_ic_v1` 版本隔离并行 |
+| 影子并行 | 水表倾斜乘子默认 1.0、盲区 α 权重默认 0（同 `CANDIDATE_FACTORS`），攒 **≥12 期** flow_score 影子 IC（health 段 `arb.watermeter_ic_periods`）方可晋升；carry 走 `--mode arb` 影子净值；`build_action_plan` 在 `ARB_ENABLED=0` 时把套利段渲染为「观察态·未动用资金」 |
+| 晋升门槛（建议） | 水表影子 IC ≥12 期且 \|rank-IC\| ≥ 0.02、IC_IR ≥ 0.3；carry 回测实现 ≈ 预期（`review_arb` 段对账）；盲区 α 命中率为正 |
+| 一键回退 | 主开关 `ARB_ENABLED=0`（默认）→ 计划等同今天的纯引擎 B（逐字一致）；水表倾斜 `ARB_WATERTILT=0`；逐 sleeve 开关在 `ArbConfig`。回退无需清理数据（按 version/sleeve 隔离） |
+| 数据降级 | `cb_*`/逆回购 缺权限即 `logger.warning` 跳过，`build_action_plan` 用 `table_exists` 检查，缺表则该 sleeve 预算划入**现金（绝不加杠杆）**并加 risk_hint。任何 sleeve 缺失都不破坏零杠杆不变式（最坏=今天行为） |
+| 观测指标 | health 段 `arb`（watermeter_ic_periods / alpha_falsified / ledger_ok）；周六复盘第五段 `review_arb`（sleeve 净值 / carry 实现vs预期 / α 证伪 / 水表兑现）；`arb_scorecard` 记分卡；盯盘 `watch_alert` 新增 CARRY/WATER/ALPHA 三类 |
+| 红线（沿用文末） | 全程自有资金零杠杆（机器校验）；跟水不跟价——逻辑止损（`carry_logic_stop`，水表反转即离场）；盲区 α 必过证伪（剥离股价·只看产业侧资金）；连续 3 期实盘跑输 >3% / MaxDD 恶化 >5pp → 回退 |
+
+**状态：影子/观察态已上线（本次提交），`ARB_ENABLED=0` 默认不动用资金、不改变生产计划；晋升时再决策。**
+
+---
+
 ## 建议实施顺序与依据
 
 ```

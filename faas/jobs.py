@@ -154,6 +154,47 @@ def _build_signal_scorecard() -> str:
         return f"err:{repr(e)[:60]}"
 
 
+# ── 三水表更新提醒（watermeter-remind）──────────────────────────────
+
+def job_watermeter_remind() -> dict:
+    """每周提醒人工刷新三水表（信贷/财政/政策资本）CSV —— 套利模块引擎 B/α 的输入。"""
+    day = gh_notify.bj_now().strftime("%Y%m%d")
+    res = gh_notify.post_issue_comment(
+        "💧 水表更新提醒",
+        seed_body="本 issue 每周提醒刷新三水表（信贷/财政/政策资本）与盲区α curated CSV。",
+        comment_body=(f"## {day} 水表巡检\n\n"
+                      "💧 **请更新三水表信号 CSV**（`config/watermeter_*.csv`）：\n"
+                      "- 信贷水表：社融结构·企业中长期贷款投向·结构性货币工具\n"
+                      "- 财政水表：超长期特别国债/专项债投向·大基金·以旧换新清单\n"
+                      "- 政策资本水表：国家队/汇金 ETF 增持方向·险资社保·市值管理考核\n\n"
+                      "录入：`python scripts/ingest_watermeter.py --kind watermeter --csv <file>`\n"
+                      "**证伪铁律：剥离股价，只看产业侧的钱到没到。** 只有故事没有真金白银 = 幻觉，不碰。"),
+        dedupe_prefix=f"## {day} 水表巡检",
+    )
+    return {"job": "watermeter_remind", "day": day, **res}
+
+
+def _build_arb_scorecard_and_backtest() -> dict:
+    """套利影子回测 + 战绩记分卡（best-effort，默认观察态，失败不阻断复盘）。"""
+    out: dict = {}
+    from scripts.run_pipeline import main as pipe_main
+    try:
+        _run_cli(pipe_main, ["run_pipeline.py", "--mode", "arb",
+                             "--start", _PIPELINE_START, "--version", "ic_v1"])
+        out["arb_backtest"] = "ok"
+    except BaseException as e:  # noqa: BLE001
+        out["arb_backtest"] = f"WARN: {e}"
+        print(f"WARN 套利账本回测失败（不阻断）：{e}")
+    try:
+        from scripts.build_arb_scorecard import main as arb_sc_main
+        _run_cli(arb_sc_main, ["build_arb_scorecard.py"])
+        out["arb_scorecard"] = "ok"
+    except BaseException as e:  # noqa: BLE001
+        out["arb_scorecard"] = f"WARN: {e}"
+        print(f"WARN 套利记分卡失败（不阻断）：{e}")
+    return out
+
+
 # ── 周六全量重建 + P4 影子回测 + 复盘（data-update all档 + review 链）────
 
 def job_weekly_rebuild_review() -> dict:
@@ -180,6 +221,9 @@ def job_weekly_rebuild_review() -> dict:
         out["p4_shadow"] = f"WARN: {e}"
         print(f"WARN P4 影子回测失败（不阻断）：{e}")
 
+    # 2b) 套利统一资金账本影子回测 + 记分卡（观察态，不阻断）
+    out.update(_build_arb_scorecard_and_backtest())
+
     # 3) 复盘（纯读 DB）+ 推送
     review_out = "/tmp/review.md"
     from scripts.review import main as review_main
@@ -202,4 +246,5 @@ JOBS = {
     "ingest_etf": job_ingest_etf,
     "daily_update_plan": job_daily_update_plan,
     "weekly_rebuild_review": job_weekly_rebuild_review,
+    "watermeter_remind": job_watermeter_remind,
 }

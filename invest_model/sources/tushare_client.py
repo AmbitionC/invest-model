@@ -304,7 +304,7 @@ class TushareClient(BaseSource):
         df = self.pro.daily_basic(
             trade_date=trade_date,
             fields="ts_code,trade_date,pe_ttm,pb,ps_ttm,total_mv,circ_mv,"
-                   "turnover_rate,turnover_rate_f"
+                   "turnover_rate,turnover_rate_f,dv_ratio,dv_ttm"
         )
         if df is not None and not df.empty:
             df = df.rename(columns={"ts_code": "code"})
@@ -439,3 +439,67 @@ class TushareClient(BaseSource):
         """贷款市场报价利率 LPR（日度）"""
         df = self.pro.cb_lpr(start_date=start_date, end_date=end_date)
         return df if df is not None else pd.DataFrame()
+
+    # ── 套利模块（arbitrage）数据源 ──────────────────────────
+    # 交易所国债逆回购代码：GC001/007/014/028…（沪）R-001…（深）。close=年化利率。
+    REVERSE_REPO_CODES = (
+        "204001.SH", "204002.SH", "204003.SH", "204004.SH",
+        "204007.SH", "204014.SH", "204028.SH", "204091.SH", "204182.SH",
+        "131810.SZ", "131811.SZ", "131800.SZ", "131809.SZ",
+        "131801.SZ", "131802.SZ", "131803.SZ", "131805.SZ", "131806.SZ",
+    )
+
+    @_retry
+    @_rate_limit
+    def get_reverse_repo_daily(self, trade_date: str) -> pd.DataFrame:
+        """国债逆回购日行情：走 pro.daily 拉逆回购代码，close 即年化利率(%)。
+
+        权限缺失/接口异常由外层 update.py 的 try/except 跳过（优雅降级）。
+        """
+        df = self.pro.daily(trade_date=trade_date)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df[df["ts_code"].isin(self.REVERSE_REPO_CODES)].copy()
+        if df.empty:
+            return pd.DataFrame()
+        df = df.rename(columns={"ts_code": "code", "vol": "volume"})
+        df["rate"] = df["close"]
+        return df
+
+    @_retry
+    @_rate_limit
+    def get_cb_basic(self) -> pd.DataFrame:
+        """可转债基础信息（cb_basic，静态全量）。"""
+        df = self.pro.cb_basic(
+            fields="ts_code,bond_short_name,stk_code,list_date,delist_date,"
+                   "conv_price,maturity_date,remain_size,call_status"
+        )
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_cb_daily(self, trade_date: str) -> pd.DataFrame:
+        """可转债日行情（cb_daily）。"""
+        df = self.pro.cb_daily(
+            trade_date=trade_date,
+            fields="ts_code,trade_date,open,high,low,close,pre_close,"
+                   "pct_chg,vol,amount,cb_value,cb_over_rate"
+        )
+        if df is not None and not df.empty:
+            df = df.rename(columns={"ts_code": "code"})
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_dividend(self, ann_date: str) -> pd.DataFrame:
+        """分红事件（dividend，按公告日拉取，仅取已实施 div_proc='实施'）。"""
+        df = self.pro.dividend(
+            ann_date=ann_date,
+            fields="ts_code,ann_date,end_date,div_proc,stk_div,cash_div,"
+                   "cash_div_tax,record_date,ex_date,pay_date"
+        )
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.rename(columns={"ts_code": "code"})
+        df = df[(df["div_proc"] == "实施") & df["ex_date"].notna() & (df["ex_date"] != "")]
+        return df.copy()

@@ -466,8 +466,59 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
             sev = "batch" if "逼近" in st else "crit"
             alerts.append((f"E:{c}:{st}",
                            f"🟠 ETF持仓 {e['name']} {px:.3f}({chg:+.1%}) — {st}{ticket}", sev))
+    # 套利模块预警（水表反转 / α 证伪 / 逆回购利率窗口）——DB 驱动，best-effort
+    try:
+        alerts += _arb_alerts(ctx.get("engine"))
+    except Exception:  # noqa: BLE001
+        pass
     min_dist = min(dists) if dists else float("inf")
     return hold_rows, watch_rows, etf_rows, alerts, min_dist
+
+
+def _arb_alerts(engine) -> list[tuple[str, str, str]]:
+    """套利盯盘预警：WATER 水表反转(crit) / ALPHA α证伪(crit) / CARRY 逆回购窗口(batch)。"""
+    if engine is None:
+        return []
+    out: list[tuple[str, str, str]] = []
+    repo = BaseRepository(engine)
+    # WATER：flow_score 最近两期 composite 由正转负 → 水表反转
+    if repo.table_exists("flow_score"):
+        fs = repo.read_sql(
+            "SELECT trade_date, key, composite FROM flow_score "
+            "WHERE trade_date>=(SELECT MIN(td) FROM (SELECT DISTINCT trade_date td FROM "
+            "flow_score ORDER BY trade_date DESC LIMIT 2) x)")
+        if not fs.empty and fs["trade_date"].nunique() >= 2:
+            fs["composite"] = pd.to_numeric(fs["composite"], errors="coerce")
+            piv = fs.pivot_table(index="key", columns="trade_date", values="composite")
+            cols = sorted(piv.columns)
+            prev, cur = cols[0], cols[-1]
+            for k, r in piv.iterrows():
+                if pd.notna(r[prev]) and pd.notna(r[cur]) and r[prev] > 0 and r[cur] < 0:
+                    out.append((f"WATER:{k}:reversed",
+                                f"💧 水表反转：{k} 资金流由 {r[prev]:+.0f}→{r[cur]:+.0f} 转负，"
+                                "相关 sleeve 逻辑止损（跟水不跟价）", "crit"))
+    # ALPHA：alpha_candidate 已标 falsified=1
+    if repo.table_exists("alpha_candidate"):
+        af = repo.read_sql(
+            "SELECT code, theme FROM alpha_candidate WHERE falsified=1 "
+            "AND as_of_date=(SELECT MAX(as_of_date) FROM alpha_candidate)")
+        for _, r in af.iterrows():
+            out.append((f"ALPHA:{r['code']}:falsified",
+                        f"🔴 盲区α证伪：{r.get('theme') or ''}({r['code']}) 产业侧资金未兑现，"
+                        "逻辑止损离场", "crit"))
+    # CARRY：逆回购计息>=3天（季末/节前）或利率跳升 → 打新/理财资金回流窗口
+    if repo.table_exists("reverse_repo_daily"):
+        rr = repo.read_sql(
+            "SELECT rate, interest_days FROM reverse_repo_daily WHERE code='204001.SH' "
+            "AND trade_date=(SELECT MAX(trade_date) FROM reverse_repo_daily)")
+        if not rr.empty:
+            rate = float(pd.to_numeric(rr["rate"].iloc[0], errors="coerce") or 0)
+            days = int(pd.to_numeric(rr["interest_days"].iloc[0], errors="coerce") or 1)
+            if rate >= 3.0 or days >= 3:
+                out.append((f"CARRY:204001:{int(rate*100)}:{days}",
+                            f"💰 逆回购carry窗口：GC001 年化{rate:.2f}%·计息{days}天，"
+                            "闲钱可停靠稳吃利差", "batch"))
+    return out
 
 
 def _persist_alerts(engine, now: datetime, items: list[tuple[str, str, str]]) -> None:
@@ -481,13 +532,15 @@ def _persist_alerts(engine, now: datetime, items: list[tuple[str, str, str]]) ->
     try:
         from invest_model.data import create_schema
 
-        kind_of = {"H": "hold", "W": "watch", "E": "etf"}
+        kind_of = {"H": "hold", "W": "watch", "E": "etf",
+                   "CARRY": "carry", "WATER": "water", "ALPHA": "alpha"}
         rows = []
         for k, line, sev in items:
             head = k.split(":", 1)[0]
             kind = "selfcheck" if head == "ETFSELF" else kind_of.get(head, "other")
             parts = k.split(":")
-            code = parts[1] if kind in ("hold", "watch", "etf") and len(parts) > 1 else None
+            code = parts[1] if kind in ("hold", "watch", "etf", "carry", "water", "alpha") \
+                and len(parts) > 1 else None
             rows.append({"alert_date": now.strftime("%Y%m%d"),
                          # DATETIME 用 ISO 字符串绑定，规避 pandas Timestamp 与 sqlite3 不兼容
                          "alert_time": now.strftime("%Y-%m-%d %H:%M:%S"),

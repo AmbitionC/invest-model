@@ -1,0 +1,3 @@
+as_of_date,code,version,theme,thesis,falsification_rule,falsified,water_meter,grade,valid_until,evidence
+20260101,000001.SZ,arb_alpha_v1,出海制造,主业出海份额提升但市场只给内需PE估值错杀,剥离股价:核查出口订单/海外营收占比是否真实抬升;若无产业侧资金流入则证伪,-1,credit,B,,示例-需人工核实产业侧资金
+20260101,600000.SH,arb_alpha_v1,化债受益,区域银行资产负债表修复但仍按旧不良估值,剥离股价:核查化债专项债到账/不良率下行是否兑现;仅有涨幅无真金白银则证伪,-1,fiscal,B,,示例-需人工核实

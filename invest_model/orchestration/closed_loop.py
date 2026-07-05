@@ -62,6 +62,8 @@ class LoopConfig:
     timing_enabled: bool = True
     timing_floor: float = 0.5
     risk: RiskConfig = field(default_factory=lambda: RiskConfig(enabled=False))
+    arb: "ArbConfig" = field(default_factory=lambda: __import__(
+        "invest_model.arb.config", fromlist=["ArbConfig"]).ArbConfig.from_env())
 
 
 class ClosedLoop:
@@ -211,9 +213,18 @@ class ClosedLoop:
                 if not advisor_df.empty:
                     cand |= set(advisor_df["code"])
                 trend_codes = trend_ok(self.engine, dt, list(cand), self.cfg.risk)
+            # 三水表倾斜（影子默认关）：把高 flow_score 行业并入投顾主题倾斜通道，
+            # 复用 theme_boost 乘子 —— ARB_WATERTILT=0 时 flow_industries() 返回空集。
+            theme_inds = self._theme_industries(dt)
+            if getattr(self.cfg, "arb", None) and self.cfg.arb.watermeter_tilt:
+                try:
+                    from invest_model.arb.watermeter import flow_industries
+                    theme_inds = set(theme_inds) | flow_industries(self.engine, dt, self.cfg.arb)
+                except Exception:  # noqa: BLE001
+                    pass
             return fuse_targets(scores, pcfg, advisor_df, gross=gross,
                                 trend_ok_codes=trend_codes, exit_codes=exit_codes,
-                                theme_industries=self._theme_industries(dt),
+                                theme_industries=theme_inds,
                                 industry_map=self.industry_map(),
                                 current_codes=cur_codes, vol_map=vol_map)
         # 纯量化
@@ -258,6 +269,135 @@ class ClosedLoop:
         logger.info(f"回测完成 run_id={run_id}：{json.dumps(res.metrics, ensure_ascii=False)}")
         return res.metrics
 
+    def backtest_arb(self, arb_cfg=None) -> dict:
+        """统一资金账本回测：offense(引擎B) + defense_A(carry) + alpha 合成一条净值。
+
+        各 sleeve 与合成结果按 version 独立落库（版本隔离）；生产 cs_ic_v1 路径不动。
+        数据缺失的 sleeve 退化为平坦净值（现金），零杠杆不变式无条件成立。
+        """
+        from invest_model.arb.carry import build_carry_signals
+        from invest_model.arb.config import (ArbConfig, VERSION_ALPHA, VERSION_CB,
+                                             VERSION_DIV, VERSION_LEDGER, VERSION_REPO)
+        from invest_model.arb.watermeter import build_flow_scores
+        from invest_model.backtest.carry_engine import CarryBacktestEngine
+        from invest_model.backtest.ledger_backtest import compose_ledger, persist_arb_result
+        from invest_model.repositories.arb_repo import AlphaRepo, CarryRepo, LedgerRepo
+
+        acfg = arb_cfg or ArbConfig.from_env()
+        base = CSBacktestConfig(start_date=self.cfg.start, end_date=self.cfg.end,
+                                benchmark_code=self.cfg.benchmark)
+
+        # 1) 引擎 B（进攻）= 现有多因子系统净值
+        off_cfg = CSBacktestConfig(name=f"arb_offense_{self.cfg.version}",
+                                   start_date=self.cfg.start, end_date=self.cfg.end,
+                                   benchmark_code=self.cfg.benchmark)
+        offense = CSBacktestEngine(self.engine, off_cfg, self._target_provider,
+                                   self.reb()).run()
+
+        # 2) 防守 A = 逆回购 + 可转债（现金 carry），blend 为一条 defense 净值
+        rr = CarryBacktestEngine(self.engine, CSBacktestConfig(
+            name="arb_repo", start_date=self.cfg.start, end_date=self.cfg.end),
+            mode="reverse_repo", arb_cfg=acfg).run()
+        cb = CarryBacktestEngine(self.engine, CSBacktestConfig(
+            name="arb_cb", start_date=self.cfg.start, end_date=self.cfg.end),
+            mode="convertible", arb_cfg=acfg).run()
+        defense = self._blend_navs([rr.nav_df, cb.nav_df])
+
+        # 3) 盲区 α（有候选才建；否则平坦=现金）
+        alpha_nav = self._alpha_nav(base)
+
+        # 落各 sleeve 明细净值（版本隔离）
+        persist_arb_result(self.engine, rr, VERSION_REPO)
+        persist_arb_result(self.engine, cb, VERSION_CB)
+        persist_arb_result(self.engine, offense, f"arb_offense_{self.cfg.version}",
+                           top_k=self.cfg.portfolio.top_n)
+
+        # 4) 合成账本净值
+        ledger = compose_ledger(
+            {"defense_A": defense, "offense_B": offense.nav_df, "alpha": alpha_nav},
+            acfg, self.cfg.start, self.cfg.end)
+        run_id = persist_arb_result(self.engine, ledger, VERSION_LEDGER,
+                                    top_k=self.cfg.portfolio.top_n)
+
+        # 5) 账本 sleeve_target（回测口径，写各 sleeve 期末净值）
+        try:
+            from invest_model.arb.ledger import allocate_sleeves
+            w = allocate_sleeves(acfg, fear_score=None)
+            bounds = acfg.sleeve_bounds()
+            nav_end = {
+                "defense_A": float(defense["nav"].iloc[-1]) if not defense.empty else 1.0,
+                "offense_B": float(offense.nav_df["nav"].iloc[-1]) if not offense.nav_df.empty else 1.0,
+                "alpha": float(alpha_nav["nav"].iloc[-1]) if not alpha_nav.empty else 1.0,
+            }
+            rows = []
+            for s in ("defense_A", "offense_B", "alpha", "cash"):
+                lo, hi = bounds.get(s, (0.0, 1.0))
+                rows.append({"plan_date": self.cfg.end, "sleeve": s,
+                             "version": VERSION_LEDGER, "target_pct": w.get(s, 0.0),
+                             "actual_pct": w.get(s, 0.0), "min_pct": lo, "max_pct": hi,
+                             "nav": nav_end.get(s), "note": "backtest"})
+            LedgerRepo(self.engine).save(pd.DataFrame(rows))
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"sleeve_target 落库失败（不阻断）：{e}")
+
+        logger.info(f"套利账本回测完成 run_id={run_id}："
+                    f"{json.dumps(ledger.metrics, ensure_ascii=False)}")
+        return {"ledger": ledger.metrics, "offense": offense.metrics,
+                "reverse_repo": rr.metrics, "convertible": cb.metrics}
+
+    def _blend_navs(self, nav_dfs: list[pd.DataFrame]) -> pd.DataFrame:
+        """把多条 sleeve 净值等权 blend 为一条（对齐并集日期，缺失日 ret=0）。"""
+        rets, all_dates = [], set()
+        for nav in nav_dfs:
+            if nav is None or nav.empty:
+                continue
+            s = nav.set_index("trade_date")["ret"].astype(float)
+            # 仅纳入非全零（有真实数据）的 sleeve；全平坦=无数据则不参与
+            if s.abs().sum() > 0:
+                rets.append(s)
+                all_dates |= set(s.index)
+        dates = sorted(all_dates)
+        if not dates:
+            return pd.DataFrame({"trade_date": [self.cfg.end], "nav": [1.0], "ret": [0.0],
+                                 "turnover": [0.0], "position_count": [0], "invested": [0.0]})
+        blended, prev = [], 1.0
+        rvals = []
+        for d in dates:
+            vals = [s.loc[d] for s in rets if d in s.index]
+            r = float(sum(vals) / len(vals)) if vals else 0.0
+            prev *= (1.0 + r)
+            blended.append(prev); rvals.append(r)
+        return pd.DataFrame({"trade_date": dates, "nav": blended, "ret": rvals,
+                             "turnover": 0.0, "position_count": len(rets), "invested": 1.0})
+
+    def _alpha_nav(self, base: CSBacktestConfig) -> pd.DataFrame:
+        """盲区 α 篮子净值：等权持有当期 α 候选（cs_engine 目标提供者）。无候选=平坦。"""
+        from invest_model.arb.config import VERSION_ALPHA
+        from invest_model.repositories.arb_repo import AlphaRepo
+        repo = BaseRepository(self.engine)
+        if not repo.table_exists("alpha_candidate"):
+            return pd.DataFrame()
+        arepo = AlphaRepo(self.engine)
+
+        def provider(dt: str, cur: dict[str, float]) -> dict[str, float]:
+            df = arepo.get_active(dt, VERSION_ALPHA)
+            if df is None or df.empty:
+                return {}
+            df = df[df.get("falsified", -1) != 1] if "falsified" in df.columns else df
+            codes = list(df["code"])[:20]
+            if not codes:
+                return {}
+            w = min(0.05, 0.15 / len(codes))
+            return {c: w for c in codes}
+
+        acfg = CSBacktestConfig(name="arb_alpha", start_date=self.cfg.start,
+                                end_date=self.cfg.end, benchmark_code=self.cfg.benchmark)
+        res = CSBacktestEngine(self.engine, acfg, provider, self.reb()).run()
+        # 全空则视为平坦
+        if res.nav_df.empty or res.nav_df["ret"].abs().sum() == 0:
+            return pd.DataFrame()
+        return res.nav_df
+
     def run(self, mode: str = "all") -> dict:
         if mode in ("universe", "all"):
             self.build_universe()
@@ -269,6 +409,16 @@ class ClosedLoop:
             self.predict_all()
         if mode in ("backtest", "all"):
             return self.backtest()
+        if mode == "arb":
+            # 套利账本回测：先补 flow/carry 派生信号，再合成账本净值。
+            from invest_model.arb.carry import build_carry_signals
+            from invest_model.arb.watermeter import build_flow_scores
+            try:
+                build_flow_scores(self.engine, self.cfg.end)
+                build_carry_signals(self.engine, self.cfg.end)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"arb 派生信号构建失败（不阻断回测）：{e}")
+            return self.backtest_arb()
         return {}
 
     # ── 持久化 / 导出 ──
