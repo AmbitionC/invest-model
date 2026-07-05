@@ -174,10 +174,16 @@ def run_data_update(engine, start: str, end: str, quarters: list[str] | None = N
         logger.warning(f"cb_daily 拉取中断（已入库 {n} 行，下次续拉）：{e}")
     stats["cb_daily"] = n
 
-    # 分红/除权事件（红利 carry 精确除权日；按缺失公告日增量）
+    # 分红/除权事件（红利 carry 精确除权日；按缺失公告日增量）。
+    # 注意：dividend_event 主键为 (code, ex_date)、无 trade_date 列，故不能用
+    # _missing_dates（它查 trade_date）；改为按 ann_date 自增量。
     n = 0
     try:
-        for d in _missing_dates(repo, "dividend_event", open_dates):
+        have = repo.read_sql("SELECT DISTINCT ann_date FROM dividend_event "
+                             "WHERE ann_date>=:s", {"s": open_dates[0]}) \
+            if open_dates and repo.table_exists("dividend_event") else pd.DataFrame()
+        have_set = set(have["ann_date"].tolist()) if not have.empty else set()
+        for d in [x for x in open_dates if x not in have_set]:
             df = client.get_dividend(d)
             if not df.empty:
                 df["ann_date"] = d
