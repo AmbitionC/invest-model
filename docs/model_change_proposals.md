@@ -111,6 +111,69 @@
 
 ---
 
+## P7. 财务排雷负面清单：影子 → universe 硬过滤
+
+**改动**：`invest_model/universe/quality_screen.py` 的 7 规则红旗打分器（应收/商誉/
+毛利率超行业/三费骤降/归母异常/利润-现金背离/免税放大器）从影子记录晋升为
+universe 负面过滤（红旗 ≥3 剔除）+ 投顾信号自动降级提示。
+
+方法论出处：重远投资观 财报#3/#4/#7；life-teachers 验证
+`profit-vs-cash-and-fraud-screen`（干净 0 旗/问题 8 旗清晰分开）。
+
+| | 说明 |
+|---|---|
+| 预期收益 | 尾部风险防御（暴雷排除），非 alpha 增强——"宁错杀不放过"只对负面清单成立；A 股财务暴雷（乐视/獐子岛/康得新型）单票 -50%+ 的左尾被系统性剪除 |
+| 风险 | ① 误杀：红旗是"触发深挖"非"确认造假"，行业阈值校准不足时会错杀合法高应收行业（建筑/军工）；② universe 缩小影响因子截面与回测可比性；③ 快报/年报披露节奏导致红旗滞后 |
+| **晋升门槛（建议）** | 影子攒 ≥8 期后：红旗 ≥3 组（等权）显著跑输 universe 均值（月均 < -1%）且组合内命中率 >0，方可晋升；晋升时先只剔红旗 ≥3、观察 4 期再讨论收紧到 ≥2 |
+| 观测指标 | `results/latest.json → health.quality_screen`（红旗分布/组合命中数，已上线）；操作计划 risk_hint（持仓 ≥2 旗提示深挖）；建议补一个"红旗组 vs 干净组"分组收益脚本再裁决 |
+| 回退 | 影子态本来就不动仓；晋升后回退=过滤开关一处 |
+
+**状态：影子已上线（本次提交），每调仓日全 universe 打分落 `quality_flag`，不剔除任何票。**
+
+## P8. 财报方法论候选因子组：growth_accel / bp_ex_goodwill / dividend_yield / insider_conviction
+
+**改动**：四个候选因子已进 `CANDIDATE_DIRECTION` 影子观察（同 P1 机制：算暴露、
+落库、记 IC，不参与打分）。晋升=逐个移入 `FACTOR_DIRECTION`。
+
+| 因子 | 方法论出处（life-teachers 验证） | 数据依赖 |
+|---|---|---|
+| growth_accel 增速二阶导 | 财报#1"看增速二阶导"；`growth-deceleration-davis-killer`（失速→PE 重估跌 78%） | fina_indicator q_netprofit_yoy（VIP） |
+| bp_ex_goodwill 扣商誉 BP | 财报#7"扣商誉重算"；`goodwill-strip-revaluation`（PB 1.2→3.0） | balancesheet_vip（新增采集） |
+| dividend_yield 股息率 | 投资篇#2 分红=稳健者核心回报；`bank-stock-yield-and-value-trap` | daily_basic dv_ttm（已有） |
+| insider_conviction 高管增持 | 跟庄篇；`insider-buying-signal-strength`（可信度=押注÷身家，高管≈20×） | stk_holdertrade（新增采集） |
+
+| | 说明 |
+|---|---|
+| 预期收益 | growth_accel 与动量/成长相关但含前瞻信息（盈利动量文献扎实）；bp_ex_goodwill 修正 bp 的虚资产失真；dividend_yield 补红利风格暴露（现因子库无）；insider_conviction 信息面独立、与价量正交 |
+| 风险 | ① growth_accel 对财报披露节奏敏感（季度更新，月频调仓下 2/3 时间是陈值）；② insider_conviction 覆盖稀疏（多数票无增减持记录，NaN=中性，同 adv_stance 的覆盖面偏置）；③ bp_ex_goodwill 与 bp 相关性预计 >0.9，晋升需先看增量（若相关 ≥0.95 建议直接**替换** bp 而非并列）；④ dividend_yield 与 ep 高相关，红利风格拥挤期回撤集中 |
+| **晋升门槛** | 同 P1：≥12 期、\|rank-IC\|≥0.02、IC_IR≥0.3、与现有因子相关 <0.7（bp_ex_goodwill 例外：按"替换 bp 后合成 IC 不降"裁决） |
+| 观测指标 | health.candidate_factor_ic / candidate_ic_periods（已自动输出）；周六复盘模型段 |
+| 回退 | 候选态零影响（已实证：删候选暴露重算打分逐字一致）；晋升后移回一行即回退 |
+
+**状态：影子已上线（本次提交），无需决策；晋升时逐因子再决策。**
+
+## P9. 下跌二分法闸：恐慌抄底放松只给基本面未走坏的票
+
+**改动**：`signals/buypoint.py` 恐慌放松分支（fear≥75 时环境闸 60%→40%）叠加
+基本面闸——最近一期单季+累计净利同比双负（"连续负增长"的可取数近似）的票
+**不享受放松**，维持原环境闸。`fear_fundamental_gate=True` 默认开启。
+
+方法论出处：投资篇#3《为什么亏钱受伤的总是散户》——下跌分估值驱动（系统性
+恐慌，可用宽基/优质票抄底等修复）与业绩驱动（保险/中概式基本面走坏，万不可
+抄底）；不知谁错先怀疑自己错、去财报找原因。
+
+| | 说明 |
+|---|---|
+| 预期收益 | 防"接飞刀"：恐慌窗口里技术买点常在业绩走坏票上先出现（跌得深反弹形态好），此闸把 fear 特例限定回它的本意——只抄"估值驱动的错杀" |
+| 风险 | ① 财报滞后：增速刚转正的反转票会被上一期双负挡住（错过左侧第一波——与"确认增速恢复才买"的原则一致，属接受的代价）；② 数据缺失 fail-open（无 q_profit_yoy 时不拦，行为=今天） |
+| 为何默认开启 | 只收紧 fear 特例分支（正常路径逐字不变）；最坏影响=恐慌窗口少抄一次底，方向与"确定性>收益率"一致 |
+| 观测指标 | 观察池理由文案"业绩驱动下跌禁抄"出现频次；恐慌窗口（fear≥75 的调仓日）被拦票 vs 放行票的后续 20 日收益对比 |
+| 回退 | `BuyPointConfig(fear_fundamental_gate=False)` 一处 |
+
+**状态：已实施默认开启（本次提交）。**
+
+---
+
 ## 建议实施顺序与依据
 
 ```

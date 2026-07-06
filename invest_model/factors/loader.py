@@ -1,8 +1,9 @@
 """FactorDataLoader：组装某交易日的原始截面（价格衍生 + 估值 + point-in-time 财务）。
 
 返回 DataFrame，index=code，列含：
-  industry, circ_mv, pe_ttm, pb, ps_ttm, turnover_rate,
-  roe, roa, gross_margin, revenue_yoy, profit_yoy,
+  industry, total_mv, circ_mv, pe_ttm, pb, ps_ttm, turnover_rate, dv_ttm,
+  roe, roa, gross_margin, revenue_yoy, profit_yoy, q_profit_yoy, q_profit_accel,
+  goodwill, eq_exc_min, insider_conviction,
   mom_20, mom_60, mom_120, ret_5, vol_20
 缺失数据以 NaN 体现，由后续处理器/合成层稳健处理。
 """
@@ -49,6 +50,12 @@ class FactorDataLoader:
         adv = self._advisor_stance(trade_date, code_set)
         if not adv.empty:
             df = df.join(adv)
+        ext = self._fina_ext_pit(trade_date, code_set)
+        if not ext.empty:
+            df = df.join(ext)
+        ins = self._insider(trade_date, code_set)
+        if not ins.empty:
+            df = df.join(ins)
         return df
 
     # ── 投顾立场（候选因子，影子观察）──
@@ -126,7 +133,7 @@ class FactorDataLoader:
     # ── 估值 ──
     def _valuation(self, trade_date: str, codes: set[str]) -> pd.DataFrame:
         v = self.repo.read_sql(
-            "SELECT code, pe_ttm, pb, ps_ttm, circ_mv, turnover_rate "
+            "SELECT code, pe_ttm, pb, ps_ttm, total_mv, circ_mv, turnover_rate, dv_ttm "
             "FROM stock_fundamental WHERE trade_date=:d",
             {"d": trade_date},
         )
@@ -172,6 +179,67 @@ class FactorDataLoader:
         out.index.name = "code"
         return out
 
+    # ── 报表扩展项 PIT（扣商誉估值原料；候选因子 bp_ex_goodwill）──
+    def _fina_ext_pit(self, trade_date: str, codes: set[str]) -> pd.DataFrame:
+        """goodwill / eq_exc_min（归母净资产）的 point-in-time 最新一期。
+
+        无 stock_fina_ext 表/无数据时返回空——候选因子整列 NaN（影子无下游影响）。
+        """
+        try:
+            if not self.repo.table_exists("stock_fina_ext"):
+                return pd.DataFrame()
+        except Exception:  # noqa: BLE001
+            return pd.DataFrame()
+        stale = (pd.to_datetime(trade_date) - pd.Timedelta(days=540)).strftime("%Y%m%d")
+        f = self.repo.read_sql(
+            "SELECT code, ann_date, report_date, goodwill, eq_exc_min "
+            "FROM stock_fina_ext WHERE ann_date<=:d AND ann_date>=:lo",
+            {"d": trade_date, "lo": stale},
+        )
+        if f.empty:
+            return pd.DataFrame()
+        f = f[f["code"].isin(codes)].copy()
+        f = f.sort_values(["code", "ann_date", "report_date"])
+        latest = f.groupby("code").tail(1).set_index("code")
+        for c in ("goodwill", "eq_exc_min"):
+            latest[c] = pd.to_numeric(latest[c], errors="coerce")
+        return latest[["goodwill", "eq_exc_min"]]
+
+    # ── 高管增持信号（候选因子 insider_conviction，影子观察）──
+    def _insider(self, trade_date: str, codes: set[str], window_days: int = 90) -> pd.DataFrame:
+        """近 90 日重要股东/高管净增持强度。
+
+        跟庄方法论核心洞察（已验证）：信号可信度 = 押注 ÷ 身家——高管押的是
+        辛苦钱、只为赚钱且最懂公司，约强于大股东 20 倍（大股东增持常另有目的：
+        质押护盘/增发保驾/争控股权）。实现：Σ 方向(增+/减−) × 身份权重(高管 G=20,
+        其余=1) × 占流通比例(%)，PIT 只取 ann_date<=当日。
+        无 holder_trade 表/无数据返回空（影子模式无下游影响）。
+        """
+        try:
+            if not self.repo.table_exists("holder_trade"):
+                return pd.DataFrame()
+        except Exception:  # noqa: BLE001
+            return pd.DataFrame()
+        start = (pd.to_datetime(trade_date) - pd.Timedelta(days=window_days)).strftime("%Y%m%d")
+        df = self.repo.read_sql(
+            "SELECT code, ann_date, holder_type, in_de, change_ratio FROM holder_trade "
+            "WHERE ann_date>=:s AND ann_date<=:d",
+            {"s": start, "d": trade_date},
+        )
+        if df.empty:
+            return pd.DataFrame()
+        df = df[df["code"].isin(codes)].copy()
+        if df.empty:
+            return pd.DataFrame()
+        ratio = pd.to_numeric(df["change_ratio"], errors="coerce").fillna(0.0)
+        sign = df["in_de"].astype(str).str.upper().map({"IN": 1.0, "DE": -1.0}).fillna(0.0)
+        w = df["holder_type"].astype(str).str.upper().map(
+            lambda t: 20.0 if t == "G" else 1.0)
+        df["conv"] = sign * w * ratio
+        out = df.groupby("code")["conv"].sum().rename("insider_conviction").to_frame()
+        out.index.name = "code"
+        return out
+
     # ── point-in-time 财务（ann_date <= t 的最新一期，且不早于 t-540 天）──
     def _fina_pit(self, trade_date: str, codes: set[str]) -> pd.DataFrame:
         # 时效下限：超过 ~1.5 年未披露视为失效（停止披露常是退市前兆，
@@ -179,7 +247,7 @@ class FactorDataLoader:
         stale = (pd.to_datetime(trade_date) - pd.Timedelta(days=540)).strftime("%Y%m%d")
         f = self.repo.read_sql(
             "SELECT code, ann_date, report_date, roe, roa, gross_margin, "
-            "revenue_yoy, profit_yoy FROM stock_fina_indicator "
+            "revenue_yoy, profit_yoy, q_profit_yoy FROM stock_fina_indicator "
             "WHERE ann_date<=:d AND ann_date>=:lo",
             {"d": trade_date, "lo": stale},
         )
@@ -188,8 +256,16 @@ class FactorDataLoader:
         f = f[f["code"].isin(codes)].copy()
         # 每只票取 ann_date 最新一行（同 ann_date 取 report_date 最新）
         f = f.sort_values(["code", "ann_date", "report_date"])
+        f["q_profit_yoy"] = pd.to_numeric(f["q_profit_yoy"], errors="coerce")
         latest = f.groupby("code").tail(1).set_index("code")
-        cols = ["roe", "roa", "gross_margin", "revenue_yoy", "profit_yoy"]
+        cols = ["roe", "roa", "gross_margin", "revenue_yoy", "profit_yoy", "q_profit_yoy"]
         for c in cols:
             latest[c] = pd.to_numeric(latest[c], errors="coerce")
-        return latest[cols]
+        latest = latest[cols].copy()
+        # 增速二阶导（候选因子 growth_accel 原料）：最近两期单季净利同比的一阶差分。
+        # 财报跟踪法：+50% 若上期 +80% 是减速的坏消息——看增速的变化而非增长本身。
+        last2 = f.dropna(subset=["q_profit_yoy"]).groupby("code").tail(2)
+        accel = last2.groupby("code")["q_profit_yoy"].agg(
+            lambda s: float(s.iloc[-1] - s.iloc[0]) if len(s) == 2 else np.nan)
+        latest["q_profit_accel"] = accel.reindex(latest.index)
+        return latest

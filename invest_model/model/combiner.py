@@ -67,3 +67,22 @@ class ICCombiner:
         if sd and np.isfinite(sd) and sd > 0:
             raw = (raw - raw.mean()) / sd
         return raw
+
+    def contributions(self, exposures: pd.DataFrame, weights: pd.Series,
+                      k: int = 3) -> pd.Series:
+        """逐票 top-k 贡献因子（可解释性因子层归因）。
+
+        合成分 = Σ_f w_f·x_f 天然可分解：每票取 |w_f·x_f| 最大的 k 项，
+        格式如 ``"ep+0.82|mom_60+1.15|roe-0.31"``（符号=对合成分的推/拉方向）。
+        决策出处可溯源：docs/rulebook.md。
+        """
+        cols = [f for f in FACTORS if f in exposures.columns]
+        X = exposures[cols].fillna(0.0)
+        w = weights.reindex(cols).fillna(0.0)
+        contrib = X * w.to_numpy()[None, :]
+
+        def _top(row: pd.Series) -> str:
+            top = row.abs().sort_values(ascending=False).head(k)
+            return "|".join(f"{f}{row[f]:+.2f}" for f in top.index if row[f] != 0.0)
+
+        return contrib.apply(_top, axis=1)
