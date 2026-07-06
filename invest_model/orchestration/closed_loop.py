@@ -109,7 +109,28 @@ class ClosedLoop:
     def build_factors(self) -> int:
         dc = {d: self.uni_repo.get_universe(d, self.cfg.universe.method) for d in self.reb()}
         dc = {d: c for d, c in dc.items() if c}
-        return self.fp.compute_dates(dc)
+        n = self.fp.compute_dates(dc)
+        self.build_quality(dc)
+        return n
+
+    def build_quality(self, date_codes: dict[str, list[str]] | None = None) -> int:
+        """财务排雷影子打分（提案 P7）：逐调仓日全 universe 打红旗落 quality_flag。
+
+        纯影子——不剔除任何票、不影响打分与组合；失败不阻断主流程。
+        """
+        try:
+            from invest_model.universe.quality_screen import build_quality_flags
+            dc = date_codes or {d: self.uni_repo.get_universe(d, self.cfg.universe.method)
+                                for d in self.reb()}
+            n = 0
+            for d, codes in sorted(dc.items()):
+                if codes and not build_quality_flags(self.engine, d, codes).empty:
+                    n += 1
+            logger.info(f"排雷影子打分完成：{n} 个调仓日")
+            return n
+        except Exception as e:  # noqa: BLE001 — 影子层失败绝不阻断主流程
+            logger.warning(f"排雷影子打分失败（跳过，不影响主流程）：{e}")
+            return 0
 
     def train(self) -> pd.DataFrame:
         ic = compute_factor_ic(self.engine, self.reb(), persist=True)

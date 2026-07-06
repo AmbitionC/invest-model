@@ -51,6 +51,19 @@ CANDIDATE_DIRECTION: dict[str, int] = {
     # 影子累积 ≥12 期 IC 达门槛后，再提议移入 FACTOR_DIRECTION 或经 fuse_targets/元标签融合。
     # 数据依赖 advisor_reco；覆盖面窄（仅投顾点名标的），其余截面 NaN=中性。
     "adv_stance": +1,
+    # ── 人生导师·财报方法论候选组（提案 P8，出处与验证见 docs/rulebook.md）──
+    # 增速二阶导：单季净利同比的一阶差分。先验：加速为正——增速失速是戴维斯双杀
+    # 的前兆（成长股 EPS 仍正增长也可因 PE 重估跌 78%）。数据依赖 q_profit_yoy。
+    "growth_accel": +1,
+    # 扣商誉 BP：(归母净资产−商誉)/总市值。先验：扣虚后仍便宜为正——商誉是不能
+    # 变现的"虚资产"，扣除后 PB 1.2 可变 3.0、高商誉=隐形杠杆。依赖 stock_fina_ext。
+    "bp_ex_goodwill": +1,
+    # 股息率 TTM。先验：高股息为正——分红是稳健者核心回报（跌→股息率升→安全垫
+    # 加厚，仅限不破产+低估值+分红稳定的边界内）。依赖 daily_basic.dv_ttm。
+    "dividend_yield": +1,
+    # 高管增持信号强度：Σ 方向×身份权重(高管20:其他1)×占流通比。先验：增持为正
+    # ——信号可信度=押注÷身家，高管≈20×大股东（已验证）。依赖 holder_trade。
+    "insider_conviction": +1,
 }
 
 CANDIDATE_FACTORS: list[str] = list(CANDIDATE_DIRECTION.keys())
@@ -104,6 +117,16 @@ def compute_factors(raw: pd.DataFrame) -> pd.DataFrame:
     # 候选因子（影子观察，不参与打分；无数据时整列 NaN，落库时被 dropna 自然跳过）
     out["nb_ratio_chg_20"] = _to_series(raw.get("nb_ratio_chg_20"), idx)
     out["adv_stance"] = _to_series(raw.get("adv_stance"), idx)
+    out["growth_accel"] = _to_series(raw.get("q_profit_accel"), idx)
+    # 扣商誉 BP：净资产/商誉单位为元、total_mv 单位为万元 → 统一到元
+    eq = _to_series(raw.get("eq_exc_min"), idx)
+    gw = _to_series(raw.get("goodwill"), idx).fillna(0.0)
+    tmv = _to_series(raw.get("total_mv"), idx) * 1e4
+    bp_exg = (eq - gw) / tmv
+    bp_exg[tmv <= 0] = np.nan
+    out["bp_ex_goodwill"] = bp_exg.replace([np.inf, -np.inf], np.nan)
+    out["dividend_yield"] = _to_series(raw.get("dv_ttm"), idx)
+    out["insider_conviction"] = _to_series(raw.get("insider_conviction"), idx)
 
     # 辅助列（供中性化使用）
     ind = raw.get("industry")

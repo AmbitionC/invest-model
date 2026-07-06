@@ -67,9 +67,43 @@ def compute_health(engine, version: str, method: str = "alla", recent: int = 6,
     except Exception:  # noqa: BLE001 — 套利健康失败不影响主健康
         pass
 
+    # ── 排雷影子健康（提案 P7 观测面）──
+    try:
+        _quality_health(repo, health, version)
+    except Exception:  # noqa: BLE001 — 影子健康失败不影响主健康
+        pass
+
     health["warnings"] = warnings
     health["trustworthy"] = len(warnings) == 0
     return health
+
+
+def _quality_health(repo: BaseRepository, health: dict, version: str) -> None:
+    """财务排雷影子观测：最新一期红旗分布 + 当期目标组合命中数。
+
+    影子只观察不动仓；组合命中数持续偏高时是 P7 晋升（硬过滤）的讨论信号。
+    """
+    if not repo.table_exists("quality_flag"):
+        return
+    latest = repo.read_sql("SELECT MAX(trade_date) AS d FROM quality_flag")
+    d = latest["d"].iloc[0] if not latest.empty else None
+    if not d:
+        return
+    dist = repo.read_sql(
+        "SELECT n_flags, COUNT(*) AS n FROM quality_flag WHERE trade_date=:d GROUP BY n_flags",
+        {"d": d})
+    q: dict = {"asof": str(d)}
+    if not dist.empty:
+        q["dist"] = {int(r["n_flags"]): int(r["n"]) for _, r in dist.iterrows()}
+        q["flagged2plus"] = int(sum(n for k, n in q["dist"].items() if k >= 2))
+    hit = repo.read_sql(
+        "SELECT COUNT(*) AS n FROM quality_flag qf "
+        "JOIN portfolio_target pt ON pt.code=qf.code AND pt.trade_date=qf.trade_date "
+        "WHERE qf.trade_date=:d AND pt.version=:v AND qf.n_flags>=2",
+        {"d": d, "v": version})
+    if not hit.empty:
+        q["portfolio_hits_2plus"] = int(hit["n"].iloc[0])
+    health["quality_screen"] = q
 
 
 def _arb_health(repo: BaseRepository, health: dict, warnings: list[str]) -> None:
