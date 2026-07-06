@@ -396,7 +396,7 @@ action_plan = Table(
     Column("grade", String(2)),
     Column("trigger_hint", String(64)),                    # 买点挂单提示（trigger 为 MySQL 保留字）
     Column("model_rank", Numeric(10, 6)),                  # 全市场因子分位
-    Column("model_view", String(32)),                      # 模型研判：看好 前8% ★★★
+    Column("model_view", String(128)),                     # 模型研判+因子归因：看好 前8% ★★★ · ep↑roe↑
     _created_at(),
 )
 
@@ -688,7 +688,7 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
     "action_plan": {
         "trigger_hint": "VARCHAR(64)",
         "model_rank": "DECIMAL(10,6)",
-        "model_view": "VARCHAR(32)",
+        "model_view": "VARCHAR(128)",
         "sleeve": "VARCHAR(16)",                          # 套利：一张表容纳 A/B/α/可转债
     },
     "action_plan_account": {
@@ -701,6 +701,13 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "carry_expected": "DECIMAL(12,6)",
         "fear_score": "DECIMAL(6,2)",
     },
+}
+
+# 已存在列需加宽（类型升级，ADD COLUMN 不触发）：老库 action_plan.model_view 原为
+# VARCHAR(32)，P8/P9 因子归因（如「看淡 前96% ★★★ · low_turnover↓lowvol_20↓ep↓」）
+# 后需加宽，否则 build_action_plan 落库报 DataError(1406 Data too long)。
+_COLUMN_WIDEN: dict[str, dict[str, str]] = {
+    "action_plan": {"model_view": "VARCHAR(128)"},
 }
 
 
@@ -725,6 +732,20 @@ def _ensure_columns(engine: Engine) -> None:
             for col, ddl in cols.items():
                 if col not in existing:
                     conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+        # 列加宽：create_all/ADD COLUMN 都不改已存在列的类型/长度。MySQL 对已存在列
+        # MODIFY 到目标类型（幂等）；SQLite 的 String 映射为 TEXT 无长度限制，无需加宽。
+        if dialect != "sqlite":
+            for table, cols in _COLUMN_WIDEN.items():
+                existing = repo_exists_cols.get(table)
+                if not existing:
+                    continue
+                for col, ddl in cols.items():
+                    if col in existing:
+                        try:
+                            conn.exec_driver_sql(
+                                f"ALTER TABLE {table} MODIFY COLUMN {col} {ddl}")
+                        except Exception:  # noqa: BLE001
+                            pass
 
 
 def create_schema(engine: Engine) -> list[str]:
