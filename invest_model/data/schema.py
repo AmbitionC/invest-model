@@ -102,6 +102,68 @@ stock_fina_indicator = Table(
     Column("revenue", Numeric(20, 4)),
     Column("net_profit", Numeric(20, 4)),
     Column("ocfps", Numeric(14, 4)),
+    # 单季同比（增速二阶导因子 growth_accel 原料；财报跟踪法：只盯单季增速同比）
+    Column("q_sales_yoy", Numeric(12, 4)),
+    Column("q_profit_yoy", Numeric(12, 4)),
+)
+
+# 三大报表扩展项（排雷打分器 + 扣商誉估值原料）：balancesheet/income/cashflow
+# 按报告期合并为一行。金额单位：元（Tushare 原始口径）。
+stock_fina_ext = Table(
+    "stock_fina_ext", metadata,
+    Column("code", String(16), primary_key=True),
+    Column("report_date", String(8), primary_key=True),
+    Column("ann_date", String(8)),
+    Column("goodwill", Numeric(20, 4)),                 # 商誉
+    Column("minority_int", Numeric(20, 4)),             # 少数股东权益
+    Column("eq_exc_min", Numeric(20, 4)),               # 归母股东权益（净资产）
+    Column("accounts_receiv", Numeric(20, 4)),          # 应收账款
+    Column("revenue", Numeric(20, 4)),                  # 营业收入
+    Column("n_income", Numeric(20, 4)),                 # 净利润（含少数股东损益）
+    Column("n_income_attr_p", Numeric(20, 4)),          # 归母净利润
+    Column("sell_exp", Numeric(20, 4)),                 # 销售费用
+    Column("admin_exp", Numeric(20, 4)),                # 管理费用
+    Column("fin_exp", Numeric(20, 4)),                  # 财务费用
+    Column("n_cashflow_act", Numeric(20, 4)),           # 经营活动现金流净额
+)
+
+# 业绩预告/快报（时效层：预报<快报<定期报告，越快越有效——财报跟踪法）。
+# profit_yoy 统一为「累计净利同比(%)」口径：express 取 yoy_net_profit，
+# forecast 取 (p_change_min+p_change_max)/2 —— 与 stock_fina_indicator.profit_yoy 可比。
+fina_express = Table(
+    "fina_express", metadata,
+    Column("code", String(16), primary_key=True),
+    Column("report_date", String(8), primary_key=True),
+    Column("kind", String(8), primary_key=True),        # express | forecast
+    Column("ann_date", String(8)),
+    Column("revenue", Numeric(20, 4)),
+    Column("n_income", Numeric(20, 4)),
+    Column("profit_yoy", Numeric(12, 4)),               # 累计净利同比(%)
+    Column("forecast_type", String(16)),                # 预增/预减/扭亏/首亏…（forecast）
+)
+
+# 重要股东/高管增减持（跟庄信号：信号可信度=押注÷身家，高管≈20×大股东）。
+holder_trade = Table(
+    "holder_trade", metadata,
+    Column("code", String(16), primary_key=True),
+    Column("ann_date", String(8), primary_key=True),
+    Column("holder_name", String(64), primary_key=True),
+    Column("in_de", String(4), primary_key=True),       # IN 增持 | DE 减持
+    Column("holder_type", String(4)),                   # G 高管 | P 个人 | C 公司
+    Column("change_vol", Numeric(20, 2)),               # 变动数量(股)
+    Column("change_ratio", Numeric(12, 4)),             # 占流通比例(%)
+    Column("after_ratio", Numeric(12, 4)),
+    Column("avg_price", Numeric(14, 4)),
+)
+
+# 财务排雷影子打分（7 规则红旗；影子观察：只记录不剔除，晋升见提案 P7）。
+quality_flag = Table(
+    "quality_flag", metadata,
+    Column("trade_date", String(8), primary_key=True),
+    Column("code", String(16), primary_key=True),
+    Column("n_flags", Integer),
+    Column("flags", Text),                              # json 数组：每面红旗的人话理由
+    _created_at(),
 )
 
 index_daily = Table(
@@ -619,6 +681,10 @@ arb_scorecard = Table(
 _COLUMN_PATCHES: dict[str, dict[str, str]] = {
     "portfolio_target": {"grade": "VARCHAR(2)", "source": "VARCHAR(16)"},
     "stock_fundamental": {"dv_ratio": "DECIMAL(12,6)", "dv_ttm": "DECIMAL(12,6)"},
+    "stock_fina_indicator": {"q_sales_yoy": "DECIMAL(12,4)",
+                             "q_profit_yoy": "DECIMAL(12,4)"},
+    # 因子层可解释归因：top3 贡献因子（如 "ep+0.8|mom_60+1.2|roe+0.5"）
+    "model_prediction": {"top_factors": "VARCHAR(128)"},
     "action_plan": {
         "trigger_hint": "VARCHAR(64)",
         "model_rank": "DECIMAL(10,6)",

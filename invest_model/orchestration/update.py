@@ -15,7 +15,11 @@ logger = get_logger()
 
 BENCHMARKS = ["000300.SH", "000905.SH", "000906.SH"]
 _FINA_COLS = ["code", "report_date", "ann_date", "roe", "roa", "gross_margin",
-              "revenue_yoy", "profit_yoy"]
+              "revenue_yoy", "profit_yoy", "q_sales_yoy", "q_profit_yoy", "ocfps"]
+_FINA_EXT_COLS = ["code", "report_date", "ann_date", "goodwill", "minority_int",
+                  "eq_exc_min", "accounts_receiv", "revenue", "n_income",
+                  "n_income_attr_p", "sell_exp", "admin_exp", "fin_exp",
+                  "n_cashflow_act"]
 
 
 def _missing_dates(repo: BaseRepository, table: str, all_dates: list[str]) -> list[str]:
@@ -119,6 +123,32 @@ def run_data_update(engine, start: str, end: str, quarters: list[str] | None = N
                 n += repo.upsert("stock_fina_indicator", df, ["code", "report_date"])
         stats["stock_fina_indicator"] = n
 
+        # 三大报表扩展项（排雷/扣商誉原料；任一接口无权限即跳过该部分，影子层自然缺省）
+        n = 0
+        for q in quarters:
+            merged: pd.DataFrame | None = None
+            for fetch in (client.get_balancesheet_bulk, client.get_income_bulk,
+                          client.get_cashflow_bulk):
+                try:
+                    part = fetch(q)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"{fetch.__name__}({q}) 失败（排雷数据降级）：{e}")
+                    continue
+                if part is None or part.empty:
+                    continue
+                part = part.drop_duplicates(["code", "report_date"])
+                if merged is None:
+                    merged = part
+                else:
+                    dup = [c for c in part.columns
+                           if c in merged.columns and c not in ("code", "report_date")]
+                    merged = merged.merge(part.drop(columns=dup), on=["code", "report_date"],
+                                          how="outer")
+            if merged is not None and not merged.empty:
+                cols = [c for c in _FINA_EXT_COLS if c in merged.columns]
+                n += repo.upsert("stock_fina_ext", merged[cols], ["code", "report_date"])
+        stats["stock_fina_ext"] = n
+
     # 指数日线（基准）
     n = 0
     for code in BENCHMARKS:
@@ -210,8 +240,66 @@ def run_data_update(engine, start: str, end: str, quarters: list[str] | None = N
         logger.warning(f"dividend_event 拉取中断（已入库 {n} 行，下次续拉）：{e}")
     stats["dividend_event"] = n
 
+    # 业绩快报/预告（时效层：预报<快报<定期报告——财报跟踪法）。按公告日增量。
+    n = 0
+    try:
+        for d in _missing_ann_dates(repo, "fina_express", open_dates):
+            frames = []
+            for kind, fetch in (("express", client.get_express_by_date),
+                                ("forecast", client.get_forecast_by_date)):
+                try:
+                    df = fetch(d)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"{kind}({d}) 拉取失败（跳过该日）：{e}")
+                    continue
+                if df is not None and not df.empty:
+                    df["kind"] = kind
+                    frames.append(df)
+            if frames:
+                allf = pd.concat(frames, ignore_index=True)
+                cols = ["code", "report_date", "kind", "ann_date", "revenue",
+                        "n_income", "profit_yoy", "forecast_type"]
+                allf = allf[[c for c in cols if c in allf.columns]] \
+                    .drop_duplicates(["code", "report_date", "kind"])
+                n += repo.upsert("fina_express", allf, ["code", "report_date", "kind"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"fina_express 拉取中断（已入库 {n} 行，下次续拉）：{e}")
+    stats["fina_express"] = n
+
+    # 重要股东/高管增减持（跟庄信号：insider_conviction 候选因子数据源）。按公告日增量。
+    n = 0
+    try:
+        for d in _missing_ann_dates(repo, "holder_trade", open_dates):
+            df = client.get_holder_trade_by_date(d)
+            if df is not None and not df.empty:
+                cols = ["code", "ann_date", "holder_name", "holder_type", "in_de",
+                        "change_vol", "change_ratio", "after_ratio", "avg_price"]
+                df = df[[c for c in cols if c in df.columns]] \
+                    .drop_duplicates(["code", "ann_date", "holder_name", "in_de"])
+                if "holder_name" in df.columns:
+                    df["holder_name"] = df["holder_name"].astype(str).str.slice(0, 64)
+                n += repo.upsert("holder_trade", df,
+                                 ["code", "ann_date", "holder_name", "in_de"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"holder_trade 拉取中断（已入库 {n} 行，下次续拉）：{e}")
+    stats["holder_trade"] = n
+
     logger.info(f"数据更新完成：{stats}")
     return stats
+
+
+def _missing_ann_dates(repo: BaseRepository, table: str, all_dates: list[str]) -> list[str]:
+    """按 ann_date 口径的缺失公告日（表主键无 trade_date 时用）。"""
+    if not all_dates:
+        return []
+    if not repo.table_exists(table):
+        return list(all_dates)
+    have = repo.read_sql(
+        f"SELECT DISTINCT ann_date FROM {table} WHERE ann_date>=:s AND ann_date<=:e",
+        {"s": all_dates[0], "e": all_dates[-1]},
+    )
+    have_set = set(have["ann_date"].tolist()) if not have.empty else set()
+    return [d for d in all_dates if d not in have_set]
 
 
 def _repo_interest_days(codes: pd.Series, trade_date: str, cal: pd.DataFrame) -> pd.Series:

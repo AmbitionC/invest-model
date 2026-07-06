@@ -210,7 +210,8 @@ class TushareClient(BaseSource):
         df = self.pro.fina_indicator_vip(
             period=period,
             fields="ts_code,ann_date,end_date,eps,bps,roe,roa,"
-                   "grossprofit_margin,debt_to_assets,or_yoy,netprofit_yoy",
+                   "grossprofit_margin,debt_to_assets,or_yoy,netprofit_yoy,"
+                   "q_sales_yoy,q_netprofit_yoy,ocfps",
         )
         if df is not None and not df.empty:
             df = df.rename(columns={
@@ -220,7 +221,102 @@ class TushareClient(BaseSource):
                 "debt_to_assets": "debt_to_asset",
                 "or_yoy": "revenue_yoy",
                 "netprofit_yoy": "profit_yoy",
+                "q_netprofit_yoy": "q_profit_yoy",
             })
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_balancesheet_bulk(self, period: str) -> pd.DataFrame:
+        """按报告期一次拉全市场资产负债表关键项（balancesheet_vip，需 VIP）。
+
+        排雷/扣商誉估值原料：商誉、少数股东权益、归母净资产、应收账款。
+        """
+        df = self.pro.balancesheet_vip(
+            period=period,
+            fields="ts_code,ann_date,end_date,goodwill,minority_int,"
+                   "total_hldr_eqy_exc_min_int,accounts_receiv",
+        )
+        if df is not None and not df.empty:
+            df = df.rename(columns={
+                "ts_code": "code", "end_date": "report_date",
+                "total_hldr_eqy_exc_min_int": "eq_exc_min",
+            })
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_income_bulk(self, period: str) -> pd.DataFrame:
+        """按报告期一次拉全市场利润表关键项（income_vip，需 VIP）。
+
+        排雷原料：净利润 vs 归母净利润（少数股东洗澡探针）、三费。
+        """
+        df = self.pro.income_vip(
+            period=period,
+            fields="ts_code,ann_date,end_date,revenue,n_income,"
+                   "n_income_attr_p,sell_exp,admin_exp,fin_exp",
+        )
+        if df is not None and not df.empty:
+            df = df.rename(columns={"ts_code": "code", "end_date": "report_date"})
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_cashflow_bulk(self, period: str) -> pd.DataFrame:
+        """按报告期一次拉全市场现金流量表关键项（cashflow_vip，需 VIP）。
+
+        排雷原料：经营现金流净额（利润-现金背离探针）。
+        """
+        df = self.pro.cashflow_vip(
+            period=period,
+            fields="ts_code,ann_date,end_date,n_cashflow_act",
+        )
+        if df is not None and not df.empty:
+            df = df.rename(columns={"ts_code": "code", "end_date": "report_date"})
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_express_by_date(self, ann_date: str) -> pd.DataFrame:
+        """按公告日拉业绩快报（时效层：预报<快报<定期报告）。"""
+        df = self.pro.express(
+            ann_date=ann_date,
+            fields="ts_code,ann_date,end_date,revenue,n_income,yoy_net_profit",
+        )
+        if df is not None and not df.empty:
+            df = df.rename(columns={
+                "ts_code": "code", "end_date": "report_date",
+                "yoy_net_profit": "profit_yoy",
+            })
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_forecast_by_date(self, ann_date: str) -> pd.DataFrame:
+        """按公告日拉业绩预告；profit_yoy 取预告区间中值（与累计同比可比）。"""
+        df = self.pro.forecast(
+            ann_date=ann_date,
+            fields="ts_code,ann_date,end_date,type,p_change_min,p_change_max,net_profit_min",
+        )
+        if df is not None and not df.empty:
+            df = df.rename(columns={"ts_code": "code", "end_date": "report_date",
+                                    "type": "forecast_type"})
+            lo = pd.to_numeric(df.get("p_change_min"), errors="coerce")
+            hi = pd.to_numeric(df.get("p_change_max"), errors="coerce")
+            df["profit_yoy"] = ((lo + hi) / 2.0).fillna(lo).fillna(hi)
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
+    def get_holder_trade_by_date(self, ann_date: str) -> pd.DataFrame:
+        """按公告日全市场拉重要股东/高管增减持（跟庄信号数据源）。"""
+        df = self.pro.stk_holdertrade(
+            ann_date=ann_date,
+            fields="ts_code,ann_date,holder_name,holder_type,in_de,"
+                   "change_vol,change_ratio,after_ratio,avg_price",
+        )
+        if df is not None and not df.empty:
+            df = df.rename(columns={"ts_code": "code"})
         return df if df is not None else pd.DataFrame()
 
     @_retry
