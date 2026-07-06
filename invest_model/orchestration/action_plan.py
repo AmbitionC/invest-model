@@ -227,6 +227,18 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     # 模型质量分位（rank_pct = 全市场因子分位；用作投顾标的的"质量参谋"，显性展示）
     rank_map = (dict(zip(preds["code"], pd.to_numeric(preds["rank_pct"], errors="coerce")))
                 if not preds.empty and "rank_pct" in preds.columns else {})
+    # 因子层归因（可解释性）：每票 top3 贡献因子（score=Σwᵢfᵢ 分解，见 rulebook）
+    tf_map = (dict(zip(preds["code"], preds["top_factors"]))
+              if not preds.empty and "top_factors" in preds.columns else {})
+    # 收益三来源定位（买前定位赚哪种钱：成长/修复/红利——价投批判篇）
+    src_map: dict[str, str] = {}
+    try:
+        if pred_date:
+            from invest_model.repositories.factor_repo import FactorRepository
+            expo = FactorRepository(engine).get_exposures_wide(pred_date)
+            src_map = _return_sources(expo)
+    except Exception:  # noqa: BLE001 — 定位失败不阻断计划
+        src_map = {}
     # 模型层置信度：注册表交叉验证 IC（信息系数）→ 该版本因子对未来收益的区分力
     m_ic_mean = m_ic_ir = m_hit = None
     try:
@@ -304,13 +316,16 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             ma20 = getattr(bp, "ma20", float("nan")) if bp else float("nan")
             brk = getattr(bp, "breakout", float("nan")) if bp else float("nan")
             trig = (f"回踩≈{ma20} / 突破>{brk}" if np.isfinite(ma20) and np.isfinite(brk) else "—")
+            w_reason = bp.reason if bp else "观察"
+            if src_map.get(c):
+                w_reason = f"{w_reason}｜定位:{src_map[c]}"
             watch_rows.append({
                 "plan_date": dt, "code": c, "name": wnames.get(c, ""), "action": "watch",
                 "cur_weight": 0.0, "tgt_weight": 0.0, "shares_delta": 0.0,
-                "reason": bp.reason if bp else "观察", "stop_price": None,
+                "reason": w_reason, "stop_price": None,
                 "ref_price": round(bp.last, 2) if bp and np.isfinite(getattr(bp, "last", float("nan"))) else None,
                 "grade": g, "trigger": trig, "model_rank": rank_map.get(c),
-                "model_view": _model_view(rank_map.get(c), model_trust)})
+                "model_view": _model_view(rank_map.get(c), model_trust, tf_map.get(c))})
 
     # ── 逐票决策 ──
     all_codes = sorted(set(held_codes) | set(targets))
@@ -396,6 +411,8 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             action, reason, tw = "hold", "持有", cw
         elif cw <= 1e-6 and tw > 1e-6:                 # 非持仓、进入目标 → 新建仓（买点已在观察池闸控）
             action, reason = "buy", _entry_reason(grade, meta.get(c, {}))
+            if src_map.get(c):                          # 买前定位赚哪种钱（收益三来源）
+                reason = f"{reason}｜定位:{src_map[c]}"
         else:
             action, reason = "hold", "持有"
 
@@ -416,7 +433,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             "stop_price": round(stop_price, 3) if np.isfinite(stop_price) else None,
             "ref_price": round(px, 3) if px else None, "grade": grade, "trigger": trigger,
             "model_rank": rank_map.get(c),
-            "model_view": _model_view(rank_map.get(c), model_trust),
+            "model_view": _model_view(rank_map.get(c), model_trust, tf_map.get(c)),
         })
 
     # ── 再入场（回测：右尾代价补回 2/3）──
@@ -496,6 +513,24 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     invested = sum(mv.values()) / equity
     if invested - gross > 0.10:
         hints.append(f"实际仓位 {invested:.0%} 高于目标 {gross:.0%}，无现金缓冲，补足前不开新仓")
+
+    # 排雷影子提示（提案 P7）：持仓/目标命中 ≥2 面红旗 → 建议深挖财报（不自动动仓）
+    try:
+        from invest_model.universe.quality_screen import latest_flags
+        qf = latest_flags(engine, dt, list(set(held_codes) | set(targets)))
+        for c, (nfl, fls) in sorted(qf.items(), key=lambda kv: -kv[1][0]):
+            head = fls[0].split("（")[0] if fls else ""
+            hints.append(
+                f"排雷影子: {names.get(c, c)} 命中 {nfl} 面红旗（{head} 等）——"
+                f"触发深挖非确认造假，建议核对财报（影子观察，不自动动仓）")
+    except Exception:  # noqa: BLE001 — 影子提示失败不阻断计划
+        pass
+
+    # 戴维斯双杀预警（财报#1 快报时效层）：近 7 日新披露快报/预告显示增速失速
+    try:
+        hints.extend(_express_alerts(loop, dt, list(set(held_codes) | set(targets)), names))
+    except Exception:  # noqa: BLE001
+        pass
 
     # ── 套利统一资金账本（一体两面）：单一资金池按 A/B/α 分配、强制零杠杆 ──
     # ARB_ENABLED=0（默认观察态）：不发 arb 行、不缩放引擎 B → 计划与今天逐字一致。
@@ -579,6 +614,81 @@ def _entry_reason(grade, meta: dict) -> str:
     return "量化补充" if src == "quant" else "目标加配"
 
 
+def _return_sources(expo: pd.DataFrame) -> dict[str, str]:
+    """收益三来源定位（买前定位赚哪种钱——业绩成长/估值修复/分红）。
+
+    出处：价投批判篇（收益三来源框架）。由因子暴露（截面 zscore）推断：
+    成长=盈利增速高分位；修复=便宜（EP/BP 高）且增速不高；红利=股息率高分位。
+    影子候选 dividend_yield 无数据时红利档自然缺省。
+    """
+    if expo is None or expo.empty:
+        return {}
+    z = lambda col: pd.to_numeric(expo.get(col, pd.Series(np.nan, index=expo.index)),  # noqa: E731
+                                  errors="coerce")
+    growth = z("profit_yoy")
+    cheap = pd.concat([z("ep"), z("bp")], axis=1).max(axis=1)
+    div = z("dividend_yield")
+    out: dict[str, str] = {}
+    for c in expo.index:
+        g, ch, dv = growth.get(c), cheap.get(c), div.get(c)
+        if pd.notna(dv) and dv >= 1.0 and (pd.isna(g) or g < 0.5):
+            out[str(c)] = "红利"
+        elif pd.notna(g) and g >= 0.5:
+            out[str(c)] = "成长"
+        elif pd.notna(ch) and ch >= 0.5:
+            out[str(c)] = "修复"
+    return out
+
+
+def _express_alerts(loop: ClosedLoop, dt: str, codes: list[str],
+                    names: dict[str, str], back_days: int = 7,
+                    drop_pp: float = 20.0) -> list[str]:
+    """戴维斯双杀预警：近 N 日新披露的业绩快报/预告显示净利增速转负或骤降。
+
+    出处：财报#1（快报是最后逃生窗口；增速失速→成长股 PE 重估跌 78%，
+    验证 growth-deceleration-davis-killer）。口径：快报/预告的累计净利同比 vs
+    最近定期报告的累计同比，转负或降幅 > drop_pp 即预警。只提示不动仓。
+    """
+    if not codes or not loop.repo.table_exists("fina_express"):
+        return []
+    back = (pd.to_datetime(dt) - pd.Timedelta(days=back_days)).strftime("%Y%m%d")
+    ex = loop.repo.read_sql(
+        "SELECT code, ann_date, report_date, kind, profit_yoy FROM fina_express "
+        "WHERE ann_date>:b AND ann_date<=:d", {"b": back, "d": dt})
+    if ex.empty:
+        return []
+    ex = ex[ex["code"].isin(set(codes))]
+    if ex.empty:
+        return []
+    ex["profit_yoy"] = pd.to_numeric(ex["profit_yoy"], errors="coerce")
+    ex = ex.dropna(subset=["profit_yoy"]).sort_values("ann_date").groupby("code").tail(1)
+    # 对照基准：该票最近一期定期报告的累计净利同比
+    stale = (pd.to_datetime(dt) - pd.Timedelta(days=540)).strftime("%Y%m%d")
+    fi = loop.repo.read_sql(
+        "SELECT code, ann_date, report_date, profit_yoy FROM stock_fina_indicator "
+        "WHERE ann_date<=:d AND ann_date>=:lo", {"d": dt, "lo": stale})
+    base: dict[str, float] = {}
+    if not fi.empty:
+        fi = fi[fi["code"].isin(set(ex["code"]))]
+        fi = fi.sort_values(["code", "ann_date", "report_date"]).groupby("code").tail(1)
+        base = {str(r["code"]): float(pd.to_numeric(r["profit_yoy"], errors="coerce"))
+                for _, r in fi.iterrows() if pd.notna(pd.to_numeric(r["profit_yoy"], errors="coerce"))}
+    kind_cn = {"express": "快报", "forecast": "预告"}
+    alerts: list[str] = []
+    for _, r in ex.iterrows():
+        c, now = str(r["code"]), float(r["profit_yoy"])
+        prev = base.get(c)
+        slump = now < 0 or (prev is not None and prev - now > drop_pp)
+        if not slump:
+            continue
+        prev_s = f"（上期 {prev:+.0f}%）" if prev is not None else ""
+        alerts.append(
+            f"戴维斯双杀预警: {names.get(c, c)} {kind_cn.get(str(r['kind']), '快报')}净利同比 "
+            f"{now:+.0f}%{prev_s}——增速{'转负' if now < 0 else '骤降'}，成长股第一时间重估"
+            f"（快报是最后逃生窗口，仅提示不自动动仓）")
+    return alerts
+
+
 _ACTION_CN = {"buy": "买入", "add": "加仓", "trim": "减仓", "sell": "清仓",
               "hold": "持有", "watch": "观察"}
 
@@ -621,8 +731,9 @@ def _model_verdict(mr: float) -> str:
     return "看淡"
 
 
-def _model_view(mr, trust: float) -> str:
-    """单票模型研判：方向(看好/中性/看淡) + 全市场分位 + 置信★(决断度×模型信任)。"""
+def _model_view(mr, trust: float, top_factors: str | None = None) -> str:
+    """单票模型研判：方向(看好/中性/看淡) + 全市场分位 + 置信★(决断度×模型信任)
+    + 因子归因（top3 贡献因子，如 ep↑ mom60↑——决策可解释，出处见 rulebook）。"""
     v = _f(mr)
     if v is None:
         return "—"                                # 无模型覆盖（如 ETF）
@@ -630,7 +741,23 @@ def _model_view(mr, trust: float) -> str:
     conviction = abs(v - 0.5) * 2.0               # 分位越极端越决断(0..1)
     c = conviction * trust
     stars = "★★★" if c >= 0.55 else ("★★" if c >= 0.28 else "★")
-    return f"{_model_verdict(v)} 前{top:.0f}% {stars}"
+    base = f"{_model_verdict(v)} 前{top:.0f}% {stars}"
+    attr = _fmt_attr(top_factors)
+    return f"{base} · {attr}" if attr else base
+
+
+def _fmt_attr(top_factors) -> str:
+    """"ep+0.82|mom_60+1.15" → "ep↑mom_60↑"（因子名+推拉方向，紧凑展示）。"""
+    if not top_factors or not isinstance(top_factors, str):
+        return ""
+    parts = []
+    for seg in top_factors.split("|")[:3]:
+        seg = seg.strip()
+        i = max(seg.rfind("+"), seg.rfind("-"))
+        if i <= 0:
+            continue
+        parts.append(f"{seg[:i]}{'↑' if seg[i] == '+' else '↓'}")
+    return "".join(parts)
 
 
 def _table(lines: list[str], rows: list[dict]) -> None:
@@ -664,8 +791,12 @@ def render_markdown(plan: ActionPlan) -> str:
             "— 衡量因子对未来约1月收益的区分力，决定下方「模型研判」的整体可信度")
     lines.append(
         "- 「模型研判」= 方向(看好/偏多/中性/偏弱/看淡) + 全市场分位 + 置信★"
-        "（★越多＝模型对该票越决断且历史越准；ETF/无覆盖记「—」）。"
+        "（★越多＝模型对该票越决断且历史越准；ETF/无覆盖记「—」）"
+        " + 因子归因（如 ep↑mom_60↑ = 该票排名主要由哪些因子推动）。"
         "**标的由投顾定，模型只做参谋+时机+风控，不选股。**")
+    lines.append(
+        "- 可解释性：理由列的「定位:成长/修复/红利」= 买前定位赚哪种钱；"
+        "每条规则的参数、依据与知识库出处见 `docs/rulebook.md`（决策可溯源）。")
 
     # 套利 sleeve 行（defense_A/alpha）单列，不混入引擎 B 的买入/持仓/观察
     arb = [r for r in plan.rows if r.get("sleeve") in ("defense_A", "alpha")]

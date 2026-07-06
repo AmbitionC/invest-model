@@ -29,13 +29,21 @@ class CSPredictor:
         score = self.combiner.score(expo, w)
         out = pd.DataFrame({"code": score.index, "score": score.values})
         out["rank_pct"] = out["score"].rank(pct=True)
+        # 可解释性因子层归因：每票 top3 贡献因子（w_f·x_f 分解，见 rulebook）
+        try:
+            out["top_factors"] = self.combiner.contributions(expo, w).reindex(out["code"]).values
+        except Exception:  # noqa: BLE001 — 归因失败不阻断预测
+            out["top_factors"] = None
         out["trade_date"] = trade_date
         out["version"] = self.version
         out = out.sort_values("score", ascending=False).reset_index(drop=True)
         if persist and not out.empty:
-            self.prepo.save_predictions(
-                out[["trade_date", "version", "code", "score", "rank_pct"]]
-            )
+            try:
+                self.prepo.save_predictions(
+                    out[["trade_date", "version", "code", "score", "rank_pct", "top_factors"]])
+            except Exception:  # noqa: BLE001 — 旧库无 top_factors 列时退回旧口径
+                self.prepo.save_predictions(
+                    out[["trade_date", "version", "code", "score", "rank_pct"]])
         return out
 
     def predict_dates(self, reb_dates: list[str]) -> int:
