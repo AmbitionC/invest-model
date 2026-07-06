@@ -375,7 +375,13 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         if not ex and pnl <= -args.hard_stop:
             st, hit = "⚠️ 已触发硬止损，清仓", True
         elif ma20 and px < ma20 * 0.995:   # 0.5% 缓冲，避免贴线来回抖动
-            st, hit = ("破MA20移动止盈，确认清仓" if ex else "破MA20，盘后确认清仓"), True
+            # P10：未盈利新仓破MA20→减半(不清)、盈利仓才清止盈；硬止损兜底。与盘后 evaluate_holding 对齐。
+            if ex:
+                st, hit = "破MA20移动止盈，确认清仓", True
+            elif cost and pnl < 0:
+                st, hit = "破MA20减半(未盈利新仓缓冲，盘后确认)", True
+            else:
+                st, hit = "破MA20，盘后确认清仓", True
         elif pp_on and not ex and 1 - px / peak >= args.pp_exit_dd:
             st, hit = f"⚠️ 盈利保护：自峰值回撤超{args.pp_exit_dd:.0%}，止盈离场", True
         elif pp_on and not ex and lv.get("ma10") and px < lv["ma10"]:
@@ -395,13 +401,13 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
                    lv.get("ma5") if pp_on and not ex else None)
         if hit:
             # 挂单信号：清仓类给「卖 全部股数 限价≈现价，占比→0，回笼资金」；
-            # 盈利保护减半给「卖一半锁盈」；逼近只提示不给单
+            # 盈利保护减半/未盈利破MA20缓冲给「卖一半」；逼近只提示不给单
             if "逼近" in st:
                 ticket = ""
             elif "减半" in st:
                 half = int(sh // 200) * 100
                 cw = (sh * px / equity) if equity else 0.0
-                ticket = (f" → 卖 {half}股 限价≈{px:.2f} 锁盈一半"
+                ticket = (f" → 卖 {half}股 限价≈{px:.2f} 减半"
                           f"(占{cw:.1%}→{cw / 2:.1%},回笼≈{half * px:.0f})" if half else "")
             else:
                 cw = (sh * px / equity) if equity else 0.0
@@ -448,7 +454,11 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         if pnl <= -args.hard_stop:
             st, hit = "⚠️ 已触发硬止损，考虑清仓", True
         elif ma20 and px < ma20 * 0.995:
-            st, hit = "破MA20，盘后确认减/清", True
+            # P10：未盈利 ETF 破MA20→减半缓冲、盈利才减/清；硬止损兜底
+            if cost and pnl < 0:
+                st, hit = "破MA20减半(未盈利缓冲，盘后确认)", True
+            else:
+                st, hit = "破MA20，盘后确认减/清", True
         elif pnl <= -args.hard_stop + 0.02:
             st, hit = "逼近止损，盯紧", True
         else:
@@ -459,6 +469,11 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         if hit:
             if "逼近" in st:
                 ticket = ""
+            elif "减半" in st:
+                half = int(e["shares"] // 200) * 100
+                cw = (e["shares"] * px / equity) if equity else 0.0
+                ticket = (f" → 卖 {half}份 市价/限价≈{px:.3f} 减半"
+                          f"(占{cw:.1%}→{cw / 2:.1%},回笼≈{half * px:.0f})" if half else "")
             else:
                 cw = (e["shares"] * px / equity) if equity else 0.0
                 ticket = (f" → 卖 {int(e['shares'])}份 市价/限价≈{px:.3f} 减/清"
