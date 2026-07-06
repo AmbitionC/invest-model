@@ -27,6 +27,8 @@ class RiskConfig:
     account_dd_stop: float = 0.15        # 账户较峰值回撤达此值清仓转现金（0=关闭）
     ma_trailing: bool = True             # 均线移动止盈
     trail_full: bool = False             # False=仅破MA20清仓（放宽，月度书默认）；True=破5减半/破10再减半/破20清仓
+    ma20_unprofit_trim: bool = True      # P10：未盈利新仓破MA20→减半(不清)、盈利后才清；硬止损兜底。修“回踩买点=破位止损”自打架（关=逐字恢复原行为）
+    ma20_profit_gate: float = 0.0        # “已盈利”判据：close/cost-1 ≥ 此值才在破MA20时清仓，否则减半缓冲
     trend_filter: bool = False           # 仅买 MA60 走平向上（左侧趋势过滤）
     trend_ma: int = 60
     intraday_valid_days: int = 3         # 早午盘信号默认有效交易日数
@@ -134,6 +136,19 @@ def evaluate_holding(close_hist: pd.Series, cost: float, cfg: RiskConfig,
     if cfg.ma_trailing and np.isfinite(close):
         tier = step_tier(close, ma5, ma10, ma20, prev_tier, full=cfg.trail_full)
         if tier >= 3:
+            # P10：未盈利新仓破 MA20 → 降级为「减半一次」而非清仓，把 MA5/10 梯子
+            # 「盈利后才收紧、否则洗掉刚启动的票」同款保护补到 MA20；硬止损 -8%（第2步）
+            # 仍兜底真下跌。消除“买点=回踩MA20 / 止损=破MA20”自打架。
+            # prev_tier 推进保证回测(存 new_tier)与实盘(replay_tier 重建)都“首破减半→之后持有”一致。
+            # 见 docs/model_change_proposals.md P10 + scripts/validation/e8_ma20_buffer.py。
+            profitable = (not has_cost) or (close / cost - 1.0 >= cfg.ma20_profit_gate)
+            if cfg.ma20_unprofit_trim and not profitable:
+                if prev_tier < 1:               # 首次破 MA20：减半、记档位 1
+                    return ExitDecision("trim", PER_STEP_KEEP[1],
+                                        "破MA20减半(未盈利新仓缓冲)",
+                                        **{**base, "new_tier": 1})
+                return ExitDecision("hold", 1.0, "持有(未盈利破MA20·已减仓,硬止损兜底)",
+                                    **{**base, "new_tier": max(prev_tier, 1)})
             return ExitDecision("exit", 0.0, "破MA20清仓", **{**base, "new_tier": 3})
         if tier > prev_tier:
             keep = keep_from_step(prev_tier, tier)
@@ -227,7 +242,7 @@ def replay_ladder_tier(close_hist: pd.Series, entry_date: str, cost: float,
 
     close_hist 为含均线预热的完整市场收盘序列（index=trade_date 升序）；
     仅在持有期(index>=entry_date)内、且峰值浮盈已达 pp_trigger 后判定破位——
-    回测显示"从建仓日就收紧 MA5/10"会把刚启动的票洗掉，盈利后再收紧才是甜点位。
+    回测显示“从建仓日就收紧 MA5/10”会把刚启动的票洗掉，盈利后再收紧才是甜点位。
     """
     s = pd.to_numeric(close_hist, errors="coerce")
     if s.empty or not entry_date or not cost or not np.isfinite(cost) or cost <= 0:

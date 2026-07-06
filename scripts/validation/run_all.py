@@ -1,4 +1,4 @@
-"""验证 harness 主入口：跑 E0–E4，产出 go/no-go 报告（只读 DB）。
+"""验证 harness 主入口：跑 E0–E8，产出 go/no-go 报告（只读 DB）。
 
   python scripts/validation/run_all.py                 # 走 .env / INVEST_DB_URL
   python scripts/validation/run_all.py --out results/validation_report.md
@@ -37,7 +37,6 @@ def e0_baseline(repo: BaseRepository) -> str:
     cal = trade_calendar(repo)
     if cal:
         L.append(f"- 行情跨度：{cal[0]}~{cal[-1]}（{len(cal)} 交易日）。")
-        # 截面规模：最新交易日的股票数
         try:
             last = cal[-1]
             df = repo.read_sql("SELECT COUNT(DISTINCT code) n FROM stock_daily WHERE trade_date=:d",
@@ -53,13 +52,13 @@ def e0_baseline(repo: BaseRepository) -> str:
 
 
 def _power_note(repo: BaseRepository) -> str:
-    """统计功效声明：投顾历史越短、越扎堆，E1/E2/E3 结论越弱。"""
+    """统计功效声明：投顾历史越短、越扎堆，E1/E2/E3/E8 结论越弱。"""
     import pandas as pd
     if not repo.table_exists("advisor_reco"):
-        return "- advisor_reco 缺失，E1/E2/E3 无法评估。"
+        return "- advisor_reco 缺失，E1/E2/E3/E8 无法评估。"
     df = repo.read_sql("SELECT rec_date FROM advisor_reco WHERE direction='long'")
     if df.empty:
-        return "- advisor_reco 无 long 记录，E1/E2/E3 无法评估。"
+        return "- advisor_reco 无 long 记录，E1/E2/E3/E8 无法评估。"
     d = df["rec_date"].astype(str)
     span_days = 0
     try:
@@ -70,7 +69,7 @@ def _power_note(repo: BaseRepository) -> str:
     weak = span_days < 180 or len(d) < 300
     return (
         f"- **投顾历史：{len(d)} 条 long / 跨度 {d.min()}~{d.max()}（约 {span_days} 天）。**\n"
-        f"- E1/E2/E3 全部基于这段投顾持仓/推荐，"
+        f"- E1/E2/E3/E8 基于这段投顾持仓/推荐，"
         f"{'⚠️ **功效偏弱**：' if weak else ''}单一/少数题材窗口 → **仅聚类稳健 t 算数**，"
         f"且即便显著也难与「踩对一波题材 beta」完全区分。\n"
         f"- 主证据取 **最短等窗口（5 交易日）**（最少混淆）；长窗口高样本档多为「早批已涨」"
@@ -101,6 +100,7 @@ def main() -> None:
     import e5_promotion
     import e6_advisor_factor
     import e7_crowding
+    import e8_ma20_buffer
 
     parts = [
         "# 验证报告（go/no-go）：投顾主导 + 量化辅助 各杠杆实证",
@@ -124,13 +124,15 @@ def main() -> None:
         "",
         safe("E7", e7_crowding.run, repo),
         "",
+        safe("E8", e8_ma20_buffer.run, repo),
+        "",
         "## 数据范围与功效声明（务必先读）",
         safe("power", _power_note, repo),
         "",
         "## go/no-go 汇总",
         "见各节「结论」。**只有过关的杠杆进入实现阶段**（届时单独提计划、走 policy_shadow 影子 + kill-switch）。",
         "本 harness 在 master，push `ops/validation.trigger` 即自动重跑；投顾历史随时间累积，"
-        "E1/E2/E3 功效逐轮增强，结论更硬。",
+        "E1/E2/E3/E8 功效逐轮增强，结论更硬。",
     ]
     report = "\n".join(parts)
     out = Path(args.out)

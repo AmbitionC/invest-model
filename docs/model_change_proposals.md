@@ -7,7 +7,7 @@
 
 ## P1. 候选因子晋升：nb_ratio_chg_20（北向持股变化）
 
-**改动**：把影子观察中的北向因子从 `CANDIDATE_DIRECTION` 移入 `FACTOR_DIRECTION`，
+**改动**：把影子观察中的北向因子从 `CANDIDATE_DIRECTION` 移入 `FACTOR_DIRECTION`,
 参与 IC 加权合成打分。一行代码，但改变所有后续打分与组合。
 
 | | 说明 |
@@ -35,7 +35,7 @@
 
 ## P3. ranker 目标改分位回归 + 可选 LightGBM
 
-**改动**：CSRanker 的标签从截面 zscore 收益改为截面**分位数**（0~1 rank），
+**改动**：CSRanker 的标签从截面 zscore 收益改为截面**分位数**（0~1 rank）,
 目标函数改 `reg:quantileerror` 或换 LightGBM `lambdarank`。
 
 | | 说明 |
@@ -48,8 +48,8 @@
 
 ## P4. 组合层：波动率倒数加权 + 换手惩罚
 
-**改动**：`build_targets` 新增 `scheme="inv_vol"`（rank 权重 × 20 日波动倒数），
-并加换手带宽：新目标与现持仓差 < 带宽的票不动（现引擎已有 min_trade=1%，
+**改动**：`build_targets` 新增 `scheme="inv_vol"`（rank 权重 × 20 日波动倒数）,
+并加换手带宽：新目标与现持仓差 < 带宽的票不动（现引擎已有 min_trade=1%,
 此处指**组合生成层**的持仓惯性，如「已持有且排名仍在 top 1.5×N 内则保留」）。
 
 | | 说明 |
@@ -65,25 +65,25 @@
 `pf_v2`（`--scheme inv_vol --hold-buffer 1.5`）对照回测。
 
 **2026-07-04 实测（E5 晋升检查器读 backtest_run，3 次周度重建一致）**：
-基线 `cs_ic_v1` annual +11.75% / sharpe +0.66 / MaxDD 16.0% / turnover 20.9；
+基线 `cs_ic_v1` annual +11.75% / sharpe +0.66 / MaxDD 16.0% / turnover 20.9;
 影子 `cs_pf_v2` annual **+14.38%** / sharpe **+0.82** / MaxDD 15.9% / turnover 20.5。
-→ **实际净收益不来自换手（仅 −2%），而来自 inv_vol 的 Sharpe 提升（Δ+0.16 / 年化 Δ+2.6pp），
+→ **实际净收益不来自换手（仅 −2%），而来自 inv_vol 的 Sharpe 提升（Δ+0.16 / 年化 Δ+2.6pp）,
 且 MaxDD 不恶化、3/3 期一致**。晋升基准据此从「换手↓」修正为「Sharpe 路径」。
 
 **✅ 已晋升为生产默认（2026-07-04，用户确认「验证 ok 直接生效」）**：
-把默认 `PortfolioConfig` 切 `scheme=inv_vol, hold_buffer=1.5`（`portfolio/constructor.py`），
+把默认 `PortfolioConfig` 切 `scheme=inv_vol, hold_buffer=1.5`（`portfolio/constructor.py`）,
 同步 `run_pipeline.py` argparse 默认与 `config/config.yaml`。实盘 `build_action_plan` 无 --scheme
 参数、走 `loop._build_targets`（scheme=inv_vol 时自动算 vol_map），故此默认即**实盘权重口径**。
 - **晋升依据**：`cs_pf_v2` 3 次周度重建一致优于 `cs_ic_v1`（Sharpe Δ+0.17、年化 Δ+2.6pp、
   MaxDD 不恶化、换手持平；E5 裁决见 issue #14）。
 - **上线前验证**：77 单测全过（含端到端 pipeline smoke）× 新默认；管线复现无异常。
 - **回退**：改回 `scheme=rank_weight, hold_buffer=0.0` 一处即回退（version 隔离，随时可退）。
-- **持续监控红线**：inv_vol 系统性超配低波/大盘，优势可能部分是近 18 月低波 regime；
+- **持续监控红线**：inv_vol 系统性超配低波/大盘，优势可能部分是近 18 月低波 regime;
   E5 继续每周对比，若后续 Sharpe 转劣于旧口径或 MaxDD 恶化 >5pp → 触红线回退。
 
 ## P5. 分域/regime 建模（低优先，暂不建议）
 
-按市值/行业分域训练，或加 regime 特征。**样本量不足**（月频×每期约 2000 票，
+按市值/行业分域训练，或加 regime 特征。**样本量不足**（月频×每期约 2000 票,
 分域后单域样本过薄），当前阶段过拟合风险大于预期收益，建议永远排在 P2~P4 验证完之后。
 
 ---
@@ -92,8 +92,8 @@
 
 **改动**：新增子包 `invest_model/arb/`，把文档《套利方案 v2》落地为与现有截面多因子
 选股系统（引擎 B / 交易）同属一个资金池的一体两面：引擎 A 防守 carry（国债逆回购 /
-红利 / 可转债双低 / 恐慌弹药）、三水表（信贷/财政/政策资本）倾斜引擎 B 并生成盲区 α，
-统一资金账本按 A(50-60%)/B(30-40%)/α(5-15%) 分配、**机器校验零杠杆**（`ledger_invariant`，
+红利 / 可转债双低 / 恐慌弹药）、三水表（信贷/财政/政策资本）倾斜引擎 B 并生成盲区 α,
+统一资金账本按 A(50-60%)/B(30-40%)/α(5-15%) 分配、**机器校验零杠杆**（`ledger_invariant`,
 Σ≤100%）。数据层：逆回购/红利/可转债走 Tushare 自动化，三水表走人工 curated CSV
 （`scripts/ingest_watermeter.py`，同投顾信号约定）。
 
@@ -172,6 +172,23 @@ universe 负面过滤（红旗 ≥3 剔除）+ 投顾信号自动降级提示。
 
 **状态：已实施默认开启（本次提交）。**
 
+## P10. MA20 止损的新仓/未盈利缓冲：消除「回踩买点 = 破位止损」的自打架
+
+**改动**：`risk.evaluate_holding` 第 3 步 `ma_trailing` 的「破MA20清仓」，对**未盈利新仓**
+加缓冲（宽限 N 日 / 幅度阈值 / 未盈利降级为减半），把 MA5/MA10 梯子（`replay_ladder_tier`）
+已实现的「盈利后才收紧、否则洗掉刚启动的票」同款保护补到 MA20。硬止损 -8% 不变，真下跌即时兜底。
+
+| | 说明 |
+|---|---|
+| 缺陷定位 | 买点=「回踩≈MA20 企稳放量」、止损=「收盘破MA20清仓」锚**同一条线**、零缓冲；MA5/10 梯子有「盈利后才收紧」保护，唯独 MA20 清仓对未盈利新仓无差别生效 → 回踩买入遇假跌破即被清（实例 2026-07-06 通信ETF 建仓 4 日、当日 +0.9% 仍判破MA20清） |
+| 预期收益 | 降低「回踩买入→假跌破→止损→反弹」的误洗，减无谓换手/踏空；趋势中继回踩的健康仓给观察期 |
+| 风险 | ① 缓冲=延后离场，真转弱多亏一点（硬止损 -8% 封顶）；② 宽限/阈值是新超参，须回测定；③ 与盈利保护/时间止损档位交互需回归逐字对齐 |
+| **验证（E8 预登记）** | `scripts/validation/e8_ma20_buffer.py`：逐仓事件驱动，四臂 A 现状/B 宽限5日/C 幅度2%/D 未盈利减半；指标含逐仓净收益 + MA20 触发占比 + **误洗率**（被 MA20 清后若只留硬止损持有到期反多赚 >2% 的占比）。**过关判据**：某缓冲臂 vs A 均值不降（≥A-0.5pp）、大亏率不升、误洗率显著下降 |
+| 数据/功效 | 入场集=投顾 long（历史短、功效弱，随累积增强）；可扩全 universe 回踩事件提功效（v2）。每周随 validation 重跑，回帖 issue #14 |
+| 回退 | 缓冲为 `RiskConfig` 新开关（默认关=现状逐字一致）；晋升=开关置 True，一处切换、可回退 |
+
+**状态：预登记 + E8 影子验证（本次提交），生产逻辑零改动；E8 过关且样本充分再决策实现。**
+
 ---
 
 ## 建议实施顺序与依据
@@ -190,7 +207,7 @@ P3 rank 目标 / P1 晋升   ← 视 P2 期间攒的观测数据决策
 
 1. **version 隔离**：所有预测/组合/回测按 `version` 字段落库，影子版本与生产版本
    并行共存，切换=改 LoopConfig.version 一处，回退同理。
-2. **model_registry**：每次 train 记录 cv_ic_mean / cv_ic_ir / cv_hit_rate，
+2. **model_registry**：每次 train 记录 cv_ic_mean / cv_ic_ir / cv_hit_rate,
    跨 version 直接 SQL 对比。
 3. **health 段**（results/latest.json + report 日志）：recent_factor_ic、
    candidate_factor_ic、candidate_ic_periods、universe 覆盖告警。
