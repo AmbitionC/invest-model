@@ -358,7 +358,11 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             cur_day = dt
             if c in snap_px:                                  # 追加当日券商现价 → 风控按最新价判定
                 cur_day, snp = snap_px[c]
-                hist = pd.concat([hist, pd.Series({cur_day: snp})])
+                # 当日 EOD 已入库则以官方收盘为准（风控是收盘价规则），快照只补 EOD 缺口——
+                # 否则同日两行会污染均线（当日双计）、armed_ladder 的“截至昨日”回放
+                # （iloc[:-1] 把今日 EOD 当昨日，梯子破位信号被永久吞掉）与时间止损天数。
+                if cur_day not in hist.index:
+                    hist = pd.concat([hist, pd.Series({cur_day: snp})])
             hold_hist = hist[hist.index >= real_entry] if real_entry else hist.iloc[0:0]  # 自建仓日(供时间止损)
             if not hist.empty and rc.enabled:
                 # 移动止盈档位回放起点：真实建仓日 / 最近调仓日 / dt-35天 取最晚，

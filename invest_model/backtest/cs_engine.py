@@ -359,6 +359,10 @@ class CSBacktestEngine:
                 t, nav = self._execute_sell(c, weights[c] * dec.keep_frac, dt,
                                             weights, nav, trades, state)
                 turnover += t
+                if t <= 0.0 and c in weights:
+                    # 跌停卖不出：档位回退到昨日，明日重试减仓——否则档位已推进、
+                    # 明日判 hold，这笔减仓被永久吞掉（清仓无此问题：档3每日重发清仓单）。
+                    state["trail_tier"][c] = prev_tier
         # 账户级回撤止损：相对峰值回撤达阈值 → 全部清仓转现金。
         if rc.account_dd_stop and peak_nav > 0 and nav / peak_nav - 1.0 <= -rc.account_dd_stop:
             for c in list(weights.keys()):
