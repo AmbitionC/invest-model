@@ -99,6 +99,64 @@ def replay_tier(close_hist: pd.Series, start_tier: int = 0, full: bool = True) -
     return tier
 
 
+def replay_hold_tier(close_hist: pd.Series, cost: float, cfg: RiskConfig,
+                     replay_from: str | None = None, start_tier: int = 0) -> int:
+    """按 evaluate_holding 第 3 步的迁移规则逐日回放档位（P10 感知）。实盘 action_plan 用。
+
+    与 replay_tier 的两点区别，都是为了与回测（cs_engine 逐日携带 dec.new_tier）逐字一致：
+      1. 均线在**整段** close_hist 上计算（含预热），仅在 replay_from 起的日子推进档位。
+         此前把窗口切片直接喂 replay_tier，切片前 19 行 MA20=NaN → 破位记不上档，
+         P10 的「首破减半」对新仓每天重复触发（1/2→1/4→1/8 分期清仓）。
+      2. 迁移含 P10 分支：未盈利破 MA20 记档 1（减半一次），盈利仓仅「新鲜破位」记档 3
+         （清仓）。此前 replay_tier 首破即记 3，缓冲仓收复 MA20 转盈后仍被按档 3 清仓。
+    """
+    s = pd.to_numeric(close_hist, errors="coerce")
+    if s.empty:
+        return start_tier
+    ma5 = s.rolling(5).mean().to_numpy()
+    ma10 = s.rolling(10).mean().to_numpy()
+    ma20 = s.rolling(20).mean().to_numpy()
+    vals = s.to_numpy(dtype=float)
+    keys = [str(k) for k in s.index]           # 位置取值：容忍重复索引（EOD+快照同日两行）
+    has_cost = bool(cost) and np.isfinite(cost) and cost > 0
+    tier = start_tier
+    prev_below = False                          # 上一有效收盘是否在其 MA20 下方（新鲜破位判定）
+    for i, c in enumerate(vals):
+        if not np.isfinite(c):
+            continue
+        below = bool(np.isfinite(ma20[i]) and c < ma20[i])
+        if replay_from is None or keys[i] >= replay_from:
+            cand = step_tier(c, ma5[i], ma10[i], ma20[i], tier, full=cfg.trail_full)
+            if cand >= 3 and tier < 3 and cfg.ma20_unprofit_trim:
+                profitable = (not has_cost) or (c / cost - 1.0 >= cfg.ma20_profit_gate)
+                if not profitable:
+                    tier = max(tier, 1)         # 首破减半档（已减则维持，不重复减）
+                elif not prev_below:
+                    tier = 3                    # 盈利仓新鲜破位 → 清仓档
+                # 盈利但非新鲜破位（缓冲仓线下转盈）：档位不变，持有
+            else:
+                tier = cand
+        prev_below = below
+    return tier
+
+
+def _fresh_break(s: pd.Series) -> bool:
+    """今日跌破 MA20 是否为「新鲜破位」：上一有效收盘**不在**其 MA20 下方。
+
+    P10 用于区分两类「收盘 < MA20」：
+      - 新鲜破位（昨在线上、今跌破）→ 盈利仓按原规则止盈清仓；
+      - 缓冲滞留（昨已在线下）→ 缓冲仓在 MA20 下方恢复途中转盈不算破位事件，
+        持有等它站回 MA20，之后再跌破才清——否则缓冲仓一涨回成本价就被
+        当「止盈」清掉，恢复行情一点吃不到（回踩买点的收益来源被掐断）。
+    样本不足 / 上一日 MA20 算不出时按「新鲜」处理（保持原清仓行为，宁紧勿松）。
+    """
+    if len(s) < 2:
+        return True
+    prev_close = float(s.iloc[-2])
+    prev_ma20 = ma_tail(s.iloc[:-1], 20)
+    return not (np.isfinite(prev_ma20) and np.isfinite(prev_close) and prev_close < prev_ma20)
+
+
 @dataclass
 class ExitDecision:
     action: str                 # "hold" | "trim" | "exit"
@@ -139,8 +197,12 @@ def evaluate_holding(close_hist: pd.Series, cost: float, cfg: RiskConfig,
             # P10：未盈利新仓破 MA20 → 降级为「减半一次」而非清仓，把 MA5/10 梯子
             # 「盈利后才收紧、否则洗掉刚启动的票」同款保护补到 MA20；硬止损 -8%（第2步）
             # 仍兜底真下跌。消除“买点=回踩MA20 / 止损=破MA20”自打架。
-            # prev_tier 推进保证回测(存 new_tier)与实盘(replay_tier 重建)都“首破减半→之后持有”一致。
+            # prev_tier 推进保证回测(存 new_tier)与实盘(replay_hold_tier 重建)都
+            # “首破减半→之后持有”一致。盈利仓只在「新鲜破位」（昨在线上今跌破）清仓：
+            # 缓冲仓在 MA20 下方涨回成本不算破位事件，否则一转盈即被“止盈”、恢复吃不到。
             # 见 docs/model_change_proposals.md P10 + scripts/validation/e8_ma20_buffer.py。
+            if prev_tier >= 3:                  # 此前已判清仓（实盘可能未成交）→ 维持清仓指令
+                return ExitDecision("exit", 0.0, "破MA20清仓", **{**base, "new_tier": 3})
             profitable = (not has_cost) or (close / cost - 1.0 >= cfg.ma20_profit_gate)
             if cfg.ma20_unprofit_trim and not profitable:
                 if prev_tier < 1:               # 首次破 MA20：减半、记档位 1
@@ -149,6 +211,10 @@ def evaluate_holding(close_hist: pd.Series, cost: float, cfg: RiskConfig,
                                         **{**base, "new_tier": 1})
                 return ExitDecision("hold", 1.0, "持有(未盈利破MA20·已减仓,硬止损兜底)",
                                     **{**base, "new_tier": max(prev_tier, 1)})
+            if cfg.ma20_unprofit_trim and profitable and not _fresh_break(s):
+                return ExitDecision("hold", 1.0,
+                                    "持有(MA20下方转盈·非新鲜破位,站回MA20后再破位才清)",
+                                    **base)
             return ExitDecision("exit", 0.0, "破MA20清仓", **{**base, "new_tier": 3})
         if tier > prev_tier:
             keep = keep_from_step(prev_tier, tier)

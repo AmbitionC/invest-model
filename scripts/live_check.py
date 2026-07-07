@@ -55,7 +55,10 @@ def _levels(repo: BaseRepository, codes: list[str], dt: str) -> dict[str, dict]:
         ma60_prev = float(cl.tail(65).head(60).mean()) if len(cl) >= 65 else ma60
         hi20 = float(cl.iloc[-21:-1].max())   # 前 20 日高（不含今日）=突破位
         out[code] = {"ma5": ma5, "ma10": ma10, "ma20": ma20, "ma60": ma60,
-                     "ma60_up": ma60 >= ma60_prev, "hi20": hi20}
+                     "ma60_up": ma60 >= ma60_prev, "hi20": hi20,
+                     # 前一 EOD 收盘是否已在 MA20 下方：P10「新鲜破位」判定用——
+                     # 前日已破位则今日不是首破，不重复提示减半/清仓
+                     "prev_below": bool(float(cl.iloc[-1]) < ma20)}
     return out
 
 
@@ -126,7 +129,8 @@ def _fund_levels(pro, code: str, dt: str) -> dict | None:
     return {"ma20": float(cl.tail(20).mean()), "ma60": ma60,
             "ma60_up": ma60 >= ma60_prev,
             "hi20": float(cl.iloc[-21:-1].max()) if len(cl) >= 21 else float("nan"),
-            "last": float(cl.iloc[-1]), "adj_ok": adj_ok}
+            "last": float(cl.iloc[-1]), "adj_ok": adj_ok,
+            "prev_below": bool(float(cl.iloc[-1]) < float(cl.tail(20).mean()))}
 
 
 def _etf_watch(dt: str) -> list[tuple]:
@@ -375,11 +379,16 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         if not ex and pnl <= -args.hard_stop:
             st, hit = "⚠️ 已触发硬止损，清仓", True
         elif ma20 and px < ma20 * 0.995:   # 0.5% 缓冲，避免贴线来回抖动
-            # P10：未盈利新仓破MA20→减半(不清)、盈利仓才清止盈；硬止损兜底。与盘后 evaluate_holding 对齐。
+            # P10：未盈利新仓破MA20→减半(不清)、盈利仓仅「新鲜破位」(前日在线上)才清；
+            # 前日已破位=缓冲期，不重复给卖单（首破当日已提示减半）。与盘后 evaluate_holding 对齐。
             if ex:
                 st, hit = "破MA20移动止盈，确认清仓", True
             elif cost and pnl < 0:
-                st, hit = "破MA20减半(未盈利新仓缓冲，盘后确认)", True
+                st, hit = (("MA20下方缓冲持有(前日已破位·首破日已减仓,硬止损兜底)", True)
+                           if lv.get("prev_below") else
+                           ("破MA20减半(未盈利新仓缓冲，盘后确认)", True))
+            elif cost and lv.get("prev_below"):
+                st, hit = "MA20下方转盈·非新鲜破位持有(站回MA20后再破位才清)", True
             else:
                 st, hit = "破MA20，盘后确认清仓", True
         elif pp_on and not ex and 1 - px / peak >= args.pp_exit_dd:
@@ -401,8 +410,8 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
                    lv.get("ma5") if pp_on and not ex else None)
         if hit:
             # 挂单信号：清仓类给「卖 全部股数 限价≈现价，占比→0，回笼资金」；
-            # 盈利保护减半/未盈利破MA20缓冲给「卖一半」；逼近只提示不给单
-            if "逼近" in st:
+            # 盈利保护减半/未盈利破MA20缓冲给「卖一半」；逼近/缓冲持有只提示不给单
+            if "逼近" in st or "持有" in st:
                 ticket = ""
             elif "减半" in st:
                 half = int(sh // 200) * 100
@@ -413,7 +422,7 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
                 cw = (sh * px / equity) if equity else 0.0
                 ticket = (f" → 卖 {int(sh)}股 市价/限价≈{px:.2f} 清"
                           f"(占{cw:.1%}→0,回笼≈{sh * px:.0f})")
-            sev = "batch" if "逼近" in st else "crit"
+            sev = "batch" if ("逼近" in st or "持有" in st) else "crit"
             alerts.append((f"H:{c}:{st}",
                            f"🔴 持仓 {q.get('name', c)} {px:.2f}({chg:+.1%}) — {st}{ticket}", sev))
     for c in ctx["watch"]:
@@ -454,9 +463,13 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         if pnl <= -args.hard_stop:
             st, hit = "⚠️ 已触发硬止损，考虑清仓", True
         elif ma20 and px < ma20 * 0.995:
-            # P10：未盈利 ETF 破MA20→减半缓冲、盈利才减/清；硬止损兜底
+            # P10：未盈利 ETF 破MA20→减半缓冲(仅首破)、盈利仅新鲜破位才减/清；硬止损兜底
             if cost and pnl < 0:
-                st, hit = "破MA20减半(未盈利缓冲，盘后确认)", True
+                st, hit = (("MA20下方缓冲持有(前日已破位·首破日已减仓,硬止损兜底)", True)
+                           if lv.get("prev_below") else
+                           ("破MA20减半(未盈利缓冲，盘后确认)", True))
+            elif cost and lv.get("prev_below"):
+                st, hit = "MA20下方转盈·非新鲜破位持有(站回MA20后再破位才清)", True
             else:
                 st, hit = "破MA20，盘后确认减/清", True
         elif pnl <= -args.hard_stop + 0.02:
@@ -467,7 +480,7 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         if not hit:
             _track(px, stop, ma20 * 0.995 if ma20 else None)
         if hit:
-            if "逼近" in st:
+            if "逼近" in st or "持有" in st:
                 ticket = ""
             elif "减半" in st:
                 half = int(e["shares"] // 200) * 100
@@ -478,7 +491,7 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
                 cw = (e["shares"] * px / equity) if equity else 0.0
                 ticket = (f" → 卖 {int(e['shares'])}份 市价/限价≈{px:.3f} 减/清"
                           f"(占{cw:.1%}→0,回笼≈{e['shares'] * px:.0f})")
-            sev = "batch" if "逼近" in st else "crit"
+            sev = "batch" if ("逼近" in st or "持有" in st) else "crit"
             alerts.append((f"E:{c}:{st}",
                            f"🟠 ETF持仓 {e['name']} {px:.3f}({chg:+.1%}) — {st}{ticket}", sev))
     # 套利模块预警（水表反转 / α 证伪 / 逆回购利率窗口）——DB 驱动，best-effort

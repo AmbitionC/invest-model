@@ -18,7 +18,7 @@ import pandas as pd
 from invest_model.logger import get_logger
 from invest_model.orchestration.closed_loop import ClosedLoop, LoopConfig
 from invest_model.portfolio.risk import (armed_ladder, evaluate_holding, profit_protect,
-                                         replay_pp_tier, replay_tier, time_stop)
+                                         replay_hold_tier, replay_pp_tier, time_stop)
 from invest_model.repositories.holding_repo import HoldingRepo
 from invest_model.signals.buypoint import BuyPointConfig, detect_buypoints
 
@@ -365,8 +365,12 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                 # 限定在"当前调仓周期"内单调 → 与回测的每调仓日重置对齐；
                 # 避免长持 winner 被几个月前的一次破位永久锁死"破MA20清仓"。
                 reset_from = max(x for x in (real_entry, pred_date, reset_floor) if x)
-                mask = (hist.index >= reset_from) & (hist.index < cur_day)
-                prev = replay_tier(hist[mask], full=rc.trail_full) if bool(mask.any()) else 0
+                # P10 感知回放：均线用整段 hist（含 150 日预热）计算、只在窗口内推进档位，
+                # 迁移规则与 evaluate_holding 同构 —— 保证「首破减半→之后持有」在实盘
+                # 重建 prev_tier 时成立（此前喂窗口切片给 replay_tier：前 19 行 MA20=NaN
+                # 记不上档 → 新仓每天重复减半；记上了又是档 3 → 收复 MA20 转盈即被清）。
+                prev = replay_hold_tier(hist[hist.index < cur_day], cost_map[c], rc,
+                                        replay_from=reset_from)
                 dec = evaluate_holding(hist, cost_map[c], rc,
                                        in_exit_codes=(c in exit_codes), prev_tier=prev)
                 stop_price = dec.stop_price
