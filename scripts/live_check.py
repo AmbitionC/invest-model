@@ -44,8 +44,31 @@ def _levels(repo: BaseRepository, codes: list[str], dt: str) -> dict[str, dict]:
     if df.empty:
         return out
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    # P11 前复权：股票 stock_daily 为未复权价，除权日跳空会假触发破位/止损；
+    # 有 stock_adj 因子则折算（最新价==原始价，可与现价直比），缺表/缺因子 fail-open。
+    fac_map: dict[str, pd.Series] = {}
+    try:
+        if repo.table_exists("stock_adj"):
+            fdf = repo.read_sql(
+                f"SELECT code, trade_date, adj_factor FROM stock_adj "
+                f"WHERE trade_date>=:s AND trade_date<=:d AND code IN ({ph})", params)
+            if not fdf.empty:
+                for c2, g2 in fdf.sort_values("trade_date").groupby("code"):
+                    fs = pd.to_numeric(g2.set_index("trade_date")["adj_factor"],
+                                       errors="coerce").dropna()
+                    if not fs.empty:
+                        fac_map[str(c2)] = fs[~fs.index.duplicated(keep="last")]
+    except Exception:  # noqa: BLE001 — 复权失败退回未复权，不阻断盯盘
+        fac_map = {}
     for code, g in df.sort_values("trade_date").groupby("code"):
-        cl = g["close"].dropna()
+        gg = g.set_index("trade_date")
+        cl = gg["close"].dropna()
+        fs = fac_map.get(str(code))
+        if fs is not None and len(cl):
+            f = fs.reindex(cl.index).ffill().bfill()
+            lastf = pd.to_numeric(f.iloc[-1], errors="coerce")
+            if not f.isna().any() and pd.notna(lastf) and float(lastf) > 0:
+                cl = cl * f.astype(float) / float(lastf)
         if len(cl) < 20:
             continue
         ma20 = float(cl.tail(20).mean())

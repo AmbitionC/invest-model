@@ -201,6 +201,15 @@ class TushareClient(BaseSource):
 
     @_retry
     @_rate_limit
+    def get_adj_factor_bulk(self, trade_date: str) -> pd.DataFrame:
+        """按交易日一次拉取全市场复权因子（除权除息修正基准，P11 运行时前复权用）。"""
+        df = self.pro.adj_factor(trade_date=trade_date)
+        if df is not None and not df.empty:
+            df = df.rename(columns={"ts_code": "code"})
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
     def get_fina_indicator_bulk(self, period: str) -> pd.DataFrame:
         """按报告期一次拉取全市场财务指标（fina_indicator_vip，需 VIP 权限）。
 

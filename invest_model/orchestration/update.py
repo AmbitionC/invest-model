@@ -101,6 +101,22 @@ def run_data_update(engine, start: str, end: str, quarters: list[str] | None = N
                              ["code", "trade_date"])
     stats["stock_daily"] = n
 
+    # 全市场复权因子（P11：stock_daily 为未复权价，除权除息日机械跳空会假触发
+    # 硬止损/破MA20；风控/均线读取时用此因子前复权。失败不阻断其余更新）
+    n = 0
+    try:
+        for d in _missing_dates(repo, "stock_adj", open_dates):
+            df = client.get_adj_factor_bulk(d)
+            if not df.empty:
+                df["trade_date"] = d
+                df["adj_factor"] = pd.to_numeric(df["adj_factor"], errors="coerce")
+                n += repo.upsert("stock_adj",
+                                 df[["code", "trade_date", "adj_factor"]].dropna(),
+                                 ["code", "trade_date"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"adj_factor 拉取中断（已入库 {n} 行，下次续拉）：{e}")
+    stats["stock_adj"] = n
+
     # 全市场估值
     n = 0
     for d in _missing_dates(repo, "stock_fundamental", open_dates):

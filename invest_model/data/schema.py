@@ -71,6 +71,15 @@ stock_daily = Table(
     Column("amount", Numeric(20, 3)),
 )
 
+stock_adj = Table(
+    # 股票复权因子（tushare adj_factor）：stock_daily 存未复权价，除权除息日
+    # 机械跳空会假触发硬止损/破MA20——风控/均线读取时用此因子前复权（P11）。
+    "stock_adj", metadata,
+    Column("code", String(16), primary_key=True),
+    Column("trade_date", String(8), primary_key=True),
+    Column("adj_factor", Numeric(18, 6)),
+)
+
 stock_fundamental = Table(
     "stock_fundamental", metadata,
     Column("code", String(16), primary_key=True),

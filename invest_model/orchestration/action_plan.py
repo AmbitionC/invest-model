@@ -79,14 +79,10 @@ def _name_map(loop: ClosedLoop, codes: list[str]) -> dict[str, str]:
 
 
 def _close_hist(loop: ClosedLoop, code: str, start: str, dt: str) -> pd.Series:
-    df = loop.repo.read_sql(
-        "SELECT trade_date, close FROM stock_daily "
-        "WHERE code=:c AND trade_date>=:s AND trade_date<=:d ORDER BY trade_date",
-        {"c": code, "s": start, "d": dt},
-    )
-    if df.empty:
-        return pd.Series(dtype=float)
-    return pd.to_numeric(df.set_index("trade_date")["close"], errors="coerce")
+    """收盘序列（前复权口径，P11）：除权除息缺口抹平后再喂均线/硬止损，
+    避免分红/送转日的机械跳空假触发风控；无复权因子时 fail-open 退回原价。"""
+    from invest_model.data.adjust import qfq_close_hist
+    return qfq_close_hist(loop.repo, code, start, dt)
 
 
 def _round_lot(shares: float) -> float:
