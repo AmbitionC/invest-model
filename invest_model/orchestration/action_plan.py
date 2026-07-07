@@ -19,6 +19,7 @@ from invest_model.logger import get_logger
 from invest_model.orchestration.closed_loop import ClosedLoop, LoopConfig
 from invest_model.portfolio.risk import (armed_ladder, evaluate_holding, profit_protect,
                                          replay_hold_tier, replay_pp_tier, time_stop)
+from invest_model.portfolio.sizing import buy_shares, min_lot
 from invest_model.repositories.holding_repo import HoldingRepo
 from invest_model.signals.buypoint import BuyPointConfig, detect_buypoints
 
@@ -426,6 +427,16 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
 
         if action == "hold" and abs(tw - cw) < min_trade:
             shares_delta = 0.0
+        elif action == "buy":
+            # 买入按可执行口径定股数：整手/科创板200股起。高价股一手远超目标增量时
+            # 判不可执行 → 降级为观察并明说原因，不再输出「—」股数的死指令。
+            shares_delta = buy_shares(c, (tw - cw) * equity, px or 0.0)
+            if shares_delta <= 0:
+                lot = min_lot(c)
+                lot_txt = (f"最小一笔{lot}股≈{lot * px:,.0f}元(占{lot * px / equity:.1%})"
+                           if px and px > 0 and equity else f"最小一笔{lot}股")
+                action, tw = "watch", cw
+                reason = f"买点有效但不可执行：{lot_txt} 远超目标增量——账户规模不足，跳过"
         else:
             shares_delta = _round_lot((tw - cw) * equity / px) if px and px > 0 else 0.0
 
@@ -464,10 +475,13 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                 px = float(h.iloc[-1])
                 if not (np.isfinite(px) and px > 0 and px >= float(h.iloc[:-1].max())):
                     continue
+                re_sd = buy_shares(c, half_w * equity, px)
+                if re_sd <= 0:                 # 高价股半仓不足最小一笔 → 不发不可执行指令
+                    continue
                 rows.append({
                     "plan_date": dt, "code": c, "name": re_names.get(c, ""),
                     "action": "buy", "cur_weight": 0.0, "tgt_weight": half_w,
-                    "shares_delta": _round_lot(half_w * equity / px),
+                    "shares_delta": re_sd,
                     "reason": "创新高确认·半仓再入场（盈利止盈离场后趋势延续）",
                     "stop_price": round(px * (1 - rc.hard_stop_pct), 3),
                     "ref_price": round(px, 3), "grade": None,

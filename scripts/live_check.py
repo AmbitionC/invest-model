@@ -270,23 +270,29 @@ def _snapshot_sum(asset_type: str | None, repo: BaseRepository | None = None) ->
     return float(pd.to_numeric(df["market_value"], errors="coerce").sum() or 0.0)
 
 
-def _buy_ticket(level: float, cash: float, equity: float, weight: float) -> str:
+def _buy_ticket(level: float, cash: float, equity: float, weight: float,
+                code: str = "") -> str:
     """买入挂单：挂单价 + 按目标占比定量（股数/金额/占比），并标注资金是否够。
 
-    数量按「目标权重 × 总权益 / 挂单价」取整手——不管现金够不够都给出该买多少，
-    便于「先卖出腾资金 → 再按此挂买」；末尾注明现金够或还需腾多少。
+    数量按「目标权重 × 总权益 / 挂单价」走可执行口径（主板/创业板整手 100 股、
+    科创板最低 200 股）——不管现金够不够都给出该买多少，便于「先卖出腾资金 →
+    再按此挂买」；末尾注明现金够或还需腾多少。最小一笔远超目标（高价股+小目标
+    权重）→ 明示不可执行，不再硬塞一手（科创板塞 100 股是废单，主板一手可占权益 15%+）。
     """
+    from invest_model.portfolio.sizing import buy_shares, min_lot
     if not level or level <= 0:
         return "买点未知"
     target_amt = weight * equity
-    n = int(target_amt // (level * 100)) * 100     # A 股 100 股/手，向下取整手
+    n = int(buy_shares(code, target_amt, level))
     if n <= 0:
-        n = 100                                    # 目标占比买不起1手 → 给最小1手，标出实际占比
+        lot = min_lot(code)
+        lw = (lot * level / equity) if equity else 0.0
+        return (f"最小一笔{lot}股≈{lot * level:.0f}(占{lw:.1%})超目标{weight:.0%}"
+                f"——当前账户规模不可执行，只跟踪不挂单")
     amt = n * level
     wt = (amt / equity) if equity else 0.0
-    over = "⚠1手占比偏高" if wt > weight * 1.5 else ""
     fund = "现金够" if cash >= amt else f"需先卖出腾≈{amt - cash:.0f}"
-    return f"挂买 限价{level:.2f} {n}股≈{amt:.0f}(占{wt:.1%}){over}; {fund}"
+    return f"挂买 限价{level:.2f} {n}股≈{amt:.0f}(占{wt:.1%}); {fund}"
 
 
 def _fetch_rt(ctx: dict) -> dict:
@@ -447,7 +453,7 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         if hit:
             # 挂单信号：回踩位挂 MA20、突破位挂 20日高，按目标占比定量（股数/金额/占比）
             lvl = ma20 if "回踩" in st else hi20
-            ticket = " → " + _buy_ticket(lvl, cash, equity, buy_w)
+            ticket = " → " + _buy_ticket(lvl, cash, equity, buy_w, code=c)
             alerts.append((f"W:{c}:{st}",
                            f"🟢 观察 {q.get('name', c)}({g_of.get(c, '')}) {px:.2f} — {st}{ticket}",
                            "batch"))
