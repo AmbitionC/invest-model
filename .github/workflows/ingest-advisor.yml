@@ -4,12 +4,19 @@ name: ingest-advisor
 # reco/theme 均幂等 upsert；reco 需 stock_info 命中(由 backfill/data-update 填好)，
 # 命中不到的行整文件会失败，这里容错跳过单个文件、不影响其它。
 # 仅用 DB（不需要 Tushare）。Secrets：INVEST_DB_URL 优先，否则 DB_*。
+#
+# 20260707 修复：CSV 累积 60+ 个后全量重灌超过 15 分钟被超时杀掉（两次 run
+# conclusion=cancelled，排在最后的 theme 文件没入库）。改为：push 只录本次
+# 变更的文件（秒级完成、不随历史增长）；workflow_dispatch / diff 失败时回退
+# 全量重灌（兜底自愈），超时放宽到 30 分钟。
 
 on:
   workflow_dispatch: {}
   push:
     paths:
       - 'config/advisor_*.csv'
+      # 本 workflow 变更时也跑一次全量（changed 里无 csv → 回退全量，自愈通道）
+      - '.github/workflows/ingest-advisor.yml'
 
 concurrency:
   group: ingest-advisor
@@ -18,7 +25,7 @@ concurrency:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
       MYSQL_HOST: ${{ secrets.DB_HOST }}
@@ -27,22 +34,41 @@ jobs:
       MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # push 增量模式需要 before..sha 的 diff
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
       - name: Install package
         run: pip install -e .
+      - name: 选定待录文件（push=仅变更增量；dispatch/无匹配=全量兜底）
+        run: |
+          : > /tmp/targets
+          if [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.event.before }}" ]; then
+            git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" 2>/dev/null \
+              | grep -E '^config/advisor_[^/]*\.csv$' > /tmp/targets || true
+          fi
+          if [ ! -s /tmp/targets ]; then
+            echo "== 增量为空/非 push 触发 → 全量重灌"
+            ls config/advisor_*.csv > /tmp/targets
+          fi
+          # 只保留仓库中仍存在的文件（防 diff 带出已删除文件）
+          grep -vE 'template' /tmp/targets | while read -r f; do
+            [ -f "$f" ] && echo "$f"
+          done > /tmp/targets.ok
+          echo "== 待录文件（$(wc -l < /tmp/targets.ok) 个）：" && cat /tmp/targets.ok
       - name: 录入 reco/theme（容错跳过失败项）
         run: |
-          shopt -s nullglob
-          for f in config/advisor_research_*.csv config/advisor_signals_*.csv config/advisor_intraday_*.csv; do
-            case "$f" in *template*) continue;; esac
-            echo "== reco: $f"
-            python scripts/ingest_advisor.py --kind reco --csv "$f" || echo "WARN 跳过 $f"
-          done
-          for f in config/advisor_theme_*.csv config/advisor_themes_*.csv; do
-            case "$f" in *template*) continue;; esac
-            echo "== theme: $f"
-            python scripts/ingest_advisor.py --kind theme --csv "$f" || echo "WARN 跳过 $f"
-          done
+          while read -r f; do
+            case "$f" in
+              config/advisor_research_*|config/advisor_signals_*|config/advisor_intraday_*)
+                echo "== reco: $f"
+                python scripts/ingest_advisor.py --kind reco --csv "$f" || echo "WARN 跳过 $f";;
+              config/advisor_theme_*|config/advisor_themes_*)
+                echo "== theme: $f"
+                python scripts/ingest_advisor.py --kind theme --csv "$f" || echo "WARN 跳过 $f";;
+              *)
+                echo "== 跳过（不在录入范围）: $f";;
+            esac
+          done < /tmp/targets.ok
