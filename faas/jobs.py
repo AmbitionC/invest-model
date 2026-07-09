@@ -202,12 +202,30 @@ def _ingest_and_build_arb() -> str:
 
 
 def job_daily_update_plan() -> dict:
-    """增量数据更新成功后链式出计划；更新失败不出计划（避免旧数据误导）。"""
+    """增量数据更新后链式出计划。
+
+    更新失败时（数据源不可用/IP 超限/Tushare 抖动等）**不出计划**（避免旧数据误导），
+    但仍按库内已有数据重估账户快照 + 落恐慌——这两步只读 stock_daily 收盘与 current_holding、
+    不依赖 Tushare，故数据源挂掉时账户总资产/净值曲线仍每日推进（符合「没有外部触发也每天
+    按当天已有收盘×持仓自算」）。更新 CLI 内部失败已自行推送 issue 告警，这里不重复告警。
+    """
     from scripts.run_pipeline import main as pipe_main
-    _run_cli(pipe_main, ["run_pipeline.py", "--mode", "update",
-                         "--start", _PIPELINE_START])
+    update_ok = True
+    try:
+        _run_cli(pipe_main, ["run_pipeline.py", "--mode", "update",
+                             "--start", _PIPELINE_START])
+    except BaseException as e:  # noqa: BLE001 — 含 SystemExit(1)（数据源不可用/IP 超限）
+        update_ok = False
+        print(f"WARN 数据更新失败（仍按已有数据重估快照/恐慌，本日跳过出计划）：{e}")
+
+    # 不依赖数据源、只读库内数据的两步——无论更新成败都要跑，保证快照每日推进
     fear = _persist_fear_daily()
     acct = _persist_account_snapshot_daily()
+
+    if not update_ok:
+        return {"job": "daily_update_plan", "update": "failed",
+                "fear": fear, "account": acct, "plan": "skipped:update-failed"}
+
     sc = _build_signal_scorecard()
     arb = _ingest_and_build_arb()
     return {"job": "daily_update_plan", "update": "ok", "fear": fear, "account": acct,

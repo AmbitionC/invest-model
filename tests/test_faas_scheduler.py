@@ -185,6 +185,29 @@ def test_build_plan_skipped_on_weekend(monkeypatch):
     assert jobs._build_and_post_plan() == {"plan": "skipped-weekend"}
 
 
+def test_daily_update_plan_persists_snapshot_when_update_fails(monkeypatch):
+    """数据源失败（ip超限/Tushare 抖动）时，账户快照与恐慌仍按库内数据落库，
+    仅跳过出计划——快照每日推进不被数据源阻塞。"""
+    calls = []
+
+    def boom_update(main_func, argv):
+        calls.append(argv[argv.index("--mode") + 1] if "--mode" in argv else argv)
+        raise SystemExit(1)   # run_pipeline --mode update 失败即 sys.exit(1)
+
+    monkeypatch.setattr(jobs, "_run_cli", boom_update)
+    monkeypatch.setattr(jobs, "_persist_fear_daily", lambda: "ok:20260709")
+    monkeypatch.setattr(jobs, "_persist_account_snapshot_daily", lambda: "ok:20260709")
+    # 计划链不应被触达
+    monkeypatch.setattr(jobs, "_build_and_post_plan",
+                        lambda: (_ for _ in ()).throw(AssertionError("不应出计划")))
+
+    out = jobs.job_daily_update_plan()
+    assert out["update"] == "failed"
+    assert out["account"] == "ok:20260709"
+    assert out["fear"] == "ok:20260709"
+    assert out["plan"] == "skipped:update-failed"
+
+
 def test_run_cli_restores_argv():
     seen = []
     jobs._run_cli(lambda: seen.append(list(sys.argv)), ["x.py", "--flag"])
