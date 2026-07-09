@@ -231,3 +231,90 @@ def test_use_keepalive_session_patches_module():
         assert pro_client.requests is first
     finally:
         pro_client.requests = original
+
+
+# ── account_snapshot 日更重估：停牌回退 + 转债并入（R3）───────────────────
+
+@pytest.fixture()
+def reval_db(tmp_path, monkeypatch):
+    db = f"sqlite:///{tmp_path}/reval.db"
+    from invest_model.data import create_schema, make_engine
+    create_schema(make_engine(db))
+    eng = create_engine(db)
+    with eng.begin() as conn:
+        # 两只持仓：A 有当日(0709)收盘；B 停牌，最后收盘在 0703
+        conn.execute(text(
+            "INSERT INTO stock_daily (code, trade_date, close) VALUES "
+            "('AAA.SZ','20260703',10.0), ('AAA.SZ','20260709',11.0), "
+            "('BBB.SZ','20260703',20.0)"))
+        conn.execute(text(
+            "INSERT INTO current_holding (code, shares, cost_price, entry_date) VALUES "
+            "('AAA.SZ',100,9.0,'20260601'), ('BBB.SZ',200,21.0,'20260601')"))
+        # 旧快照：现金 61 + 一行转债 1000（当日无手动快照 → 触发重估）
+        conn.execute(text(
+            "INSERT INTO account_snapshot (snapshot_date, cash, market_value, total_asset) "
+            "VALUES ('20260703', 61.0, 100000.0, 100061.0)"))
+        conn.execute(text(
+            "INSERT INTO holding_snapshot (snapshot_date, code, name, asset_type, shares, "
+            "market_value, last_price) VALUES "
+            "('20260703','113001','宜化发债','bond',10,1000.0,100.0)"))
+    monkeypatch.setenv("INVEST_DB_URL", db)
+    return db
+
+
+def test_reval_suspended_stock_and_bond_included(reval_db):
+    res = jobs._persist_account_snapshot_daily()
+    assert res == "ok:20260709"
+    eng = create_engine(reval_db)
+    with eng.begin() as conn:
+        row = conn.execute(text(
+            "SELECT cash, market_value, total_asset FROM account_snapshot "
+            "WHERE snapshot_date='20260709'")).fetchone()
+    # AAA 100×11 + BBB(停牌,回退0703收盘) 200×20 + 转债 1000 = 6100；现金沿用 61
+    assert row[0] == 61.0
+    assert row[1] == 6100.0
+    assert row[2] == 6161.0
+
+
+def test_reval_skips_when_manual_exists(reval_db):
+    eng = create_engine(reval_db)
+    with eng.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO account_snapshot (snapshot_date, cash, market_value, total_asset) "
+            "VALUES ('20260709', 1.0, 2.0, 3.0)"))
+    assert jobs._persist_account_snapshot_daily() == "skip:manual-exists:20260709"
+
+
+# ── 计划现金源：ACCOUNT_CASH env 优先，未配置读最新快照（R5）──────────────
+
+def _capture_plan_cash(monkeypatch):
+    seen = {}
+
+    def fake_plan_main():
+        seen["argv"] = list(sys.argv)
+        i = sys.argv.index("--out")
+        Path(sys.argv[i + 1]).write_text("plan", encoding="utf-8")
+
+    import scripts.build_action_plan as bap
+    monkeypatch.setattr(bap, "main", fake_plan_main)
+    monkeypatch.setattr(gh_notify, "post_issue_comment",
+                        lambda *a, **k: {"posted": True})
+    monkeypatch.setattr(gh_notify, "bj_now",
+                        lambda: __import__("datetime").datetime(2026, 7, 9, 18, 0))  # 周四
+    return seen
+
+
+def test_plan_cash_from_snapshot_when_env_unset(reval_db, monkeypatch):
+    monkeypatch.delenv("ACCOUNT_CASH", raising=False)
+    seen = _capture_plan_cash(monkeypatch)
+    jobs._build_and_post_plan()
+    i = seen["argv"].index("--cash")
+    assert seen["argv"][i + 1] == "61.0"      # 最新 account_snapshot(0703).cash
+
+
+def test_plan_cash_env_overrides(reval_db, monkeypatch):
+    monkeypatch.setenv("ACCOUNT_CASH", "1061")
+    seen = _capture_plan_cash(monkeypatch)
+    jobs._build_and_post_plan()
+    i = seen["argv"].index("--cash")
+    assert seen["argv"][i + 1] == "1061"

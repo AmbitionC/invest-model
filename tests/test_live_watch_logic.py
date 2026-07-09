@@ -53,3 +53,20 @@ def test_once_flush_batch_wall_clock_boundary():
     assert not _once_flush_batch(610, 20, 3)    # 10:10，10>=3 → 不推（等下个边界）
     assert _once_flush_batch(886, 20, 3)        # 14:46 尾盘 → 强制推
     assert _once_flush_batch(610, 0, 3)         # 窗口 0 → 每次都推
+
+
+def test_half_lot_rounding():
+    """减半卖出股数：round 最近整手；<200 无法减半返 0；不超过整手持仓（L3 修复）。
+
+    原实现 int(sh//200)*100 向下截断：300 股只给 100、100 股给 0（本意 50 不可执行）。
+    """
+    from scripts.live_check import _half_lot
+    assert _half_lot(100) == 0     # 一手无法减半（A 股卖出整手）
+    assert _half_lot(150) == 0     # 碎股持仓不足两手
+    assert _half_lot(200) == 100
+    assert _half_lot(300) == 200   # 150 → 最近整手 200（不超过 300 的可卖整手）
+    assert _half_lot(400) == 200
+    assert _half_lot(500) == 300   # 250 → 300
+    assert _half_lot(132100) == 66100   # 化工ETF 实例：66050 → 66100
+    assert _half_lot(None) == 0
+    assert _half_lot(float("nan")) == 0

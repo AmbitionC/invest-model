@@ -95,13 +95,31 @@ def job_ingest_etf() -> dict:
 
 # ── 盘后增量更新 + 操作计划（data-update + plan-notify 链）──────────────
 
+def _latest_snapshot_cash() -> float:
+    """最新 account_snapshot 的现金（best-effort：异常/无数据回 0，不阻断出计划）。"""
+    try:
+        from invest_model.data import make_engine
+        from invest_model.repositories.base import BaseRepository
+        repo = BaseRepository(make_engine())
+        df = repo.read_sql(
+            "SELECT cash FROM account_snapshot ORDER BY snapshot_date DESC LIMIT 1")
+        if not df.empty and df["cash"].iloc[0] is not None:
+            return float(df["cash"].iloc[0])
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN 读取 account_snapshot 现金失败，回退 0：{e}")
+    return 0.0
+
+
 def _build_and_post_plan() -> dict:
     """生成三段式操作计划并推送（等价 plan-notify.yml 的两个步骤）。"""
     bj = gh_notify.bj_now()
     if bj.weekday() >= 5:  # 周末不发计划（同原 github-script 守卫）
         return {"plan": "skipped-weekend"}
     plan_args = shlex.split(os.getenv("PLAN_ARGS") or _DEFAULT_PLAN_ARGS)
-    cash = os.getenv("ACCOUNT_CASH", "0")
+    # 现金：ACCOUNT_CASH 环境变量优先（现网行为不变）；未配置时读最新
+    # account_snapshot（此前默认 0 → 权益分母漏现金、买入折股偏差）
+    env_cash = os.getenv("ACCOUNT_CASH")
+    cash = env_cash if env_cash not in (None, "") else str(_latest_snapshot_cash())
     out = "/tmp/action_plan.md"
     from scripts.build_action_plan import main as plan_main
     _run_cli(plan_main,
@@ -239,7 +257,9 @@ def _persist_account_snapshot_daily() -> str:
     上次手动上传日）。前提：无新交易（现金沿用最近一次快照），符合「持仓没动」场景。
 
     防覆盖：当日已有 account_snapshot（用户当天手动上传=权威）则跳过，不用重估价盖掉。
-    仅重估 stock+etf（current_holding 里的，均有 stock_daily 收盘）；转债/现金不在其中。
+    重估 stock+etf（current_holding 里的）；停牌/缺当日收盘的持仓回退最近有效收盘、
+    再回退最近快照 last_price（此前直接按 0 估值，总资产当日凭空缩水）；转债按最近
+    快照的 bond 市值固定并入（与手动上传的 account_snapshot 口径对齐，消除净值锯齿）。
     失败/无持仓不阻断当日计划。
     """
     import os as _os
@@ -266,11 +286,36 @@ def _persist_account_snapshot_daily() -> str:
             f"SELECT code, close FROM stock_daily WHERE trade_date=:d AND code IN ({ph})", params)
         pxmap = {str(r["code"]): float(r["close"]) for _, r in px.iterrows()
                  if r["close"] is not None}
+        for c in codes:                       # 停牌/缺当日收盘 → 最近有效收盘
+            if c in pxmap:
+                continue
+            fb = repo.read_sql(
+                "SELECT close FROM stock_daily WHERE code=:c AND trade_date<=:d "
+                "AND close IS NOT NULL ORDER BY trade_date DESC LIMIT 1",
+                {"c": c, "d": str(dt)})
+            if not fb.empty and fb["close"].iloc[0] is not None:
+                pxmap[c] = float(fb["close"].iloc[0])
+                continue
+            fb = repo.read_sql(                # 再回退最近快照的券商现价
+                "SELECT last_price FROM holding_snapshot WHERE code=:c "
+                "AND last_price IS NOT NULL ORDER BY snapshot_date DESC LIMIT 1", {"c": c})
+            if not fb.empty and fb["last_price"].iloc[0] is not None:
+                pxmap[c] = float(fb["last_price"].iloc[0])
+            else:
+                print(f"WARN account_snapshot 重估：{c} 无任何可用价格，按 0 计入")
         mv = 0.0
         for _, r in ch.iterrows():
             p = pxmap.get(str(r["code"]))
             if p:
                 mv += float(r["shares"] or 0) * p
+        # 转债不在 current_holding（无日线、不做风控），但手动快照的市值含它——
+        # 按最近快照的 bond 市值固定并入，两种来源的 account_snapshot 口径才一致
+        bond = repo.read_sql(
+            "SELECT SUM(market_value) v FROM holding_snapshot "
+            "WHERE snapshot_date=(SELECT MAX(snapshot_date) FROM holding_snapshot) "
+            "AND LOWER(asset_type)='bond'")
+        if not bond.empty and bond["v"].iloc[0] is not None:
+            mv += float(bond["v"].iloc[0])
         # 现金沿用最近一次快照（无新交易假设）；无历史快照则回退 ACCOUNT_CASH 环境变量
         last = repo.read_sql(
             "SELECT cash FROM account_snapshot ORDER BY snapshot_date DESC LIMIT 1")

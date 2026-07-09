@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import math
 import os
 import sys
 import time
@@ -293,6 +294,22 @@ def _snapshot_sum(asset_type: str | None, repo: BaseRepository | None = None) ->
     return float(pd.to_numeric(df["market_value"], errors="coerce").sum() or 0.0)
 
 
+def _half_lot(shares: float) -> int:
+    """减半卖出股数：round 到最近整手（100 股），不超过整手持仓。
+
+    原实现 `int(sh // 200) * 100` 向下截断：300 股减半只给 100（应≈150→200）、
+    100~199 股给 0。A 股卖出按整手，<200 股无法「减半」→ 返 0（提示行仍保留）。
+    """
+    try:
+        sh = float(shares)
+    except (TypeError, ValueError):
+        return 0
+    if not math.isfinite(sh) or sh < 200:
+        return 0
+    half = int(sh / 200 + 0.5) * 100          # 最近整手（150→200 型进位）
+    return min(half, int(sh // 100) * 100)    # 不超过可卖整手数
+
+
 def _buy_ticket(level: float, cash: float, equity: float, weight: float,
                 code: str = "") -> str:
     """买入挂单：挂单价 + 按目标占比定量（股数/金额/占比），并标注资金是否够。
@@ -449,7 +466,7 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
             if "逼近" in st or "持有" in st:
                 ticket = ""
             elif "减半" in st:
-                half = int(sh // 200) * 100
+                half = _half_lot(sh)
                 cw = (sh * px / equity) if equity else 0.0
                 ticket = (f" → 卖 {half}股 限价≈{px:.2f} 减半"
                           f"(占{cw:.1%}→{cw / 2:.1%},回笼≈{half * px:.0f})" if half else "")
@@ -518,7 +535,7 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
             if "逼近" in st or "持有" in st:
                 ticket = ""
             elif "减半" in st:
-                half = int(e["shares"] // 200) * 100
+                half = _half_lot(e["shares"])
                 cw = (e["shares"] * px / equity) if equity else 0.0
                 ticket = (f" → 卖 {half}份 市价/限价≈{px:.3f} 减半"
                           f"(占{cw:.1%}→{cw / 2:.1%},回笼≈{half * px:.0f})" if half else "")

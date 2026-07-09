@@ -372,8 +372,12 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                 # 记不上档 → 新仓每天重复减半；记上了又是档 3 → 收复 MA20 转盈即被清）。
                 prev = replay_hold_tier(hist[hist.index < cur_day], cost_map[c], rc,
                                         replay_from=reset_from)
+                # 白名单核心仓：只按均线移动止盈管，豁免硬止损/盈利保护/梯子
+                # （与 live_check 盘中口径一致——此前盘后漏传导致对白名单票照发硬止损）
+                exempt = c in trail_white
                 dec = evaluate_holding(hist, cost_map[c], rc,
-                                       in_exit_codes=(c in exit_codes), prev_tier=prev)
+                                       in_exit_codes=(c in exit_codes), prev_tier=prev,
+                                       exempt_hard_stop=exempt)
                 stop_price = dec.stop_price
                 if dec.action == "exit":
                     tw, reason = 0.0, dec.reason
@@ -384,7 +388,6 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                 elif entry_map[c] and not hold_hist.empty:
                     pp_prev = replay_pp_tier(hold_hist[hold_hist.index < cur_day],
                                              cost_map[c], rc)
-                    exempt = c in trail_white          # 白名单核心仓：只按破MA20管
                     ppd = None if exempt else profit_protect(
                         hold_hist, cost_map[c], rc, prev_tier=pp_prev)
                     # 盈利后均线梯子：与峰值回撤并行，先触发者生效（回测：回吐 19.8%→13.3%）
