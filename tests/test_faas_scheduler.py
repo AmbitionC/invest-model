@@ -305,6 +305,28 @@ def test_reval_fills_gap_between_snapshots(reval_db):
     assert got["20260709"] == 6100.0          # AAA 100×11.0 + BBB 4000 + 1000
 
 
+def test_reval_backfills_middle_holes_when_latest_exists(reval_db):
+    """最新日 0709 已有快照（如已先解卡当天），中间 0707/0708 断档：补洞式(MIN起点)
+    应回填 0707/0708、跳过已存在的 0703 与 0709——这正是本次 7/9 已写、需补 7/6~7/8 的场景。"""
+    eng = create_engine(reval_db)
+    with eng.begin() as conn:
+        # AAA 0709 已在 fixture 里；这里只补 0707/0708 行情 + 一条 0709 快照
+        conn.execute(text(
+            "INSERT INTO stock_daily (code, trade_date, close) VALUES "
+            "('AAA.SZ','20260707',10.5), ('AAA.SZ','20260708',10.8)"))
+        conn.execute(text(
+            "INSERT INTO account_snapshot (snapshot_date, cash, market_value, total_asset) "
+            "VALUES ('20260709', 61.0, 6100.0, 6161.0)"))
+    res = jobs._persist_account_snapshot_daily()
+    assert res == "ok:20260708(+2补断档)"     # 只回填 0707/0708；0703、0709 已存在跳过
+    with eng.begin() as conn:
+        got = {r[0]: r[1] for r in conn.execute(text(
+            "SELECT snapshot_date, market_value FROM account_snapshot")).fetchall()}
+    assert got["20260707"] == 6050.0
+    assert got["20260708"] == 6080.0
+    assert got["20260709"] == 6100.0          # 未被覆盖
+
+
 # ── 计划现金源：ACCOUNT_CASH env 优先，未配置读最新快照（R5）──────────────
 
 def _capture_plan_cash(monkeypatch):
