@@ -252,81 +252,115 @@ def job_daily_update_plan() -> dict:
             "scorecard": sc, "arb": arb, **_build_and_post_plan()}
 
 
-def _persist_account_snapshot_daily() -> str:
-    """按最新收盘价重估当前持仓 → 写当日 account_snapshot（总资产/净值曲线不再卡在
-    上次手动上传日）。前提：无新交易（现金沿用最近一次快照），符合「持仓没动」场景。
+def _holding_market_value_at(repo, ch, codes: list[str], dt: str) -> float:
+    """按 dt 收盘价重估 current_holding 的 stock+etf 市值（不含转债/现金）。
+    停牌/缺 dt 收盘 → 回退 dt 及之前最近有效收盘；再回退最近快照 last_price
+    （此前直接按 0 估值，总资产当日凭空缩水）。dt 作时间上限保证 point-in-time。
+    """
+    ph = ",".join(f":c{i}" for i in range(len(codes)))
+    params = {f"c{i}": c for i, c in enumerate(codes)}
+    params["d"] = str(dt)
+    px = repo.read_sql(
+        f"SELECT code, close FROM stock_daily WHERE trade_date=:d AND code IN ({ph})", params)
+    pxmap = {str(r["code"]): float(r["close"]) for _, r in px.iterrows()
+             if r["close"] is not None}
+    for c in codes:                       # 停牌/缺当日收盘 → dt 及之前最近有效收盘
+        if c in pxmap:
+            continue
+        fb = repo.read_sql(
+            "SELECT close FROM stock_daily WHERE code=:c AND trade_date<=:d "
+            "AND close IS NOT NULL ORDER BY trade_date DESC LIMIT 1",
+            {"c": c, "d": str(dt)})
+        if not fb.empty and fb["close"].iloc[0] is not None:
+            pxmap[c] = float(fb["close"].iloc[0])
+            continue
+        fb = repo.read_sql(                # 再回退最近快照的券商现价
+            "SELECT last_price FROM holding_snapshot WHERE code=:c "
+            "AND last_price IS NOT NULL ORDER BY snapshot_date DESC LIMIT 1", {"c": c})
+        if not fb.empty and fb["last_price"].iloc[0] is not None:
+            pxmap[c] = float(fb["last_price"].iloc[0])
+        else:
+            print(f"WARN account_snapshot 重估：{c}@{dt} 无任何可用价格，按 0 计入")
+    mv = 0.0
+    for _, r in ch.iterrows():
+        p = pxmap.get(str(r["code"]))
+        if p:
+            mv += float(r["shares"] or 0) * p
+    return mv
 
-    防覆盖：当日已有 account_snapshot（用户当天手动上传=权威）则跳过，不用重估价盖掉。
-    重估 stock+etf（current_holding 里的）；停牌/缺当日收盘的持仓回退最近有效收盘、
-    再回退最近快照 last_price（此前直接按 0 估值，总资产当日凭空缩水）；转债按最近
-    快照的 bond 市值固定并入（与手动上传的 account_snapshot 口径对齐，消除净值锯齿）。
+
+def _persist_account_snapshot_daily() -> str:
+    """按收盘价重估当前持仓 → 写 account_snapshot（总资产/净值曲线不再卡在上次上传日）。
+
+    **自愈补齐**：不只写最新交易日，而是补齐「最近一次快照日 → 最新交易日」之间所有
+    缺失的交易日（净值曲线不断档；一次数据卡顿后恢复能自动填平中间日，无需人工回填）。
+    前提：无新交易（现金/转债市值沿用最近一次快照），符合「持仓没动」场景。
+
+    防覆盖：某交易日已有 account_snapshot（用户手动上传=权威）则跳过该日，不用重估价盖掉。
+    重估 stock+etf（current_holding 里的，见 _holding_market_value_at 的停牌回退）；
+    转债按最近快照 bond 市值固定并入（与手动上传口径对齐，消除净值锯齿）。
     失败/无持仓不阻断当日计划。
     """
     import os as _os
     from invest_model.data import make_engine
     from invest_model.repositories.base import BaseRepository
+    import pandas as _pd
     try:
         engine = make_engine()
         repo = BaseRepository(engine)
-        dt = repo.read_sql("SELECT MAX(trade_date) d FROM stock_daily")["d"].iloc[0]
-        if dt is None:
+        latest = repo.read_sql("SELECT MAX(trade_date) d FROM stock_daily")["d"].iloc[0]
+        if latest is None:
             return "skip:no-data"
-        exist = repo.read_sql(
-            "SELECT 1 FROM account_snapshot WHERE snapshot_date=:d LIMIT 1", {"d": str(dt)})
-        if not exist.empty:
-            return f"skip:manual-exists:{dt}"   # 当天已手动上传，不覆盖
         ch = repo.read_sql("SELECT code, shares FROM current_holding")
         if ch.empty:
             return "skip:no-holding"
         codes = [str(c) for c in ch["code"]]
-        ph = ",".join(f":c{i}" for i in range(len(codes)))
-        params = {f"c{i}": c for i, c in enumerate(codes)}
-        params["d"] = str(dt)
-        px = repo.read_sql(
-            f"SELECT code, close FROM stock_daily WHERE trade_date=:d AND code IN ({ph})", params)
-        pxmap = {str(r["code"]): float(r["close"]) for _, r in px.iterrows()
-                 if r["close"] is not None}
-        for c in codes:                       # 停牌/缺当日收盘 → 最近有效收盘
-            if c in pxmap:
-                continue
-            fb = repo.read_sql(
-                "SELECT close FROM stock_daily WHERE code=:c AND trade_date<=:d "
-                "AND close IS NOT NULL ORDER BY trade_date DESC LIMIT 1",
-                {"c": c, "d": str(dt)})
-            if not fb.empty and fb["close"].iloc[0] is not None:
-                pxmap[c] = float(fb["close"].iloc[0])
-                continue
-            fb = repo.read_sql(                # 再回退最近快照的券商现价
-                "SELECT last_price FROM holding_snapshot WHERE code=:c "
-                "AND last_price IS NOT NULL ORDER BY snapshot_date DESC LIMIT 1", {"c": c})
-            if not fb.empty and fb["last_price"].iloc[0] is not None:
-                pxmap[c] = float(fb["last_price"].iloc[0])
-            else:
-                print(f"WARN account_snapshot 重估：{c} 无任何可用价格，按 0 计入")
-        mv = 0.0
-        for _, r in ch.iterrows():
-            p = pxmap.get(str(r["code"]))
-            if p:
-                mv += float(r["shares"] or 0) * p
-        # 转债不在 current_holding（无日线、不做风控），但手动快照的市值含它——
-        # 按最近快照的 bond 市值固定并入，两种来源的 account_snapshot 口径才一致
-        bond = repo.read_sql(
-            "SELECT SUM(market_value) v FROM holding_snapshot "
-            "WHERE snapshot_date=(SELECT MAX(snapshot_date) FROM holding_snapshot) "
-            "AND LOWER(asset_type)='bond'")
-        if not bond.empty and bond["v"].iloc[0] is not None:
-            mv += float(bond["v"].iloc[0])
-        # 现金沿用最近一次快照（无新交易假设）；无历史快照则回退 ACCOUNT_CASH 环境变量
+        # 待补交易日：最近快照日之后、到最新交易日之间、库里有行情的交易日（自愈补断档）。
+        last_snap = repo.read_sql(
+            "SELECT MAX(snapshot_date) d FROM account_snapshot")["d"].iloc[0]
+        if last_snap is not None:
+            days = repo.read_sql(
+                "SELECT DISTINCT trade_date d FROM stock_daily "
+                "WHERE trade_date>:s AND trade_date<=:e ORDER BY trade_date",
+                {"s": str(last_snap), "e": str(latest)})
+            target_dates = [str(x) for x in days["d"].tolist()] if not days.empty \
+                else [str(latest)]
+        else:
+            target_dates = [str(latest)]
+        # 防御：极端断档（如快照卡在数月前）只补最近 90 个交易日，避免一次巨量回填拖垮日更。
+        if len(target_dates) > 90:
+            target_dates = target_dates[-90:]
+        # 现金/转债市值沿用最近一次快照（无新交易假设），补断档各日相同口径。
         last = repo.read_sql(
             "SELECT cash FROM account_snapshot ORDER BY snapshot_date DESC LIMIT 1")
         cash = (float(last["cash"].iloc[0]) if not last.empty and last["cash"].iloc[0] is not None
                 else float(_os.getenv("ACCOUNT_CASH", "0") or 0))
-        import pandas as _pd
-        repo.upsert("account_snapshot", _pd.DataFrame([{
-            "snapshot_date": str(dt), "cash": round(cash, 2),
-            "market_value": round(mv, 2), "total_asset": round(mv + cash, 2),
-        }]), ["snapshot_date"])
-        return f"ok:{dt}"
+        bond_df = repo.read_sql(
+            "SELECT SUM(market_value) v FROM holding_snapshot "
+            "WHERE snapshot_date=(SELECT MAX(snapshot_date) FROM holding_snapshot) "
+            "AND LOWER(asset_type)='bond'")
+        bond = float(bond_df["v"].iloc[0]) if not bond_df.empty \
+            and bond_df["v"].iloc[0] is not None else 0.0
+        filled: list[str] = []
+        skipped: list[str] = []
+        for d in target_dates:
+            exist = repo.read_sql(
+                "SELECT 1 FROM account_snapshot WHERE snapshot_date=:d LIMIT 1", {"d": d})
+            if not exist.empty:
+                skipped.append(d)             # 已有快照（手动上传=权威）不覆盖
+                continue
+            mv = _holding_market_value_at(repo, ch, codes, d) + bond
+            repo.upsert("account_snapshot", _pd.DataFrame([{
+                "snapshot_date": d, "cash": round(cash, 2),
+                "market_value": round(mv, 2), "total_asset": round(mv + cash, 2),
+            }]), ["snapshot_date"])
+            filled.append(d)
+        if not filled:
+            # 最新交易日已有快照是最常见的「无需补」情形，保持原 skip:manual-exists 语义
+            if str(latest) in skipped:
+                return f"skip:manual-exists:{latest}"
+            return f"skip:no-target:{latest}"
+        return f"ok:{filled[-1]}" if len(filled) == 1 else f"ok:{filled[-1]}(+{len(filled)}补断档)"
     except Exception as e:  # noqa: BLE001 — 不阻断当日计划
         print(f"WARN account_snapshot 日更重估失败：{e}")
         return f"WARN: {e}"

@@ -285,6 +285,26 @@ def test_reval_skips_when_manual_exists(reval_db):
     assert jobs._persist_account_snapshot_daily() == "skip:manual-exists:20260709"
 
 
+def test_reval_fills_gap_between_snapshots(reval_db):
+    """快照卡在 0703、其间 0707/0708 有行情：日更从最近快照日自愈补齐 0707/0708/0709
+    三天，净值曲线不断档（无需人工回填）。"""
+    eng = create_engine(reval_db)
+    with eng.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO stock_daily (code, trade_date, close) VALUES "
+            "('AAA.SZ','20260707',10.5), ('AAA.SZ','20260708',10.8)"))
+    res = jobs._persist_account_snapshot_daily()
+    assert res == "ok:20260709(+3补断档)"     # 补 0707/0708/0709 三天
+    with eng.begin() as conn:
+        got = {r[0]: r[1] for r in conn.execute(text(
+            "SELECT snapshot_date, market_value FROM account_snapshot "
+            "WHERE snapshot_date IN ('20260707','20260708','20260709')")).fetchall()}
+    # BBB 停牌全程回退 0703 收盘 20；转债固定 1000；现金 61
+    assert got["20260707"] == 6050.0          # AAA 100×10.5 + BBB 4000 + 1000
+    assert got["20260708"] == 6080.0          # AAA 100×10.8 + BBB 4000 + 1000
+    assert got["20260709"] == 6100.0          # AAA 100×11.0 + BBB 4000 + 1000
+
+
 # ── 计划现金源：ACCOUNT_CASH env 优先，未配置读最新快照（R5）──────────────
 
 def _capture_plan_cash(monkeypatch):
