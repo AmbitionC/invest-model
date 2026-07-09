@@ -207,10 +207,64 @@ def job_daily_update_plan() -> dict:
     _run_cli(pipe_main, ["run_pipeline.py", "--mode", "update",
                          "--start", _PIPELINE_START])
     fear = _persist_fear_daily()
+    acct = _persist_account_snapshot_daily()
     sc = _build_signal_scorecard()
     arb = _ingest_and_build_arb()
-    return {"job": "daily_update_plan", "update": "ok", "fear": fear, "scorecard": sc,
-            "arb": arb, **_build_and_post_plan()}
+    return {"job": "daily_update_plan", "update": "ok", "fear": fear, "account": acct,
+            "scorecard": sc, "arb": arb, **_build_and_post_plan()}
+
+
+def _persist_account_snapshot_daily() -> str:
+    """按最新收盘价重估当前持仓 → 写当日 account_snapshot（总资产/净值曲线不再卡在
+    上次手动上传日）。前提：无新交易（现金沿用最近一次快照），符合「持仓没动」场景。
+
+    防覆盖：当日已有 account_snapshot（用户当天手动上传=权威）则跳过，不用重估价盖掉。
+    仅重估 stock+etf（current_holding 里的，均有 stock_daily 收盘）；转债/现金不在其中。
+    失败/无持仓不阻断当日计划。
+    """
+    import os as _os
+    from invest_model.data import make_engine
+    from invest_model.repositories.base import BaseRepository
+    try:
+        engine = make_engine()
+        repo = BaseRepository(engine)
+        dt = repo.read_sql("SELECT MAX(trade_date) d FROM stock_daily")["d"].iloc[0]
+        if dt is None:
+            return "skip:no-data"
+        exist = repo.read_sql(
+            "SELECT 1 FROM account_snapshot WHERE snapshot_date=:d LIMIT 1", {"d": str(dt)})
+        if not exist.empty:
+            return f"skip:manual-exists:{dt}"   # 当天已手动上传，不覆盖
+        ch = repo.read_sql("SELECT code, shares FROM current_holding")
+        if ch.empty:
+            return "skip:no-holding"
+        codes = [str(c) for c in ch["code"]]
+        ph = ",".join(f":c{i}" for i in range(len(codes)))
+        params = {f"c{i}": c for i, c in enumerate(codes)}
+        params["d"] = str(dt)
+        px = repo.read_sql(
+            f"SELECT code, close FROM stock_daily WHERE trade_date=:d AND code IN ({ph})", params)
+        pxmap = {str(r["code"]): float(r["close"]) for _, r in px.iterrows()
+                 if r["close"] is not None}
+        mv = 0.0
+        for _, r in ch.iterrows():
+            p = pxmap.get(str(r["code"]))
+            if p:
+                mv += float(r["shares"] or 0) * p
+        # 现金沿用最近一次快照（无新交易假设）；无历史快照则回退 ACCOUNT_CASH 环境变量
+        last = repo.read_sql(
+            "SELECT cash FROM account_snapshot ORDER BY snapshot_date DESC LIMIT 1")
+        cash = (float(last["cash"].iloc[0]) if not last.empty and last["cash"].iloc[0] is not None
+                else float(_os.getenv("ACCOUNT_CASH", "0") or 0))
+        import pandas as _pd
+        repo.upsert("account_snapshot", _pd.DataFrame([{
+            "snapshot_date": str(dt), "cash": round(cash, 2),
+            "market_value": round(mv, 2), "total_asset": round(mv + cash, 2),
+        }]), ["snapshot_date"])
+        return f"ok:{dt}"
+    except Exception as e:  # noqa: BLE001 — 不阻断当日计划
+        print(f"WARN account_snapshot 日更重估失败：{e}")
+        return f"WARN: {e}"
 
 
 def _build_signal_scorecard() -> str:
