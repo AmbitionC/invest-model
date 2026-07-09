@@ -315,19 +315,22 @@ def _persist_account_snapshot_daily() -> str:
         if ch.empty:
             return "skip:no-holding"
         codes = [str(c) for c in ch["code"]]
-        # 待补交易日：最近快照日之后、到最新交易日之间、库里有行情的交易日（自愈补断档）。
-        last_snap = repo.read_sql(
-            "SELECT MAX(snapshot_date) d FROM account_snapshot")["d"].iloc[0]
-        if last_snap is not None:
+        # 待补交易日：账户建仓日(首个快照)到最新交易日之间、库里有行情、且尚无快照的
+        # 交易日（补洞式自愈——不仅向前补新日，也回填中间断掉的日；已有快照下面会跳过）。
+        # 用 MIN(snapshot_date) 而非 MAX：MAX 只能向前补，一旦最新日已写(如先解卡了当天)，
+        # 中间的历史空档就永远补不上；MIN 起点能把区间里所有洞都扫到再逐日跳过已存在的。
+        first_snap = repo.read_sql(
+            "SELECT MIN(snapshot_date) d FROM account_snapshot")["d"].iloc[0]
+        if first_snap is not None:
             days = repo.read_sql(
                 "SELECT DISTINCT trade_date d FROM stock_daily "
-                "WHERE trade_date>:s AND trade_date<=:e ORDER BY trade_date",
-                {"s": str(last_snap), "e": str(latest)})
+                "WHERE trade_date>=:s AND trade_date<=:e ORDER BY trade_date",
+                {"s": str(first_snap), "e": str(latest)})
             target_dates = [str(x) for x in days["d"].tolist()] if not days.empty \
                 else [str(latest)]
         else:
-            target_dates = [str(latest)]
-        # 防御：极端断档（如快照卡在数月前）只补最近 90 个交易日，避免一次巨量回填拖垮日更。
+            target_dates = [str(latest)]     # 从无快照：只写最新日（无从判断建仓日）
+        # 防御：极端长区间只扫最近 90 个交易日，避免一次巨量回填拖垮日更。
         if len(target_dates) > 90:
             target_dates = target_dates[-90:]
         # 现金/转债市值沿用最近一次快照（无新交易假设），补断档各日相同口径。
@@ -341,12 +344,16 @@ def _persist_account_snapshot_daily() -> str:
             "AND LOWER(asset_type)='bond'")
         bond = float(bond_df["v"].iloc[0]) if not bond_df.empty \
             and bond_df["v"].iloc[0] is not None else 0.0
+        # 一次性取窗口内已存在的快照日（批量，避免每日逐个 existence 查询）。
+        have = repo.read_sql(
+            "SELECT DISTINCT snapshot_date d FROM account_snapshot "
+            "WHERE snapshot_date>=:s AND snapshot_date<=:e",
+            {"s": target_dates[0], "e": target_dates[-1]})
+        have_set = {str(x) for x in have["d"].tolist()} if not have.empty else set()
         filled: list[str] = []
         skipped: list[str] = []
         for d in target_dates:
-            exist = repo.read_sql(
-                "SELECT 1 FROM account_snapshot WHERE snapshot_date=:d LIMIT 1", {"d": d})
-            if not exist.empty:
+            if d in have_set:
                 skipped.append(d)             # 已有快照（手动上传=权威）不覆盖
                 continue
             mv = _holding_market_value_at(repo, ch, codes, d) + bond
