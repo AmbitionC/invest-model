@@ -392,8 +392,14 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
                 d = abs(px / lv - 1.0)
                 if d > 1e-6:
                     dists.append(d)
+    etf_codes = set(ctx.get("etf_codes") or [])   # 已由下方 ETF 口径评估的代码
     for _, h in holds.iterrows():
-        c = h["code"]; q = rt.get(c, {}); lv = levels.get(c, {})
+        c = h["code"]
+        if c in etf_codes:
+            # ETF 若也被录进 current_holding，会被股票口径重复评估→同一只报两次。
+            # ETF 统一交给下方 ETF 口径（含 P10 缓冲逻辑、rt_etf_k 取价），此处跳过。
+            continue
+        q = rt.get(c, {}); lv = levels.get(c, {})
         px = q.get("price"); pre = q.get("pre_close"); cost = float(h["cost_price"] or 0)
         sh = float(h.get("shares") or 0)
         if not px:
@@ -413,7 +419,7 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
             if ex:
                 st, hit = "破MA20移动止盈，确认清仓", True
             elif cost and pnl < 0:
-                st, hit = (("MA20下方缓冲持有(前日已破位·首破日已减仓,硬止损兜底)", True)
+                st, hit = (("无需操作·持有观察（在MA20下方，但前日已破位并减过仓，硬止损兜底）", True)
                            if lv.get("prev_below") else
                            ("破MA20减半(未盈利新仓缓冲，盘后确认)", True))
             elif cost and lv.get("prev_below"):
@@ -494,7 +500,7 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         elif ma20 and px < ma20 * 0.995:
             # P10：未盈利 ETF 破MA20→减半缓冲(仅首破)、盈利仅新鲜破位才减/清；硬止损兜底
             if cost and pnl < 0:
-                st, hit = (("MA20下方缓冲持有(前日已破位·首破日已减仓,硬止损兜底)", True)
+                st, hit = (("无需操作·持有观察（在MA20下方，但前日已破位并减过仓，硬止损兜底）", True)
                            if lv.get("prev_below") else
                            ("破MA20减半(未盈利缓冲，盘后确认)", True))
             elif cost and lv.get("prev_below"):
@@ -518,7 +524,7 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
                           f"(占{cw:.1%}→{cw / 2:.1%},回笼≈{half * px:.0f})" if half else "")
             else:
                 cw = (e["shares"] * px / equity) if equity else 0.0
-                ticket = (f" → 卖 {int(e['shares'])}份 市价/限价≈{px:.3f} 减/清"
+                ticket = (f" → 卖 {int(e['shares'])}份 市价/限价≈{px:.3f} 清仓"
                           f"(占{cw:.1%}→0,回笼≈{e['shares'] * px:.0f})")
             sev = "batch" if ("逼近" in st or "持有" in st) else "crit"
             alerts.append((f"E:{c}:{st}",
