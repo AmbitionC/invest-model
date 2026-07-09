@@ -74,9 +74,22 @@ def main() -> None:
     if not pos.empty:
         pos["shares"] = pd.to_numeric(pos["shares"], errors="coerce")
         pos["cost_price"] = pd.to_numeric(pos["cost_price"], errors="coerce")
+        # entry_date 三级回退：CSV 显式值 > 旧 current_holding 值 > 快照日。
+        # 券商快照对 ETF 常不带建仓日，此前每次上传都被重置为快照日 →
+        # 时间止损/盈利保护的持有期窗口坍缩为 1 天、对 ETF 永不生效。
+        try:
+            old = repo.read_sql("SELECT code, entry_date FROM current_holding")
+            prev_entry = {str(r["code"]): str(r["entry_date"])
+                          for _, r in old.iterrows()
+                          if pd.notna(r["entry_date"]) and str(r["entry_date"]).strip()}
+        except Exception:  # noqa: BLE001  首次运行无表等，回退快照日
+            prev_entry = {}
         if "entry_date" not in pos.columns:
-            pos["entry_date"] = snap_date
-        pos["entry_date"] = pos["entry_date"].where(pos["entry_date"].notna(), snap_date)
+            pos["entry_date"] = None
+        pos["entry_date"] = pos.apply(
+            lambda r: str(r["entry_date"]).strip()
+            if pd.notna(r["entry_date"]) and str(r["entry_date"]).strip()
+            else (prev_entry.get(str(r["code"])) or snap_date), axis=1)
         ch = pos[["code", "shares", "cost_price", "entry_date"]].copy()
         repo.execute_sql("DELETE FROM current_holding")
         m = repo.upsert("current_holding", ch, ["code"])
