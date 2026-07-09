@@ -125,11 +125,13 @@ def _persist_fear_daily() -> str:
     一直不变」无从排查。现在两类根因都推送到「⚠️ FaaS 定时任务告警」issue（→邮件）：
       ① 落库/计算异常；② 恐慌值未推进到新交易日（stock_daily 未更新，仪表盘看着卡住）。
     """
-    from invest_model.data import make_engine
-    from invest_model.repositories.base import BaseRepository
-    from invest_model.signals.fear import fear_gauge
-    from scripts.fear_gauge import persist_fear
     try:
+        # 导入放进 try：万一打包漏带 scripts/fear_gauge（历史踩过）也只降级返回 WARN，
+        # 绝不让 ImportError 逃逸中止整个 daily job、连累后面的账户快照落库。
+        from invest_model.data import make_engine
+        from invest_model.repositories.base import BaseRepository
+        from invest_model.signals.fear import fear_gauge
+        from scripts.fear_gauge import persist_fear
         engine = make_engine()
         repo = BaseRepository(engine)
         prev = repo.read_sql("SELECT MAX(trade_date) d FROM fear_daily")["d"].iloc[0]

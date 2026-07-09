@@ -24,8 +24,12 @@ pip install -r "$ROOT/faas/requirements.txt" -t "$BUILD" --quiet
 echo "→ 拷贝代码与慢变配置..."
 cp -r "$ROOT/invest_model" "$BUILD/"
 mkdir -p "$BUILD/scripts" "$BUILD/faas" "$BUILD/config"
-# 各定时任务的 CLI 入口（faas/jobs.py 以 argparse 方式调用它们的 main）
-for f in live_check.py review.py build_action_plan.py run_pipeline.py ingest_etf_daily.py; do
+# 各定时任务的 CLI 入口 + 被 faas/jobs.py 直接 import 的辅助脚本。
+# 注意：这份清单必须覆盖 jobs.py 里所有 `from scripts.X import ...`——漏带一个，
+# 运行时就 ModuleNotFoundError（fear_gauge 曾漏带，导致恐慌落库崩、连累账户快照不落库）。
+# 这些脚本只依赖 invest_model + pandas/numpy，均在包内，不引入 ml 重依赖。
+for f in live_check.py review.py build_action_plan.py run_pipeline.py ingest_etf_daily.py \
+         fear_gauge.py ingest_watermeter.py build_signal_scorecard.py build_arb_scorecard.py; do
   cp "$ROOT/scripts/$f" "$BUILD/scripts/"
 done
 cp "$ROOT"/faas/*.py "$BUILD/faas/"
