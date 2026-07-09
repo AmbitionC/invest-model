@@ -119,16 +119,36 @@ def _build_and_post_plan() -> dict:
 
 
 def _persist_fear_daily() -> str:
-    """恐慌指数按日落库（仪表盘历史曲线）；失败不阻断出计划。"""
+    """恐慌指数按日落库（仪表盘历史曲线）；失败不阻断出计划。
+
+    改为**显式告警**：原来异常只 print WARN 到 FC 日志（没人看），导致「仪表盘恐慌值
+    一直不变」无从排查。现在两类根因都推送到「⚠️ FaaS 定时任务告警」issue（→邮件）：
+      ① 落库/计算异常；② 恐慌值未推进到新交易日（stock_daily 未更新，仪表盘看着卡住）。
+    """
+    from invest_model.data import make_engine
+    from invest_model.repositories.base import BaseRepository
+    from invest_model.signals.fear import fear_gauge
+    from scripts.fear_gauge import persist_fear
     try:
-        from invest_model.data import make_engine
-        from invest_model.signals.fear import fear_gauge
-        from scripts.fear_gauge import persist_fear
         engine = make_engine()
-        persist_fear(engine, fear_gauge(engine))
-        return "ok"
+        repo = BaseRepository(engine)
+        prev = repo.read_sql("SELECT MAX(trade_date) d FROM fear_daily")["d"].iloc[0]
+        g = fear_gauge(engine)
+        persist_fear(engine, g)
+        cur = str(g.get("date"))
+        if prev is not None and str(prev) == cur:
+            # 行情未推进到新交易日 → fear_daily 仍是同一天，仪表盘看起来「卡住」。
+            gh_notify.alert("fear_daily", RuntimeError(
+                f"恐慌指数未推进：最新交易日仍为 {cur}（stock_daily 未更新到新交易日？"
+                f"请检查 daily_update_plan 的数据更新步骤是否成功）"))
+            return f"stale:{cur}"
+        return f"ok:{cur}"
     except Exception as e:  # noqa: BLE001
         print(f"WARN fear_daily 落库失败：{e}")
+        try:
+            gh_notify.alert("fear_daily", e)
+        except Exception:  # noqa: BLE001 — 告警本身失败不再级联
+            pass
         return f"WARN: {e}"
 
 
