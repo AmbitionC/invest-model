@@ -63,44 +63,56 @@ def _names(repo: BaseRepository, codes: list[str]) -> dict[str, str]:
 
 
 # ── 1) 投顾研判复盘 ──────────────────────────────────────────────
-def review_advisor(repo: BaseRepository, asof: str, horizon: int) -> list[str]:
-    lines = ["", "## 一、投顾研判复盘（自推荐至今 / 分级验证）"]
-    if not repo.table_exists("advisor_reco"):
-        return lines + ["（无 advisor_reco 表）"]
-    reco = repo.read_sql(
-        "SELECT code, grade, direction, MIN(rec_date) first_date, MAX(rec_date) last_date, COUNT(*) n "
-        "FROM advisor_reco WHERE direction='long' GROUP BY code, grade, direction")
-    if reco.empty:
-        return lines + ["（暂无 long 方向投顾记录）"]
-    codes = sorted(set(reco["code"]))
-    # 各标的的建议基准日用首次推荐日；入场价=首推日当日或之后首个收盘
-    first_dates = sorted(set(reco["first_date"]))
-    cph = ",".join(f":c{i}" for i in range(len(codes)))
-    entry_win = repo.read_sql(
-        f"SELECT code, trade_date, close FROM stock_daily "
-        f"WHERE code IN ({cph}) AND trade_date>=:s AND trade_date<=:e",
-        {**{f"c{i}": c for i, c in enumerate(codes)}, "s": min(first_dates), "e": asof})
-    if entry_win.empty:
-        return lines + ["（推荐标的无行情，无法对账）"]
-    entry_win["close"] = pd.to_numeric(entry_win["close"], errors="coerce")
+def _advisor_rows(reco: pd.DataFrame, entry_win: pd.DataFrame) -> pd.DataFrame:
+    """按 code 首评去重 + 严格次日收盘入场，返回 [code, grade, first, ret]。
+
+    口径与 build_signal_scorecard 对齐：
+    - 同票多次推荐只记首评（原 GROUP BY code,grade 会让同票跨级重复进多个分级桶）；
+    - 入场价=首推日**之后**首个收盘（原用 >= 含当日收盘——盘中/收盘后录入的信号
+      用当日收盘是不可成交价，系统性高估战绩；刚推荐、尚无次日行情的票不计入）。
+    """
+    reco = reco.sort_values("rec_date").drop_duplicates("code", keep="first")
+    ew = entry_win.copy()
+    ew["close"] = pd.to_numeric(ew["close"], errors="coerce")
     cur = {c: g.sort_values("trade_date")["close"].dropna().iloc[-1]
-           for c, g in entry_win.groupby("code") if g["close"].notna().any()}
+           for c, g in ew.groupby("code") if g["close"].notna().any()}
     rows = []
     for _, r in reco.iterrows():
         c = r["code"]
-        g = entry_win[(entry_win["code"] == c) & (entry_win["trade_date"] >= r["first_date"])].sort_values("trade_date")
+        g = ew[(ew["code"] == c) & (ew["trade_date"] > r["rec_date"])].sort_values("trade_date")
         g = g[g["close"].notna()]
         if g.empty or c not in cur:
             continue
         entry = float(g["close"].iloc[0])
         if entry <= 0:
             continue
-        ret = cur[c] / entry - 1.0
-        rows.append({"code": c, "grade": r["grade"] or "?", "first": r["first_date"], "ret": ret})
-    if not rows:
+        rows.append({"code": c, "grade": r["grade"] or "?", "first": r["rec_date"],
+                     "ret": cur[c] / entry - 1.0})
+    return pd.DataFrame(rows)
+
+
+def review_advisor(repo: BaseRepository, asof: str, horizon: int) -> list[str]:
+    lines = ["", "## 一、投顾研判复盘（自推荐至今 / 分级验证）"]
+    if not repo.table_exists("advisor_reco"):
+        return lines + ["（无 advisor_reco 表）"]
+    reco = repo.read_sql(
+        "SELECT code, grade, rec_date FROM advisor_reco WHERE direction='long'")
+    if reco.empty:
+        return lines + ["（暂无 long 方向投顾记录）"]
+    codes = sorted(set(reco["code"]))
+    cph = ",".join(f":c{i}" for i in range(len(codes)))
+    entry_win = repo.read_sql(
+        f"SELECT code, trade_date, close FROM stock_daily "
+        f"WHERE code IN ({cph}) AND trade_date>=:s AND trade_date<=:e",
+        {**{f"c{i}": c for i, c in enumerate(codes)}, "s": str(reco["rec_date"].min()),
+         "e": asof})
+    if entry_win.empty:
+        return lines + ["（推荐标的无行情，无法对账）"]
+    df = _advisor_rows(reco, entry_win)
+    if df.empty:
         return lines + ["（推荐标的暂无可对账收益）"]
-    df = pd.DataFrame(rows)
-    lines.append(f"- 基准：自各标的首次推荐日收盘 → {asof} 收盘的实际涨跌（{len(df)} 个标的）")
+    lines.append(f"- 基准：自各标的首次推荐日**次一交易日**收盘 → {asof} 收盘的实际涨跌"
+                 f"（{len(df)} 个标的；同票多次推荐只记首评）")
     lines.append("")
     lines.append("| 分级 | 标的数 | 平均涨跌 | 胜率 | 最好 | 最差 |")
     lines.append("|---|---|---|---|---|---|")
