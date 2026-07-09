@@ -259,7 +259,7 @@ def run_data_update(engine, start: str, end: str, quarters: list[str] | None = N
     # 业绩快报/预告（时效层：预报<快报<定期报告——财报跟踪法）。按公告日增量。
     n = 0
     try:
-        for d in _missing_ann_dates(repo, "fina_express", open_dates):
+        for d in _missing_ann_dates(repo, "fina_express", open_dates, window=45):
             frames = []
             for kind, fetch in (("express", client.get_express_by_date),
                                 ("forecast", client.get_forecast_by_date)):
@@ -285,7 +285,7 @@ def run_data_update(engine, start: str, end: str, quarters: list[str] | None = N
     # 重要股东/高管增减持（跟庄信号：insider_conviction 候选因子数据源）。按公告日增量。
     n = 0
     try:
-        for d in _missing_ann_dates(repo, "holder_trade", open_dates):
+        for d in _missing_ann_dates(repo, "holder_trade", open_dates, window=45):
             df = client.get_holder_trade_by_date(d)
             if df is not None and not df.empty:
                 cols = ["code", "ann_date", "holder_name", "holder_type", "in_de",
@@ -304,18 +304,26 @@ def run_data_update(engine, start: str, end: str, quarters: list[str] | None = N
     return stats
 
 
-def _missing_ann_dates(repo: BaseRepository, table: str, all_dates: list[str]) -> list[str]:
-    """按 ann_date 口径的缺失公告日（表主键无 trade_date 时用）。"""
+def _missing_ann_dates(repo: BaseRepository, table: str, all_dates: list[str],
+                       window: int | None = None) -> list[str]:
+    """按 ann_date 口径的缺失公告日（表主键无 trade_date 时用）。
+
+    window：仅回填最近 window 个公告日（None=全量）。业绩快报/增减持这类
+    "逐日拉、每日多次 API 调用"的表，首次建表若无上限地从 PIPELINE_START 逐日
+    回填会拖垮日更（把恐慌/快照/计划这些本该快的步骤一并阻塞）。故日更只补近窗口，
+    历史随日更逐日自然累积；需要一次性补全历史时另跑专用回填。
+    """
     if not all_dates:
         return []
+    dates = all_dates[-window:] if window else list(all_dates)
     if not repo.table_exists(table):
-        return list(all_dates)
+        return list(dates)
     have = repo.read_sql(
         f"SELECT DISTINCT ann_date FROM {table} WHERE ann_date>=:s AND ann_date<=:e",
-        {"s": all_dates[0], "e": all_dates[-1]},
+        {"s": dates[0], "e": dates[-1]},
     )
     have_set = set(have["ann_date"].tolist()) if not have.empty else set()
-    return [d for d in all_dates if d not in have_set]
+    return [d for d in dates if d not in have_set]
 
 
 def _repo_interest_days(codes: pd.Series, trade_date: str, cal: pd.DataFrame) -> pd.Series:
