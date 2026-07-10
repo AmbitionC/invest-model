@@ -166,8 +166,8 @@ def run(repo) -> str:
     lines.append(f"- 跌破臂：{'✅ 过关' if break_pass else '❌ 未过关/功效不足'}"
                  f"（60日 x=1% t: {['%.1f' % t for t in bts] or '样本不足'}）")
     lines.append(f"- 回踩臂：{'✅ 过关' if pullback_pass else '❌ 未过关/功效不足'}")
-    lines.append(f"- **P12 裁决**：{'✅ 可进影子' if (break_pass or pullback_pass) else '⏳ hold（等数据回填至 2015 提功效）'}"
-                 "——过关臂对应开关单独晋升，未过关臂保持关闭。")
+    verdict_txt = "✅ 可进影子" if (break_pass or pullback_pass) else "⏳ hold（预登记判据未过关）"
+    lines.append(f"- **P12 裁决**：{verdict_txt}——过关臂对应开关单独晋升，未过关臂保持关闭。")
     return "\n".join(lines)
 
 

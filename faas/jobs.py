@@ -127,11 +127,17 @@ def _build_and_post_plan() -> dict:
     with open(out, encoding="utf-8") as f:
         body = f.read()
     today = bj.strftime("%Y-%m-%d")
+    # 决策日=计划数据日；标题/去重都带上——跨零点重跑时墙钟日期会撞车
+    # （昨日 00:14 的重发占用今日标题，17:00 正式计划被静默去重）
+    import re as _re
+    m = _re.search(r"操作计划 — (\d{8})", body)
+    plan_date = m.group(1) if m else bj.strftime("%Y%m%d")
+    header = f"## {today} 盘后操作计划（决策日 {plan_date}）"
     res = gh_notify.post_issue_comment(
         "📈 每日操作计划",
         seed_body="本 issue 由 FC 定时函数每个交易日盘后追加操作计划评论。",
-        comment_body=f"## {today} 盘后操作计划\n\n{body}",
-        dedupe_prefix=f"## {today} 盘后操作计划",
+        comment_body=f"{header}\n\n{body}",
+        dedupe_prefix=header,
     )
     return {"plan": res}
 
