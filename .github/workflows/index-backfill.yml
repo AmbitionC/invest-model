@@ -1,0 +1,47 @@
+name: index-backfill
+
+# 指数日线历史回填：为 E9（P12 指数 MA60 事件闸）等验证补数据深度。
+# 只写 index_daily（基准三指数+创业板指），分钟级、幂等可重跑。
+# 触发：手动 / 改 ops/index-backfill.trigger 后 push（仅 master）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "回填起始日 YYYYMMDD"
+        default: "20150101"
+  push:
+    branches: [master]
+    paths:
+      - 'ops/index-backfill.trigger'
+
+concurrency:
+  group: index-backfill
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 回填指数日线历史
+        run: python scripts/backfill_index.py --start "${{ github.event.inputs.start || '20150101' }}"
