@@ -413,6 +413,13 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         # 动作判定
         if reason:                                    # 风控已判定（清仓/减仓/时间止损/逻辑证伪）
             action = "sell" if tw <= 1e-6 else "trim"
+            # 盈利仓的风控离场本质是止盈（如 巨化 +18% 破MA20 清仓），文案只写
+            # "破MA20清仓"曾被误读成止损——展示层加「止盈·」前缀并附浮盈，不改判定。
+            # 逻辑证伪除外：那是论点失效离场，与盈亏无关，标"止盈"会误导。
+            cost = cost_map.get(c, 0.0)
+            if (cost and cost > 0 and px and px > 0 and px / cost - 1 > 0
+                    and not reason.startswith("逻辑证伪")):
+                reason = f"止盈·{reason}（浮盈{px / cost - 1:+.1%}）"
         elif c in held_codes:
             # 尊重真实持仓、实事求是：风控没触发就持有——不因"没挤进模型 top-N 目标"而强制换出/减配。
             # 换出只保留给风控触发 / 投顾明确剔除（exit_codes 已在风控里判为逻辑证伪清仓）。
@@ -462,7 +469,8 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             back = (pd.to_datetime(dt) - pd.Timedelta(days=45)).strftime("%Y%m%d")
             ex_df = loop.repo.read_sql(
                 "SELECT DISTINCT code FROM action_plan WHERE plan_date>=:b AND plan_date<:d "
-                "AND action='sell' AND reason LIKE :r", {"b": back, "d": dt, "r": "盈利保护%"})
+                # 前缀匹配→包含匹配：reason 现在可能带「止盈·」前缀（见上"动作判定"）
+                "AND action='sell' AND reason LIKE :r", {"b": back, "d": dt, "r": "%盈利保护%"})
             re_codes = [c for c in ex_df["code"]
                         if c not in held_codes and c not in targets and c not in exit_codes]
             re_names = _name_map(loop, re_codes)
