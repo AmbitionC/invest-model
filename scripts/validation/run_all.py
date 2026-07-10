@@ -101,6 +101,7 @@ def main() -> None:
     import e6_advisor_factor
     import e7_crowding
     import e8_ma20_buffer
+    import e9_index_ma60
 
     parts = [
         "# 验证报告（go/no-go）：投顾主导 + 量化辅助 各杠杆实证",
@@ -125,6 +126,8 @@ def main() -> None:
         safe("E7", e7_crowding.run, repo),
         "",
         safe("E8", e8_ma20_buffer.run, repo),
+        "",
+        safe("E9", e9_index_ma60.run, repo),
         "",
         "## 数据范围与功效声明（务必先读）",
         safe("power", _power_note, repo),

@@ -7,6 +7,13 @@
 
 关键设计：线性、有下限（默认 0.5）、**不连乘、不设死区** —— 这是对旧系统
 「regime×safety×tanh 连乘压成 0」空仓陷阱的针对性修复。
+
+P12（默认关闭）：指数 MA60 **事件闸**——线性融合缺"趋势断裂"的事件语义
+（指数有效跌破 MA60 时 gross 只是渐降而非一次性降到位）。开启后：收盘
+< MA60×(1−break_pct) 视为有效跌破 → gross 直接取 floor（与线性结果取 min，
+不连乘、不改 floor 本身）；收盘站回 MA60 上方即解除。出处：life-teachers
+重远投资观 2026-07-10《散户亏损失控》；晋升前置：E9 验证过关
+（scripts/validation/e9_index_ma60.py）+ 影子期，见 model_change_proposals.md P12。
 """
 
 from __future__ import annotations
@@ -20,14 +27,32 @@ from invest_model.repositories.base import BaseRepository
 logger = get_logger()
 
 
+def ma60_gate_active(closes: pd.Series, break_pct: float = 0.01) -> bool:
+    """P12 事件闸纯函数：最新收盘是否处于「有效跌破 MA60」状态。
+
+    有效跌破 = 收盘 < MA60×(1−break_pct)；收盘 ≥ MA60 即解除（中间带为迟滞区，
+    维持前一状态由调用方决定——本函数只判当日，保守口径：迟滞区不算跌破）。
+    样本不足 60 根返回 False（数据不够不触发，宁松勿误伤）。
+    """
+    s = pd.to_numeric(closes, errors="coerce").dropna()
+    if len(s) < 60:
+        return False
+    ma60 = float(s.tail(60).mean())
+    last = float(s.iloc[-1])
+    return bool(np.isfinite(ma60) and ma60 > 0 and last < ma60 * (1.0 - break_pct))
+
+
 class MarketTiming:
     def __init__(self, engine, benchmark: str = "000300.SH",
-                 floor: float = 0.5, cap: float = 1.0, enabled: bool = True):
+                 floor: float = 0.5, cap: float = 1.0, enabled: bool = True,
+                 ma60_gate: bool = False, ma60_break_pct: float = 0.01):
         self.engine = engine
         self.benchmark = benchmark
         self.floor = floor
         self.cap = cap
         self.enabled = enabled
+        self.ma60_gate = ma60_gate            # P12 事件闸（默认关=现状逐字一致）
+        self.ma60_break_pct = ma60_break_pct
         self.repo = BaseRepository(engine)
 
     def gross_exposure(self, trade_date: str, universe: list[str] | None = None) -> float:
@@ -40,7 +65,14 @@ class MarketTiming:
         if not np.isfinite(signal):
             signal = 0.5
         gross = self.floor + (self.cap - self.floor) * float(np.clip(signal, 0.0, 1.0))
-        return float(np.clip(gross, self.floor, self.cap))
+        gross = float(np.clip(gross, self.floor, self.cap))
+        # P12：有效跌破 MA60 → 与线性结果取 min（事件降到位；不连乘、不破 floor）
+        if self.ma60_gate and ma60_gate_active(self._index_close(trade_date),
+                                               self.ma60_break_pct):
+            logger.info("P12 MA60 事件闸触发（%s 有效跌破）：gross %.2f → floor %.2f",
+                        self.benchmark, gross, self.floor)
+            gross = min(gross, self.floor)
+        return gross
 
     def _index_close(self, trade_date: str, lookback_days: int = 200) -> pd.Series:
         start = (pd.to_datetime(trade_date) - pd.Timedelta(days=lookback_days)).strftime("%Y%m%d")
