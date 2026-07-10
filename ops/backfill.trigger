@@ -1,3 +1,1 @@
-run backfill @ 2026-06-30T14:58Z
-rerun backfill (start=2023, abort slow 2019 run) @ 2026-06-30T16:48Z
-resume backfill (daily已全,补fundamental/fina/index+建模) @ 2026-07-01T00:43Z
+补跑 2026-07-10T10:05Z：minitick 超时致 0710 个股行情缺失（截面仅3只ETF），增量补齐当日数据
