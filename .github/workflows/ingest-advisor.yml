@@ -16,6 +16,7 @@ on:
     paths:
       - 'config/advisor_*.csv'
       # 本 workflow 变更时也跑一次全量（changed 里无 csv → 回退全量，自愈通道）
+      # 2026-07-10: 01:35 两次 startup 级失败（4s 无 runner 无日志），bump 本文件走自愈通道重灌
       - '.github/workflows/ingest-advisor.yml'
 
 concurrency:
