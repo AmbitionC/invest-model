@@ -384,6 +384,70 @@ def _build_signal_scorecard() -> str:
         return f"err:{repr(e)[:60]}"
 
 
+# ── CSV 入库（ingest-advisor / ingest-snapshot 的 FC 等价通道）──────────
+# Actions 配额耗尽时的替代入库：FC 控制台/定时器触发，运行时从 GitHub master
+# 拉最新 config/*.csv（代码包刻意不带 CSV，打包即冻结会过期）。
+
+def _fetch_config_csvs(prefix: str) -> list[tuple[str, str]]:
+    """从 GitHub master 的 config/ 拉取 prefix 开头的 CSV 到 /tmp，返回 (文件名, 本地路径)。"""
+    import urllib.request
+    token, repo = gh_notify._cred()
+    repo = repo or "AmbitionC/invest-model"
+    if not token:
+        raise RuntimeError("缺 GITHUB_TOKEN/GH_TOKEN，无法拉取 config CSV")
+    listing = gh_notify._req(
+        "GET", f"{gh_notify._GH_API}/repos/{repo}/contents/config?ref=master", token)
+    out: list[tuple[str, str]] = []
+    for item in listing:
+        name = item.get("name", "")
+        if not (name.startswith(prefix) and name.endswith(".csv")) or "template" in name:
+            continue
+        req = urllib.request.Request(
+            f"{gh_notify._GH_API}/repos/{repo}/contents/config/{name}?ref=master",
+            headers={"Authorization": f"Bearer {token}",
+                     "Accept": "application/vnd.github.raw",
+                     "User-Agent": "invest-faas-scheduler"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = resp.read()
+        path = f"/tmp/{name}"
+        with open(path, "wb") as f:
+            f.write(data)
+        out.append((name, path))
+    return sorted(out)
+
+
+def job_ingest_advisor() -> dict:
+    """投顾 CSV 全量幂等重灌（等价 Actions ingest-advisor 的全量兜底档）。"""
+    from scripts.ingest_advisor import main as adv_main
+    files = _fetch_config_csvs("advisor_")
+    ok = skip = 0
+    for name, path in files:
+        if name.startswith(("advisor_research_", "advisor_signals_", "advisor_intraday_")):
+            kind = "reco"
+        elif name.startswith(("advisor_theme_", "advisor_themes_")):
+            kind = "theme"
+        else:
+            continue                      # upgrade/prune/watch 等不在录入范围（同 Actions）
+        try:
+            _run_cli(adv_main, ["ingest_advisor.py", "--kind", kind, "--csv", path])
+            ok += 1
+        except BaseException as e:  # noqa: BLE001 — SystemExit 也兜住：单文件失败跳过（同 Actions 容错）
+            print(f"WARN 跳过 {name}：{e}")
+            skip += 1
+    return {"job": "ingest_advisor", "ok": ok, "skipped": skip}
+
+
+def job_ingest_snapshot() -> dict:
+    """最新持仓快照 CSV 入库（等价 Actions ingest-snapshot：文件名字典序最新一份）。"""
+    from scripts.ingest_holding_snapshot import main as snap_main
+    files = _fetch_config_csvs("holding_snapshot_")
+    if not files:
+        return {"job": "ingest_snapshot", "skipped": "no-csv"}
+    name, path = files[-1]
+    _run_cli(snap_main, ["ingest_holding_snapshot.py", "--csv", path])
+    return {"job": "ingest_snapshot", "ingested": name}
+
+
 # ── 三水表更新提醒（watermeter-remind）──────────────────────────────
 
 def job_watermeter_remind() -> dict:
@@ -477,4 +541,6 @@ JOBS = {
     "daily_update_plan": job_daily_update_plan,
     "weekly_rebuild_review": job_weekly_rebuild_review,
     "watermeter_remind": job_watermeter_remind,
+    "ingest_advisor": job_ingest_advisor,
+    "ingest_snapshot": job_ingest_snapshot,
 }

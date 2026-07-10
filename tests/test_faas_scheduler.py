@@ -360,3 +360,73 @@ def test_plan_cash_env_overrides(reval_db, monkeypatch):
     jobs._build_and_post_plan()
     i = seen["argv"].index("--cash")
     assert seen["argv"][i + 1] == "1061"
+
+
+# ── CSV 入库 FC 通道（ingest_advisor / ingest_snapshot，Actions 配额替代）────
+
+@pytest.fixture()
+def ingest_db(tmp_path, monkeypatch):
+    db = f"sqlite:///{tmp_path}/ing.db"
+    from invest_model.data import create_schema, make_engine
+    create_schema(make_engine(db))
+    eng = create_engine(db)
+    with eng.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO stock_info (ts_code, name) VALUES "
+            "('002364.SZ','中恒电气'), ('600000.SH','浦发银行')"))
+    monkeypatch.setenv("INVEST_DB_URL", db)
+    return db
+
+
+def _fake_csvs(tmp_path):
+    theme = tmp_path / "advisor_theme_20260710_noon.csv"
+    theme.write_text(
+        "rec_date,theme,source_type,direction,thesis,valid_until\n"
+        '20260710,800V/HVDC,intraday,long,"字节路线发布",\n', encoding="utf-8")
+    reco = tmp_path / "advisor_signals_20260710_noon.csv"
+    reco.write_text(
+        "rec_date,code,source_type,grade,direction,catalyst,valid_until,source\n"
+        "20260710,002364.SZ,intraday,C,long,800V 2连板,,午盘\n", encoding="utf-8")
+    bad = tmp_path / "advisor_signals_20260711_bad.csv"   # code 不在 stock_info → 单文件跳过
+    bad.write_text(
+        "rec_date,code,source_type,grade,direction,catalyst,valid_until,source\n"
+        "20260711,999999.SZ,intraday,C,long,x,,y\n", encoding="utf-8")
+    return [("advisor_signals_20260710_noon.csv", str(reco)),
+            ("advisor_signals_20260711_bad.csv", str(bad)),
+            ("advisor_theme_20260710_noon.csv", str(theme))]
+
+
+def test_job_ingest_advisor_from_github_csvs(ingest_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "_fetch_config_csvs", lambda prefix: _fake_csvs(tmp_path))
+    res = jobs.job_ingest_advisor()
+    assert res["ok"] == 2 and res["skipped"] == 1     # 坏 code 文件被容错跳过
+    eng = create_engine(ingest_db)
+    with eng.begin() as conn:
+        themes = conn.execute(text("SELECT theme FROM advisor_theme")).fetchall()
+        recos = conn.execute(text("SELECT code, grade FROM advisor_reco")).fetchall()
+    assert themes == [("800V/HVDC",)]
+    assert recos == [("002364.SZ", "C")]
+
+
+def test_job_ingest_snapshot_latest_file(ingest_db, tmp_path, monkeypatch):
+    older = tmp_path / "holding_snapshot_20260703.csv"
+    older.write_text("snapshot_date,code,name,asset_type,shares,available,cost_price,"
+                     "last_price,market_value\n"
+                     "20260703,600000.SH,浦发银行,stock,100,100,8.0,8.5,850.0\n",
+                     encoding="utf-8")
+    newer = tmp_path / "holding_snapshot_20260709.csv"
+    newer.write_text("snapshot_date,code,name,asset_type,shares,available,cost_price,"
+                     "last_price,market_value\n"
+                     "20260709,600000.SH,浦发银行,stock,100,100,8.0,9.0,900.0\n"
+                     "20260709,CASH,现金,cash,,,,,61.0\n", encoding="utf-8")
+    monkeypatch.setattr(jobs, "_fetch_config_csvs", lambda prefix: [
+        ("holding_snapshot_20260703.csv", str(older)),
+        ("holding_snapshot_20260709.csv", str(newer)),
+    ])
+    res = jobs.job_ingest_snapshot()
+    assert res["ingested"] == "holding_snapshot_20260709.csv"
+    eng = create_engine(ingest_db)
+    with eng.begin() as conn:
+        acct = conn.execute(text(
+            "SELECT snapshot_date, cash, total_asset FROM account_snapshot")).fetchall()
+    assert acct == [("20260709", 61.0, 961.0)]
