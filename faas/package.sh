@@ -29,7 +29,8 @@ mkdir -p "$BUILD/scripts" "$BUILD/faas" "$BUILD/config"
 # 运行时就 ModuleNotFoundError（fear_gauge 曾漏带，导致恐慌落库崩、连累账户快照不落库）。
 # 这些脚本只依赖 invest_model + pandas/numpy，均在包内，不引入 ml 重依赖。
 for f in live_check.py review.py build_action_plan.py run_pipeline.py ingest_etf_daily.py \
-         fear_gauge.py ingest_watermeter.py build_signal_scorecard.py build_arb_scorecard.py; do
+         fear_gauge.py ingest_watermeter.py build_signal_scorecard.py build_arb_scorecard.py \
+         ingest_advisor.py ingest_holding_snapshot.py; do
   cp "$ROOT/scripts/$f" "$BUILD/scripts/"
 done
 cp "$ROOT"/faas/*.py "$BUILD/faas/"
