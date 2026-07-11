@@ -1,0 +1,35 @@
+# 美股观察清单：CODE,sleeve_hint（core=核心锚ETF / satellite=卫星个股候选）
+# 卫星个股同时是期权造血 CSP 候选池——是否可卖 put 由「确定性分级 A/B + 担保买得起」动态决定。
+# 曲线原则：质量偏置的大盘股+若干中低价优质股（$20k 账户 CSP 担保=行权价×100，需 ≤$6k）。
+SPY,core
+QQQ,core
+AAPL,satellite
+MSFT,satellite
+GOOGL,satellite
+AMZN,satellite
+NVDA,satellite
+META,satellite
+AVGO,satellite
+AMD,satellite
+NFLX,satellite
+COST,satellite
+LLY,satellite
+V,satellite
+MA,satellite
+JPM,satellite
+XOM,satellite
+MRK,satellite
+QCOM,satellite
+MU,satellite
+ORCL,satellite
+# —— 中低价段（CSP 担保可负担区）——
+KO,satellite
+CSCO,satellite
+PFE,satellite
+BAC,satellite
+VZ,satellite
+T,satellite
+INTC,satellite
+GM,satellite
+SOFI,satellite
+PLTR,satellite
