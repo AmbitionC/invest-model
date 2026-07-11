@@ -686,6 +686,105 @@ arb_scorecard = Table(
 )
 
 
+# ── 美股模块（us_* 前缀，与 A 股链路完全隔离；见 invest_model/us/ 与 docs/us_rulebook.md）──
+
+us_stock_info = Table(
+    "us_stock_info", metadata,
+    Column("code", String(12), primary_key=True),          # AAPL / SPY / ^VIX
+    Column("name", String(64)),
+    Column("kind", String(8)),                             # etf | stock | index
+    Column("sector", String(48)),
+    Column("sleeve_hint", String(12)),                     # core | satellite | income
+    _created_at(),
+)
+
+us_stock_daily = Table(
+    "us_stock_daily", metadata,
+    Column("code", String(12), primary_key=True),
+    Column("trade_date", String(8), primary_key=True),     # 美东交易日 YYYYMMDD
+    Column("open", Numeric(16, 4)),
+    Column("high", Numeric(16, 4)),
+    Column("low", Numeric(16, 4)),
+    Column("close", Numeric(16, 4)),                       # yfinance auto-adjusted
+    Column("volume", Numeric(20, 0)),
+)
+
+us_fundamental_q = Table(
+    "us_fundamental_q", metadata,
+    Column("code", String(12), primary_key=True),
+    Column("quarter_end", String(8), primary_key=True),    # 财季截止 YYYYMMDD
+    Column("revenue", Numeric(20, 0)),
+    Column("net_income", Numeric(20, 0)),
+    Column("gross_margin", Numeric(12, 6)),
+    Column("fcf", Numeric(20, 0)),
+    Column("net_debt", Numeric(20, 0)),
+    Column("revenue_yoy", Numeric(12, 6)),
+    Column("ni_yoy", Numeric(12, 6)),
+    _created_at(),
+)
+
+us_option_candidate = Table(
+    "us_option_candidate", metadata,
+    Column("plan_date", String(8), primary_key=True),
+    Column("code", String(12), primary_key=True),
+    Column("strategy", String(4), primary_key=True),       # csp | cc
+    Column("expiry", String(8), primary_key=True),
+    Column("strike", Numeric(16, 4), primary_key=True),
+    Column("premium", Numeric(16, 4)),                     # mid
+    Column("dte", Integer),
+    Column("annualized_yield", Numeric(12, 6)),
+    Column("safety_margin", Numeric(12, 6)),               # 1 - strike/close（CSP）
+    Column("collateral", Numeric(20, 2)),                  # strike*100（CSP）
+    Column("iv", Numeric(12, 6)),
+    Column("open_interest", Numeric(12, 0)),
+    Column("reason", String(255)),
+)
+
+us_action_plan = Table(
+    "us_action_plan", metadata,
+    Column("plan_date", String(8), primary_key=True),
+    Column("code", String(12), primary_key=True),
+    Column("sleeve", String(12), primary_key=True),        # core|income|satellite|cash
+    Column("action", String(8)),                           # hold|buy|watch|trim|sell|csp|cc
+    Column("grade", String(2)),                            # A|B|C（卫星仓确定性）
+    Column("target_value", Numeric(20, 2)),
+    Column("source_tag", String(8)),                       # 成长|修复|造血
+    Column("reason", String(400)),                         # 〔规则US-xx〕可溯源
+)
+
+us_plan_account = Table(
+    "us_plan_account", metadata,
+    Column("plan_date", String(8), primary_key=True),
+    Column("total_asset", Numeric(20, 2)),
+    Column("cash", Numeric(20, 2)),
+    Column("market_value", Numeric(20, 2)),
+    Column("vix", Numeric(12, 4)),
+    Column("vix_regime", String(8)),                       # calm|alert|panic
+    Column("spy_trend", String(8)),                        # above|below（200日线）
+    Column("drawdown", Numeric(12, 6)),                    # SPY 距一年高点回撤
+    Column("notes", String(400)),
+)
+
+us_account_snapshot = Table(
+    "us_account_snapshot", metadata,
+    Column("snapshot_date", String(8), primary_key=True),
+    Column("cash", Numeric(20, 2)),
+    Column("market_value", Numeric(20, 2)),
+    Column("total_asset", Numeric(20, 2)),
+    _created_at(),
+)
+
+us_current_holding = Table(
+    "us_current_holding", metadata,
+    Column("code", String(12), primary_key=True),
+    Column("shares", Numeric(16, 4)),
+    Column("cost_price", Numeric(16, 4)),
+    Column("sleeve", String(12)),
+    Column("entry_date", String(8)),
+    _created_at(),
+)
+
+
 # 关键列补丁：老库已存在的表按需补列（create_all 不会改已存在表）。
 _COLUMN_PATCHES: dict[str, dict[str, str]] = {
     "portfolio_target": {"grade": "VARCHAR(2)", "source": "VARCHAR(16)"},
