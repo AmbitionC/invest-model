@@ -55,9 +55,23 @@ def run_update(engine, watchlist_path: str) -> dict:
         if repo.table_exists("us_stock_daily") else 0
     period = C.HISTORY_PERIOD if not have else "3mo"
     bars = ds.fetch_daily(codes + [C.VIX_CODE], period=period)
+    if bars.empty:                       # yahoo 对 GH runner 偶发限流：退避重试一次
+        import time
+        logger.warning("us daily 批量为空（疑限流），30s 后缩窗重试")
+        time.sleep(30)
+        bars = ds.fetch_daily(codes + [C.VIX_CODE], period="1mo")
     if not bars.empty:
         stats["us_stock_daily"] = repo.upsert(
             "us_stock_daily", bars, ["code", "trade_date"])
+        stats["max_trade_date"] = str(bars["trade_date"].max())
+    else:
+        stats["us_stock_daily"] = 0
+        try:                             # 数据没推进要有人知道（A股 fear 同款告警模式）
+            from faas import gh_notify
+            gh_notify.alert("us_update", RuntimeError(
+                "yfinance 日线两次拉取均为空（疑被限流）——本日美股数据未推进"))
+        except Exception:  # noqa: BLE001
+            pass
 
     # 季度基本面（仅个股）
     n = 0
