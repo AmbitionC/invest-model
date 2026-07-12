@@ -1,187 +1,329 @@
 {
-  "generated_at": "2026-06-24T01:22:54.378179",
-  "version": "rk_on",
+  "generated_at": "2026-07-12T02:11:29.925552",
+  "version": "rank_test",
   "run_id": 2,
   "metrics": {
-    "total_return": -0.047162,
-    "annual_return": -0.022915,
-    "annual_vol": 0.063736,
-    "sharpe": -0.359529,
-    "sortino": -0.418182,
-    "max_drawdown": 0.120265,
-    "calmar": -0.190537,
-    "win_rate": 0.497619,
-    "avg_position_count": 4.111324,
-    "turnover_total": 36.631881,
-    "n_days": 521,
-    "benchmark_total_return": 0.313933,
-    "benchmark_annual_return": 0.139979,
-    "alpha": -0.056579,
-    "beta": 0.240493,
-    "avg_invested": 0.2572
+    "total_return": 0.614694,
+    "annual_return": 0.096212,
+    "annual_vol": 0.140121,
+    "sharpe": 0.686636,
+    "sortino": 1.204573,
+    "max_drawdown": 0.182278,
+    "calmar": 0.527831,
+    "win_rate": 0.513057,
+    "avg_position_count": 29.779908,
+    "turnover_total": 47.610391,
+    "n_days": 1304,
+    "benchmark_total_return": 0.383974,
+    "benchmark_annual_return": 0.064282,
+    "alpha": 0.042678,
+    "beta": 0.832796,
+    "avg_invested": 0.8424
   },
   "health": {
     "recent_factor_ic": {
-      "gross_margin": 0.1243,
-      "lowvol_20": 0.0927,
-      "profit_yoy": 0.0851,
-      "low_turnover": 0.0814,
-      "sp": 0.0344,
-      "mom_60": 0.0311,
-      "mom_120": 0.029,
-      "reversal_5": -0.0269,
-      "rev_yoy": -0.0205,
-      "ep": 0.0191,
-      "roa": -0.012,
-      "bp": -0.009,
-      "roe": 0.0069,
-      "small_size": 0.0035
+      "small_size": -0.1464,
+      "low_turnover": -0.0716,
+      "roe": 0.0603,
+      "roa": 0.0472,
+      "gross_margin": -0.0416,
+      "profit_yoy": -0.0274,
+      "sp": -0.0254,
+      "reversal_5": -0.0239,
+      "ep": -0.0192,
+      "mom_120": 0.018,
+      "mom_60": -0.0157,
+      "bp": -0.012,
+      "lowvol_20": 0.0068,
+      "rev_yoy": 0.0068
+    },
+    "candidate_factor_ic": {
+      "dividend_yield": -0.0467,
+      "bp_ex_goodwill": -0.0458,
+      "growth_accel": -0.0214
     },
     "factor_ic_full": {
-      "bp": 0.0076,
-      "ep": 0.0168,
-      "gross_margin": 0.0371,
-      "low_turnover": 0.0658,
-      "lowvol_20": 0.0107,
-      "mom_120": 0.0424,
-      "mom_60": 0.0159,
-      "profit_yoy": 0.0694,
-      "rev_yoy": 0.0381,
-      "reversal_5": -0.0312,
-      "roa": 0.0716,
-      "roe": 0.0892,
-      "small_size": -0.0086,
-      "sp": 0.0234
+      "bp": -0.003,
+      "bp_ex_goodwill": -0.0072,
+      "dividend_yield": -0.013,
+      "ep": 0.0279,
+      "gross_margin": 0.0347,
+      "growth_accel": 0.0063,
+      "low_turnover": -0.0215,
+      "lowvol_20": 0.0002,
+      "mom_120": 0.0217,
+      "mom_60": 0.0086,
+      "profit_yoy": 0.0082,
+      "rev_yoy": 0.025,
+      "reversal_5": 0.0179,
+      "roa": 0.0418,
+      "roe": 0.0538,
+      "small_size": -0.0276,
+      "sp": 0.0224
     },
-    "universe_avg_size": 40.0,
-    "universe_periods": 24,
-    "universe_min_size": 40,
-    "portfolio_avg_holdings": 15.0,
-    "warnings": [
-      "universe 平均仅 40.0 只(<50)：截面过小，因子 IC 与回测结果不可信，组合退化为集中持仓。请先 `--mode update` 补全全市场行情后重跑。"
-    ],
-    "trustworthy": false
+    "candidate_ic_periods": {
+      "bp_ex_goodwill": 57,
+      "dividend_yield": 59,
+      "growth_accel": 54
+    },
+    "universe_avg_size": 81.0,
+    "universe_periods": 60,
+    "universe_min_size": 81,
+    "portfolio_avg_holdings": 30.0,
+    "quality_screen": {
+      "asof": "20251201",
+      "dist": {
+        "0": 78,
+        "1": 1,
+        "4": 1,
+        "5": 1
+      },
+      "flagged2plus": 2,
+      "portfolio_hits_2plus": 2
+    },
+    "warnings": [],
+    "trustworthy": true
   },
   "rebalance": "monthly",
-  "latest_rebalance_date": "20221201",
+  "latest_rebalance_date": "20251201",
   "latest_portfolio": [
     {
-      "code": "000060.SZ",
-      "weight": 0.09967599556114667,
-      "rank": 2,
-      "gross_exposure": 0.9967599556066751,
-      "grade": null,
-      "source": "quant"
-    },
-    {
-      "code": "600030.SH",
-      "weight": 0.09967599556114667,
-      "rank": 3,
-      "gross_exposure": 0.9967599556066751,
-      "grade": null,
-      "source": "quant"
-    },
-    {
-      "code": "600058.SH",
-      "weight": 0.09967599556114667,
+      "code": "600076.SH",
+      "weight": 0.057795744190882466,
       "rank": 1,
-      "gross_exposure": 0.9967599556066751,
+      "gross_exposure": 0.8664866956718966,
       "grade": null,
       "source": "quant"
     },
     {
-      "code": "600002.SH",
-      "weight": 0.09967599556066752,
-      "rank": 4,
-      "gross_exposure": 0.9967599556066751,
-      "grade": null,
-      "source": "quant"
-    },
-    {
-      "code": "000006.SZ",
-      "weight": 0.09967599556042793,
-      "rank": 5,
-      "gross_exposure": 0.9967599556066751,
-      "grade": null,
-      "source": "quant"
-    },
-    {
-      "code": "000016.SZ",
-      "weight": 0.09061454141857085,
-      "rank": 6,
-      "gross_exposure": 0.9967599556066751,
+      "code": "600108.SH",
+      "weight": 0.05406535113835609,
+      "rank": 2,
+      "gross_exposure": 0.8664866956718966,
       "grade": null,
       "source": "quant"
     },
     {
       "code": "000042.SZ",
-      "weight": 0.08155308727671376,
+      "weight": 0.051067689507847486,
+      "rank": 3,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "000088.SZ",
+      "weight": 0.05084603040004092,
+      "rank": 4,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "000034.SZ",
+      "weight": 0.04663724991314405,
+      "rank": 5,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "000048.SZ",
+      "weight": 0.04642603464185131,
+      "rank": 6,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "600090.SH",
+      "weight": 0.0449969543014522,
       "rank": 7,
-      "gross_exposure": 0.9967599556066751,
+      "gross_exposure": 0.8664866956718966,
       "grade": null,
       "source": "quant"
     },
     {
-      "code": "000004.SZ",
-      "weight": 0.07249163313485667,
+      "code": "600054.SH",
+      "weight": 0.043484095445206955,
       "rank": 8,
-      "gross_exposure": 0.9967599556066751,
+      "gross_exposure": 0.8664866956718966,
       "grade": null,
       "source": "quant"
     },
     {
-      "code": "000010.SZ",
-      "weight": 0.0634301789929996,
+      "code": "000032.SZ",
+      "weight": 0.039630697701354974,
       "rank": 9,
-      "gross_exposure": 0.9967599556066751,
+      "gross_exposure": 0.8664866956718966,
       "grade": null,
       "source": "quant"
     },
     {
-      "code": "000056.SZ",
-      "weight": 0.054368724851142525,
+      "code": "000090.SZ",
+      "weight": 0.03812188963206429,
       "rank": 10,
-      "gross_exposure": 0.9967599556066751,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "600070.SH",
+      "weight": 0.03683119878320036,
+      "rank": 11,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "600096.SH",
+      "weight": 0.036366164838778706,
+      "rank": 12,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "000020.SZ",
+      "weight": 0.0330820580310525,
+      "rank": 13,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "000050.SZ",
+      "weight": 0.03063466082343418,
+      "rank": 14,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "000026.SZ",
+      "weight": 0.027100614303536275,
+      "rank": 15,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "000104.SZ",
+      "weight": 0.026960508493524646,
+      "rank": 16,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "000008.SZ",
+      "weight": 0.026724775086998668,
+      "rank": 17,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "600006.SH",
+      "weight": 0.025101815233598824,
+      "rank": 18,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "000044.SZ",
+      "weight": 0.02411974557610028,
+      "rank": 19,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "600088.SH",
+      "weight": 0.022577994519702556,
+      "rank": 20,
+      "gross_exposure": 0.8664866956718966,
       "grade": null,
       "source": "quant"
     },
     {
       "code": "600010.SH",
-      "weight": 0.045307270709285426,
-      "rank": 11,
-      "gross_exposure": 0.9967599556066751,
+      "weight": 0.021201000754831074,
+      "rank": 21,
+      "gross_exposure": 0.8664866956718966,
       "grade": null,
       "source": "quant"
     },
     {
-      "code": "000030.SZ",
-      "weight": 0.036245816567428334,
-      "rank": 12,
-      "gross_exposure": 0.9967599556066751,
+      "code": "600040.SH",
+      "weight": 0.01507354470695514,
+      "rank": 22,
+      "gross_exposure": 0.8664866956718966,
       "grade": null,
       "source": "quant"
     },
     {
-      "code": "000036.SZ",
-      "weight": 0.027184362425571262,
-      "rank": 13,
-      "gross_exposure": 0.9967599556066751,
+      "code": "600082.SH",
+      "weight": 0.014895861017304089,
+      "rank": 23,
+      "gross_exposure": 0.8664866956718966,
       "grade": null,
       "source": "quant"
     },
     {
-      "code": "600050.SH",
-      "weight": 0.018122908283714167,
-      "rank": 14,
-      "gross_exposure": 0.9967599556066751,
+      "code": "600020.SH",
+      "weight": 0.011047474013808975,
+      "rank": 24,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "000110.SZ",
+      "weight": 0.01028179151643003,
+      "rank": 25,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "600032.SH",
+      "weight": 0.008619318194610988,
+      "rank": 26,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "600080.SH",
+      "weight": 0.008526460426285007,
+      "rank": 27,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "600004.SH",
+      "weight": 0.006352014998325041,
+      "rank": 28,
+      "gross_exposure": 0.8664866956718966,
       "grade": null,
       "source": "quant"
     },
     {
       "code": "600014.SH",
-      "weight": 0.009061454141857083,
-      "rank": 15,
-      "gross_exposure": 0.9967599556066751,
+      "weight": 0.005651620838528392,
+      "rank": 29,
+      "gross_exposure": 0.8664866956718966,
+      "grade": null,
+      "source": "quant"
+    },
+    {
+      "code": "600016.SH",
+      "weight": 0.002266336642690229,
+      "rank": 30,
+      "gross_exposure": 0.8664866956718966,
       "grade": null,
       "source": "quant"
     }

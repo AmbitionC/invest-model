@@ -23,7 +23,9 @@ from invest_model.repositories.base import BaseRepository  # noqa: E402
 from invest_model.sources.tushare_client import TushareClient  # noqa: E402
 
 # E9 双指数：基准三兄弟 + 创业板指（重远 60 日线论述的主对象）
-DEFAULT_CODES = [*BENCHMARKS, "399006.SZ"]
+# E10 底仓验证：中证红利低波(H30269) + 中证红利(000922)——价格指数，权限不足时
+# get_index_daily 返回空并 WARN，E10 会如实降级"数据不足不判定"
+DEFAULT_CODES = [*BENCHMARKS, "399006.SZ", "H30269.CSI", "000922.CSI"]
 
 
 def main() -> None:
