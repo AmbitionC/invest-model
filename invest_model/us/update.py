@@ -75,9 +75,46 @@ def run_update(engine, watchlist_path: str) -> dict:
         n += repo.upsert("us_fundamental_q", q, ["code", "quarter_end"])
     stats["us_fundamental_q"] = n
 
+    stats["us_valuation"] = _persist_valuation(repo, watch)
     stats["us_account_snapshot"] = _persist_account_snapshot(repo)
     logger.info(f"us update 完成：{stats}")
     return stats
+
+
+def _persist_valuation(repo: BaseRepository, watch: list[dict]) -> int:
+    """估值锚快照（V2）：逐个股拉 TTM 估值 → 回本周期/分档/接盘价/追高旗 落库。"""
+    from invest_model.us import valuation as V
+    latest = repo.read_sql(
+        "SELECT MAX(trade_date) d FROM us_stock_daily WHERE code!='^VIX'")["d"].iloc[0]
+    if latest is None:
+        return 0
+    rows = []
+    for w in watch:
+        if w["sleeve_hint"] == "core":
+            continue
+        code = w["code"]
+        v = ds.fetch_valuation(code)
+        px = repo.read_sql(
+            "SELECT close FROM us_stock_daily WHERE code=:c ORDER BY trade_date",
+            {"c": code})
+        closes = px["close"] if not px.empty else pd.Series(dtype=float)
+        close = float(closes.iloc[-1]) if len(closes) else None
+        pb = V.payback_years(v.get("market_cap"), v.get("net_cash"),
+                             v.get("fcf_ttm"), v.get("ni_ttm")) if v else None
+        vd = V.verdict(pb)
+        rows.append({
+            "code": code, "asof": str(latest),
+            "market_cap": v.get("market_cap"), "net_cash": v.get("net_cash"),
+            "fcf_ttm": v.get("fcf_ttm"), "ni_ttm": v.get("ni_ttm"),
+            "payback_years": (9999 if pb == float("inf") else
+                              round(pb, 2) if pb is not None else None),
+            "verdict": vd,
+            "anchor_price": V.anchor_price(close, pb),
+            "chase_high": int(V.chase_high_flag(closes, vd)),
+        })
+    if not rows:
+        return 0
+    return repo.upsert("us_valuation", pd.DataFrame(rows), ["code", "asof"])
 
 
 def _persist_account_snapshot(repo: BaseRepository) -> int:

@@ -30,8 +30,10 @@ def growth_accel(q: pd.DataFrame, col: str = "net_income") -> float | None:
 
 
 def mine_probes(q: pd.DataFrame) -> list[str]:
-    """排雷探针（触发=深挖信号，非定罪；宁错杀口径只用于组合决策）。
-    ① FCF/净利背离连续两季；② 净债务连升且为正；③ 毛利率连续两季下滑。"""
+    """排雷探针（触发=深挖信号，非定罪；宁错杀口径只用于组合决策）。V2 五探针：
+    ① FCF/净利背离连续两季；② 净债务连升且为正；③ 毛利率连续两季下滑；
+    ④ capex黑洞（capex>净利×1.2 连续两季=以战养战，全哥AI硬件教训：Meta/美光）；
+    ⑤ 经营现金流为负连续两季（假利润，全哥江波龙例：利润700倍、现金流−20亿）。"""
     flags: list[str] = []
     if q is None or q.empty:
         return flags
@@ -49,6 +51,16 @@ def mine_probes(q: pd.DataFrame) -> list[str]:
     gm = pd.to_numeric(q.get("gross_margin"), errors="coerce").dropna()
     if len(gm) >= 3 and gm.iloc[-1] < gm.iloc[-2] < gm.iloc[-3]:
         flags.append("毛利率连续两季下滑")
+    if "capex" in q.columns:
+        cap = pd.to_numeric(q.get("capex"), errors="coerce")
+        rec = [(c, n) for c, n in zip(cap.tail(2), ni.tail(2))
+               if pd.notna(c) and pd.notna(n) and n > 0]
+        if len(rec) == 2 and all(c > n * C.PROBE_CAPEX_NI for c, n in rec):
+            flags.append("capex黑洞(连续两季capex>1.2×净利,以战养战)")
+    if "ocf" in q.columns:
+        ocf = pd.to_numeric(q.get("ocf"), errors="coerce").dropna()
+        if len(ocf) >= 2 and ocf.iloc[-1] < 0 and ocf.iloc[-2] < 0:
+            flags.append("经营现金流连续两季为负(假利润)")
     return flags
 
 

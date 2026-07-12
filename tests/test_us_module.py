@@ -17,6 +17,7 @@ from invest_model.us import config as C  # noqa: E402
 from invest_model.us import fundamentals as F  # noqa: E402
 from invest_model.us import options as O  # noqa: E402
 from invest_model.us import signals as S  # noqa: E402
+from invest_model.us import valuation as V  # noqa: E402
 
 
 # ── 信号 ────────────────────────────────────────────────────
@@ -42,10 +43,10 @@ def test_vix_regime_and_dip_window():
     assert S.dip_window(35, 0.05) is False                # 回撤不够
 
 
-def test_selling_puts_gate():
-    assert S.selling_puts_allowed(18, "above") is True
-    assert S.selling_puts_allowed(35, "above") is False   # 恐慌停卖
-    assert S.selling_puts_allowed(18, "below") is False   # 破线停卖
+def test_selling_puts_mode():
+    assert S.selling_puts_mode(18, "above") == "normal"
+    assert S.selling_puts_mode(35, "above") == "strict"   # 恐慌切strict（不停卖）
+    assert S.selling_puts_mode(18, "below") == "strict"   # 破线切strict
 
 
 # ── 基本面 ───────────────────────────────────────────────────
@@ -96,6 +97,44 @@ def test_certainty_grade_rules():
     assert g == "B" and "深度不足" in why
 
 
+# ── 估值锚（V2，全哥"买股票=买公司=算回本周期"）──────────────────
+
+def test_payback_years_and_verdict():
+    # 市值1000、净现金100、FCF 60、净利90 → EV=900、保守取60 → 15年=cheap边界
+    pb = V.payback_years(1000, 100, 60, 90)
+    assert pb == 15.0 and V.verdict(pb) == "cheap"
+    assert V.verdict(20.0) == "fair"
+    assert V.verdict(30.0) == "expensive"
+    assert V.payback_years(1000, 0, -5, 10) == float("inf")   # 保守取负FCF→不赚真钱
+    assert V.verdict(float("inf")) == "expensive"
+    assert V.verdict(None) == "unknown"
+    assert V.payback_years(1000, 1200, 10, 10) == 0.0         # 市值<净现金：白送
+
+
+def test_anchor_price():
+    assert V.anchor_price(100.0, 30.0) == 50.0    # 回本30年→接盘价打对折
+    assert V.anchor_price(100.0, 12.0) == 100.0   # 已cheap→锚=现价
+    assert V.anchor_price(100.0, float("inf")) is None  # 不赚真钱没有心甘情愿价
+
+
+def test_chase_high_flag():
+    rally = pd.Series([100.0] * 100 + list(np.linspace(100, 190, 152)))  # 距低点+90%
+    assert V.chase_high_flag(rally, "fair") is True
+    assert V.chase_high_flag(rally, "cheap") is False   # cheap 豁免（周期股底部翻倍）
+    flat = pd.Series([100.0] * 252)
+    assert V.chase_high_flag(flat, "expensive") is False
+
+
+def test_mine_probes_v2_capex_and_ocf():
+    ni = [100] * 8
+    q = _q(ni)
+    q["capex"] = [150] * 8                      # capex=1.5×净利 连续
+    assert any("capex黑洞" in f for f in F.mine_probes(q))
+    q2 = _q(ni)
+    q2["ocf"] = [50] * 6 + [-10, -20]           # 经营现金流连续两季为负
+    assert any("经营现金流" in f for f in F.mine_probes(q2))
+
+
 # ── 期权打分 ─────────────────────────────────────────────────
 
 def _chain(close=50.0):
@@ -126,6 +165,15 @@ def test_score_csp_filters_and_ranks():
 def test_score_csp_quality_gate_and_budget():
     assert O.score_csp(_chain(), 50.0, 6000.0, quality_ok=False).empty  # C级不卖
     assert O.score_csp(_chain(), 50.0, 3000.0).empty                    # 担保买不起
+
+
+def test_score_csp_anchor_caps_strike():
+    """V2：行权价必须 ≤ 心甘情愿接盘价（估值锚），strict 再打九折。"""
+    got = O.score_csp(_chain(), 50.0, 6000.0, anchor=45.0)
+    assert not got.empty and (got["strike"] <= 45.0).all()   # 47.5 被锚排除
+    strict = O.score_csp(_chain(), 50.0, 6000.0, anchor=45.0, mode="strict")
+    assert strict.empty or (strict["strike"] <= 40.5).all()  # 45×0.9
+    assert O.score_csp(_chain(), 50.0, 6000.0, anchor=None, mode="strict").empty  # 无锚恐慌不卖
 
 
 def test_score_cc_never_locks_loss():
@@ -165,6 +213,11 @@ def us_db(tmp_path, monkeypatch):
     q["ni_yoy"] = [None] * 4 + [0.3] * 4
     q["revenue_yoy"] = q["ni_yoy"]
     repo.upsert("us_fundamental_q", q, ["code", "quarter_end"])
+    repo.upsert("us_valuation", pd.DataFrame([{
+        "code": "KO", "asof": str(dates[-1]), "market_cap": 200_000_000_000,
+        "net_cash": 0, "fcf_ttm": 16_700_000_000, "ni_ttm": 17_000_000_000,
+        "payback_years": 12.0, "verdict": "cheap", "anchor_price": 50.0,
+        "chase_high": 0}]), ["code", "asof"])
     repo.upsert("us_account_snapshot", pd.DataFrame([{
         "snapshot_date": str(dates[-1]), "cash": 20000.0,
         "market_value": 0.0, "total_asset": 20000.0}]), ["snapshot_date"])
@@ -195,7 +248,9 @@ def test_build_plan_end_to_end(us_db):
     assert "核心锚" in md and "期权造血" in md and "US-C1" in md
 
 
-def test_build_plan_panic_pauses_puts(us_db):
+def test_build_plan_panic_strict_mode(us_db):
+    """V2：恐慌不停卖——切 strict（只允许 cheap 档+接盘锚九折以下行权价）。
+    KO 是 cheap 档、锚 50 → strict cap=45 → 40/45 两档 put 仍可入选。"""
     repo = BaseRepository(us_db)
     last = repo.read_sql("SELECT MAX(trade_date) d FROM us_stock_daily")["d"].iloc[0]
     repo.upsert("us_stock_daily", pd.DataFrame([{
@@ -204,15 +259,35 @@ def test_build_plan_panic_pauses_puts(us_db):
     from invest_model.us.plan import build_plan
     res = build_plan(us_db, fetch_chain=lambda code: _chain())
     repo2 = BaseRepository(us_db)
-    income = repo2.read_sql(
-        "SELECT * FROM us_action_plan WHERE sleeve='income'")
-    assert any("US-O4" in str(r) for r in income["reason"]), "恐慌应暂停新卖put"
-    assert res["options"] == 0
+    income = repo2.read_sql("SELECT * FROM us_action_plan WHERE sleeve='income'")
+    assert any("strict" in str(r) for r in income["reason"]), "恐慌应切strict模式"
+    opts = repo2.read_sql(
+        "SELECT * FROM us_option_candidate WHERE strategy='csp'")
+    assert not opts.empty, "strict下cheap档仍应有候选（情绪化最重=期权最好时机）"
+    assert (opts["strike"] <= 45.0 + 1e-9).all(), "strict行权价必须≤锚×0.9"
+
+
+def test_build_plan_expensive_blocks_buy(us_db):
+    """V2 估值闸：expensive 档即使 B 级也不 buy（高于估值绝不碰）。"""
+    repo = BaseRepository(us_db)
+    last = repo.read_sql("SELECT MAX(asof) d FROM us_valuation")["d"].iloc[0]
+    repo.upsert("us_valuation", pd.DataFrame([{
+        "code": "KO", "asof": str(last), "market_cap": 200_000_000_000,
+        "net_cash": 0, "fcf_ttm": 5_000_000_000, "ni_ttm": 6_000_000_000,
+        "payback_years": 40.0, "verdict": "expensive", "anchor_price": 18.75,
+        "chase_high": 0}]), ["code", "asof"])
+    from invest_model.us.plan import build_plan
+    build_plan(us_db, fetch_chain=lambda code: _chain())
+    repo2 = BaseRepository(us_db)
+    sat = repo2.read_sql(
+        "SELECT * FROM us_action_plan WHERE sleeve='satellite' AND code='KO'")
+    assert sat.iloc[0]["action"] == "watch"
+    assert "US-V1" in str(sat.iloc[0]["reason"])
 
 
 def test_schema_contains_us_tables(us_db):
     repo = BaseRepository(us_db)
     for t in ("us_stock_daily", "us_stock_info", "us_fundamental_q",
               "us_option_candidate", "us_action_plan", "us_plan_account",
-              "us_account_snapshot", "us_current_holding"):
+              "us_account_snapshot", "us_current_holding", "us_valuation"):
         assert repo.table_exists(t), t

@@ -720,6 +720,24 @@ us_fundamental_q = Table(
     Column("net_debt", Numeric(20, 0)),
     Column("revenue_yoy", Numeric(12, 6)),
     Column("ni_yoy", Numeric(12, 6)),
+    Column("capex", Numeric(20, 0)),                       # V2：以战养战黑洞探针
+    Column("ocf", Numeric(20, 0)),                         # V2：经营现金流（假利润探针）
+    _created_at(),
+)
+
+# 估值锚快照（V2，全哥"买股票=买公司=算回本周期"）：每日 run 覆盖式 upsert。
+us_valuation = Table(
+    "us_valuation", metadata,
+    Column("code", String(12), primary_key=True),
+    Column("asof", String(8), primary_key=True),           # 数据日 YYYYMMDD
+    Column("market_cap", Numeric(22, 0)),
+    Column("net_cash", Numeric(22, 0)),
+    Column("fcf_ttm", Numeric(20, 0)),
+    Column("ni_ttm", Numeric(20, 0)),
+    Column("payback_years", Numeric(10, 2)),               # inf 存 9999
+    Column("verdict", String(12)),                         # cheap|fair|expensive|unknown
+    Column("anchor_price", Numeric(16, 4)),                # 心甘情愿接盘价
+    Column("chase_high", Integer),                         # 1=追高禁买中
     _created_at(),
 )
 
@@ -787,6 +805,8 @@ us_current_holding = Table(
 
 # 关键列补丁：老库已存在的表按需补列（create_all 不会改已存在表）。
 _COLUMN_PATCHES: dict[str, dict[str, str]] = {
+    # 美股 V2：capex黑洞/假利润探针数据列（首版建表无此两列的老库补齐）
+    "us_fundamental_q": {"capex": "DECIMAL(20,0)", "ocf": "DECIMAL(20,0)"},
     "portfolio_target": {"grade": "VARCHAR(2)", "source": "VARCHAR(16)"},
     "stock_fundamental": {"dv_ratio": "DECIMAL(12,6)", "dv_ttm": "DECIMAL(12,6)"},
     "stock_fina_indicator": {"q_sales_yoy": "DECIMAL(12,4)",

@@ -50,7 +50,14 @@ def core_target_ratio(trend: str) -> float:
     return 1.0 if trend == "above" else C.CORE_BELOW_TREND
 
 
-def selling_puts_allowed(vix: float | None, trend: str) -> bool:
-    """新卖 put 闸（US-O4，对手盘思维）：VIX>panic 或基准破 200 日线 → 暂停新卖。
-    恐慌时权利金最诱人、被行权风险也最大——先问对手为什么高价买保险。"""
-    return vix_regime(vix) != "panic" and trend == "above"
+def selling_puts_mode(vix: float | None, trend: str) -> str:
+    """新卖 put 模式（US-O4 V2）：normal / strict。
+
+    V1 恐慌停卖（重远对手盘思维）；V2 采信全哥（期权实战者）——"市场情绪化最重、
+    分歧最大时=期权最好的时候"（IV 最高权利金最厚 + 人弃我取）。但叠加守本金收紧：
+    恐慌/破线时切 strict——只允许 cheap 档标的 + 行权价 ≤ 估值锚×0.9（恐慌吃厚
+    权利金的前提是接货价便宜到心甘情愿）。两位博主的调和：重远警告的是"贪权利金
+    卖在危险价位"，估值锚恰好排除了这种卖法。"""
+    if vix_regime(vix) == "panic" or trend == "below":
+        return "strict"
+    return "normal"
