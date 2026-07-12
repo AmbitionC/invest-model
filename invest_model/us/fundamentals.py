@@ -61,10 +61,15 @@ def certainty_grade(accel: float | None, flags: list[str],
     if accel is not None and accel <= C.ACCEL_WARN:
         return "C", (f"增速失速预警：同比一阶差分 {accel:+.0%}（戴维斯双杀风险，"
                      f"PE端主导下跌的数学见验证库）〔规则US-F1〕")
-    if ni_yoy is None or accel is None:
+    if ni_yoy is None:
         return "C", "基本面数据不足，降级仅追踪（数据为王：不装数据）〔规则US-F3〕"
-    if ni_yoy > 0 and accel > 0:
+    if ni_yoy <= 0:
+        return "C", f"净利同比 {ni_yoy:+.0%} 为负，仅追踪〔规则US-F3〕"
+    if accel is None:
+        # 同比为正、零红旗，但 yfinance 季报深度不足以算加速度——B 是"基本确信"档，
+        # 加速度是 A 档的额外要求；深度不足只挡 A 不挡 B（不装数据、也不无谓错杀）。
+        return "B", (f"净利同比 {ni_yoy:+.0%}、零红旗（历史深度不足以判加速度，"
+                     f"仅挡A不挡B）〔规则US-F3〕")
+    if accel > 0:
         return "A", f"净利同比 {ni_yoy:+.0%} 且加速 {accel:+.0%}，零红旗〔规则US-F3〕"
-    if ni_yoy > 0:
-        return "B", f"净利同比 {ni_yoy:+.0%}、未失速，零红旗〔规则US-F3〕"
-    return "C", f"净利同比 {ni_yoy:+.0%} 为负，仅追踪〔规则US-F3〕"
+    return "B", f"净利同比 {ni_yoy:+.0%}、未失速，零红旗〔规则US-F3〕"

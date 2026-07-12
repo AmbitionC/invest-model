@@ -89,8 +89,11 @@ def test_certainty_grade_rules():
     assert g == "C" and "US-F1" in why
     g, why = F.certainty_grade(0.05, ["FCF与净利背离"], 0.30)       # 红旗一票否决
     assert g == "C" and "US-F2" in why
-    g, _ = F.certainty_grade(None, [], None)                      # 数据不足
+    g, _ = F.certainty_grade(None, [], None)                      # 完全无数据
     assert g == "C"
+    # 深度不足（yfinance仅5-6季）：同比正+零红旗 → B（仅挡A不挡B）
+    g, why = F.certainty_grade(None, [], 0.20)
+    assert g == "B" and "深度不足" in why
 
 
 # ── 期权打分 ─────────────────────────────────────────────────
