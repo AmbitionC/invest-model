@@ -45,7 +45,13 @@ def build_plan(engine, fetch_chain=None) -> dict:
     dd = S.drawdown_from_high(bench)
     regime = S.vix_regime(vix)
     dip = S.dip_window(vix, dd)
-    puts_ok = S.selling_puts_allowed(vix, trend)
+    put_mode = S.selling_puts_mode(vix, trend)
+
+    # ── 估值锚（V2，全哥"第一前提是便宜"）──
+    vals = repo.read_sql(
+        "SELECT code, payback_years, verdict, anchor_price, chase_high "
+        "FROM us_valuation WHERE asof=(SELECT MAX(asof) FROM us_valuation)")
+    val_map = {str(r["code"]): r for _, r in vals.iterrows()}
 
     # ── 账户 ──
     snap = repo.read_sql(
@@ -104,45 +110,77 @@ def build_plan(engine, fetch_chain=None) -> dict:
         graded.append((code, grade, why, ni_yoy))
     order = {"A": 0, "B": 1, "C": 2}
     graded.sort(key=lambda x: (order[x[1]], x[0]))
-    # 确定性决定仓位：A=满卫星仓 B=半仓 C=仅追踪（不给钱）
+    # V2 三闸合一：估值准入（第一前提是便宜）× 排雷/增速分级 × 追高禁令。
+    # 确定性决定仓位：A=满卫星仓 B=半仓 C=仅追踪；expensive/追高 一律不 buy。
     for code, grade, why, _ in graded:
         held = code in hold_map
+        v = val_map.get(code)
+        vd = str(v["verdict"]) if v is not None else "unknown"
+        pby = float(v["payback_years"]) if v is not None and pd.notna(v["payback_years"]) else None
+        chase = bool(int(v["chase_high"])) if v is not None and pd.notna(v["chase_high"]) else False
+        val_note = (f"回本{pby:.0f}年·{vd}" if pby is not None and pby < 9999
+                    else "不赚真钱" if pby is not None else "估值未知")
         target = sat_budget if grade == "A" else sat_budget / 2 if grade == "B" else 0.0
-        if grade == "C" and not held:
+        if grade == "C":
+            action = "sell" if held else "watch"
+            if held:
+                why += "；已持仓 → 降级离场（宁错杀）"
+        elif held:
+            # 持有中：估值贵不加仓但不因贵卖出（卖出只由基本面恶化触发——
+            # 全哥"别因情绪在估值性波动中割肉"，重远"持有是每期重新通过检验"）
+            action = "hold"
+        elif chase:
             action = "watch"
-        elif grade == "C" and held:
-            action = "sell"        # 降级即离场：宁错杀（US-F2）
-            why += "；已持仓 → 降级离场"
+            why += f"；追高禁令：距一年低点涨幅>{C.VAL_CHASE_RALLY:.0%}且非cheap（套牢你的是买贵）〔规则US-V3〕"
+        elif vd == "expensive":
+            action = "watch"
+            why += f"；估值闸：{val_note}——高于估值绝不碰，等回落或卖put等接〔规则US-V1〕"
+        elif vd in ("cheap", "fair"):
+            action = "buy" if (dip or grade == "A" or vd == "cheap") else "watch"
+            why += f"；估值 {val_note} 通过准入〔规则US-V1〕"
         else:
-            action = "hold" if held else "buy" if dip or grade == "A" else "watch"
+            action = "watch"
+            why += "；估值数据缺失，不装数据、仅观察〔规则US-V1〕"
         rows.append({
             "plan_date": plan_date, "code": code, "sleeve": "satellite",
             "action": action, "grade": grade,
-            "target_value": round(target, 2),
+            "target_value": round(target, 2) if action in ("buy", "hold") else
+                            (round(target, 2) if grade in ("A", "B") else 0.0),
             "source_tag": "修复" if dip else "成长", "reason": why})
 
-    # ── 3) 期权造血（US-O1~O4）──
+    # ── 3) 期权造血（US-O1~O4 V2：行权价锚定接盘价；恐慌切 strict 不停卖）──
     income_budget = total * C.SLEEVE_INCOME
-    if not puts_ok:
+    if put_mode == "strict":
         rows.append({
             "plan_date": plan_date, "code": "-", "sleeve": "income",
             "action": "hold", "grade": "-", "target_value": 0.0,
             "source_tag": "造血",
-            "reason": (f"暂停新卖put：VIX={vix:.1f}({regime}) / 趋势 {trend}——"
-                       f"恐慌时权利金最诱人、被行权风险也最大（对手盘思维）〔规则US-O4〕")})
-    elif fetch_chain is not None or _yf_available():
+            "reason": (f"strict模式：VIX={vix:.1f}({regime})/趋势{trend}——情绪化最重=IV最厚"
+                       f"=期权最好时机（全哥），但只允许 cheap 档+接盘锚九折以下的行权价"
+                       f"（守本金收紧）〔规则US-O4·V2〕")})
+    if fetch_chain is not None or _yf_available():
         fc = fetch_chain or _default_chain_fetcher
-        # C 级以外的、担保买得起的个股才卖 put（只对愿意持有的标的收权利金）
         grade_map = {c: g for c, g, _, _ in graded}
-        cand_codes = [c for c, g, _, _ in graded
-                      if g in ("A", "B")
-                      and (_last_close(repo, c) or 1e9) * 100 * (1 - C.OPT_MIN_SAFETY)
-                      <= income_budget]
+        # 准入：A/B 级 + 担保买得起；strict 模式再要求估值 cheap 档
+        cand_codes = []
+        for c, g, _, _ in graded:
+            if g not in ("A", "B"):
+                continue
+            v = val_map.get(c)
+            vd = str(v["verdict"]) if v is not None else "unknown"
+            if put_mode == "strict" and vd != "cheap":
+                continue
+            px = _last_close(repo, c) or 1e9
+            if px * 100 * (1 - C.OPT_MIN_SAFETY) <= income_budget:
+                cand_codes.append(c)
         for code in cand_codes[:6]:                    # 控制 API 量
             close = _last_close(repo, code)
-            chain = fc(code)
-            got = O.score_csp(chain, close, income_budget,
-                              quality_ok=grade_map.get(code) in ("A", "B"))
+            v = val_map.get(code)
+            anchor = (float(v["anchor_price"]) if v is not None
+                      and pd.notna(v["anchor_price"]) else None)
+            got = O.score_csp(fc(code), close, income_budget,
+                              quality_ok=grade_map.get(code) in ("A", "B"),
+                              anchor=anchor, mode=put_mode)
             if not got.empty:
                 opt_rows.append(got.head(3))
         for code, h in hold_map.items():
@@ -152,6 +190,10 @@ def build_plan(engine, fetch_chain=None) -> dict:
                     got = O.score_cc(fc(code), close,
                                      float(h["cost_price"] or 0), float(h["shares"]))
                     if not got.empty:
+                        # 全哥"判断偏高不大涨才卖call"：持仓估值 expensive 时优先推荐
+                        v = val_map.get(code)
+                        if v is not None and str(v["verdict"]) == "expensive":
+                            got["reason"] = got["reason"] + "（持仓已高估，优先收租〔US-O2·V2〕）"
                         opt_rows.append(got.head(2))
 
     opts = pd.concat(opt_rows, ignore_index=True) if opt_rows else pd.DataFrame()
@@ -235,5 +277,6 @@ def render_markdown(plan_date: str, account: dict, plan: pd.DataFrame,
                 f"| {float(o['annualized_yield']):.0%} | {float(o['safety_margin']):.0%} "
                 f"| ${float(o['collateral']):,.0f} |")
     lines.append("\n---\n*纯建议输出（人工执行）；每条规则编号见 docs/us_rulebook.md，"
-                 "方法论出处 life-teachers 美股专题篇。零杠杆、绝不裸卖期权。*")
+                 "方法论出处 life-teachers 美股专题篇（V2·全哥体系）。零杠杆、绝不裸卖期权、"
+                 "不做买方主仓。理性预期：三五年一倍已属顶尖，别追求一年多少倍。*")
     return "\n".join(lines)

@@ -54,3 +54,9 @@ PROBE_FCF_NI = _f("US_PROBE_FCF_NI", 0.5)  # FCF < 净利 50% 连续两季 = 红
 # ── 数据 ────────────────────────────────────────────────────
 HISTORY_PERIOD = os.getenv("US_HISTORY_PERIOD", "2y")   # 首次回填长度
 VIX_CODE = "^VIX"
+
+# ── 估值锚（V2 新增，全哥体系；规则 US-V1~V3）──────────────────
+VAL_CHEAP_YEARS = _f("US_VAL_CHEAP_YEARS", 15.0)   # 回本 ≤15年 = cheap（~6.7%收益率）
+VAL_FAIR_YEARS = _f("US_VAL_FAIR_YEARS", 25.0)     # 15-25年 = fair；>25 或不赚真钱 = expensive
+VAL_CHASE_RALLY = _f("US_VAL_CHASE_RALLY", 0.80)   # 距一年低点涨幅>80%且非cheap = 追高禁买
+PROBE_CAPEX_NI = _f("US_PROBE_CAPEX_NI", 1.2)      # capex/净利>1.2 = 以战养战黑洞探针

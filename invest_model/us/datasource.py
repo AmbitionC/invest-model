@@ -86,6 +86,8 @@ def fetch_fundamentals_q(code: str) -> pd.DataFrame:
             ni = _at(inc, "Net Income", col)
             gp = _at(inc, "Gross Profit", col)
             fcf = _at(cf, "Free Cash Flow", col)
+            capex = _at(cf, "Capital Expenditure", col)   # yfinance 为负值（现金流出）
+            ocf = _at(cf, "Operating Cash Flow", col)
             debt = _at(bs, "Total Debt", col)
             cash = _at(bs, "Cash And Cash Equivalents", col)
             rows.append({
@@ -94,6 +96,8 @@ def fetch_fundamentals_q(code: str) -> pd.DataFrame:
                 "revenue": rev, "net_income": ni,
                 "gross_margin": (gp / rev) if (gp is not None and rev) else None,
                 "fcf": fcf,
+                "capex": abs(capex) if capex is not None else None,
+                "ocf": ocf,
                 "net_debt": (debt - cash) if (debt is not None and cash is not None) else None,
             })
         return pd.DataFrame(rows)
@@ -135,3 +139,26 @@ def fetch_option_chain(code: str, dte_min: int, dte_max: int) -> pd.DataFrame:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"us options {code} 失败（本日无该标的期权候选）：{e}")
         return pd.DataFrame()
+
+
+def fetch_valuation(code: str) -> dict:
+    """估值快照（V2）：市值/净现金/TTM FCF/TTM 净利——回本周期引擎的原料。
+
+    来源 yfinance info（TTM 口径），字段缺失逐项置 None，由 valuation.payback_years
+    保守处理。ETF/指数返回空 dict（估值锚只适用于个股）。
+    """
+    try:
+        info = _yf().Ticker(code).info or {}
+        if info.get("quoteType") == "ETF" or code.startswith("^"):
+            return {}
+        cash = info.get("totalCash")
+        debt = info.get("totalDebt")
+        return {
+            "market_cap": info.get("marketCap"),
+            "net_cash": (cash - debt) if (cash is not None and debt is not None) else cash,
+            "fcf_ttm": info.get("freeCashflow"),
+            "ni_ttm": info.get("netIncomeToCommon"),
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"us valuation {code} 失败（该标的按 unknown 档处理）：{e}")
+        return {}
