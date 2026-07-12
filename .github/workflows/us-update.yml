@@ -42,4 +42,10 @@ jobs:
       - name: Install package + yfinance
         run: pip install -e . yfinance
       - name: Run us daily (update + plan + notify)
-        run: python scripts/us_daily.py
+        run: |
+          MODE=$(head -1 ops/us-invoke.trigger 2>/dev/null | tr -d ' \r\n' || echo daily)
+          if [ "$MODE" = "verify" ]; then
+            python scripts/us_daily.py --verify
+          else
+            python scripts/us_daily.py
+          fi
