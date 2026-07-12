@@ -39,6 +39,11 @@ def main() -> None:
         res = build_plan(engine)
         out["plan"] = res.get("plan")
         md = res.get("markdown")
+        if md and out.get("update") is not None:
+            u = out["update"]
+            md += (f"\n\n> 运行统计：日线+{u.get('us_stock_daily', 0)}行"
+                   f"（最新 {u.get('max_trade_date', '?')}）｜估值锚 "
+                   f"{u.get('us_valuation', 0)} 只｜基本面+{u.get('us_fundamental_q', 0)}行")
         if md and not args.no_notify:
             from faas import gh_notify
             day = res["plan"].split(":")[-1]
