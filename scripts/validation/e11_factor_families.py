@@ -79,17 +79,30 @@ def _load_ic(repo) -> pd.DataFrame:
     return df[df["horizon"] == main_h].assign(main_h=main_h)
 
 
+def _sparse_by_date(dates: list[str], vals: np.ndarray, horizon: int) -> np.ndarray:
+    """按**日期间隔**抽不重叠子样本：距上一保留记录 ≥ horizon 个交易日
+    （≈ horizon×1.45 个自然日）才保留。IC 记录可能本身就是月度稀疏的
+    （此前按"每 horizon 条记录抽 1"把 18 条月度记录错缩成 1 期）。"""
+    min_gap_days = max(1, int(horizon * 1.45))
+    ts = pd.to_datetime(pd.Series(dates), format="%Y%m%d")
+    keep, last = [], None
+    for i, t in enumerate(ts):
+        if last is None or (t - last).days >= min_gap_days:
+            keep.append(i)
+            last = t
+    return vals[keep]
+
+
 def factor_stats(df: pd.DataFrame, name: str) -> dict | None:
     sub = df[df["factor_name"] == name].sort_values("trade_date")
     if sub.empty:
         return None
     gap = int(sub["main_h"].iloc[0])
     full = sub["rank_ic"].to_numpy(dtype=float)
-    sparse = sub["rank_ic"].to_numpy(dtype=float)[::max(1, gap)]
+    sparse = _sparse_by_date([str(d) for d in sub["trade_date"]], full, gap)
     return {"n": len(full), "n_eff": len(sparse), "mean": float(np.nanmean(full)),
             "t": t_stat(sparse),
-            "recent_mean": float(np.nanmean(full[-RECENT_N * max(1, gap):]))
-            if len(full) else float("nan"),
+            "recent_mean": float(np.nanmean(full[-RECENT_N:])) if len(full) else float("nan"),
             "series": sub}
 
 
