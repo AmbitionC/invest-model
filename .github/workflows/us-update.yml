@@ -20,13 +20,18 @@ concurrency:
   group: us-update
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   us-daily:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
-      GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+      # 依次回退：专用 PAT → 仓库 GH_TOKEN secret → Actions 内置 token（已授 issues:write）
+      GITHUB_TOKEN: ${{ secrets.INVEST_GH_PAT || secrets.GH_TOKEN || github.token }}
       GITHUB_REPOSITORY: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
