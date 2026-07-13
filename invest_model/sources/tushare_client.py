@@ -142,10 +142,11 @@ class TushareClient(BaseSource):
             if _is_token_error(e):
                 raise RuntimeError(
                     f"Tushare Token 校验失败（原始报错: {e}）。常见原因：\n"
-                    "  1. Token 已过期 → 登录 https://tushare.pro → 用户中心 → Token，重新生成后写入 .env\n"
-                    "  2. Token 错误 → 检查 .env 中 TUSHARE_TOKEN 是否被截断/带了引号/有多余空格\n"
-                    "  3. 接口地址不对 → 在 config.yaml 的 sources.tushare.http_url "
-                    "或环境变量 TUSHARE_HTTP_URL 中配置官方文档给出的 http 镜像地址"
+                    "  1. Token 与镜像不匹配 → TUSHARE_TOKEN 必须是当前 TUSHARE_HTTP_URL 那家镜像自己发的 "
+                    "token（不同镜像 token 不通用；报「token不对」多是这个）；换镜像/续费后两者要成对更新\n"
+                    "  2. Token 已过期 → 到所购镜像/官网重新获取后更新 Secret\n"
+                    "  3. Token 格式 → 检查 TUSHARE_TOKEN 是否被截断/带了引号/有多余空格换行\n"
+                    "  4. 接口地址 → TUSHARE_HTTP_URL 是否指向正确镜像且路径正确（如 gyzcloud 需带 /api）"
                 ) from e
             raise
 

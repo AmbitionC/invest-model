@@ -9,7 +9,7 @@
 函数环境变量（必需）：
   INVEST_DB_URL       mysql+pymysql://user:pass@host:3306/invest?charset=utf8mb4
   TUSHARE_TOKEN       Tushare token（rt_k 实时价）
-  TUSHARE_HTTP_URL    如 https://minitick.top/
+  TUSHARE_HTTP_URL    镜像基地址，如 https://ts.gyzcloud.top/api（以 Secret 为准）
   GITHUB_TOKEN        fine-grained PAT，仅本仓库 Issues: Read and write
   GITHUB_REPOSITORY   AmbitionC/invest-model
 可选：LIVE_HARD_STOP=0.08  LIVE_PULLBACK=0.03  LIVE_BUY_WEIGHT=0.05

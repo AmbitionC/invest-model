@@ -6,11 +6,12 @@ sources:
     enabled: true
     retry_times: 3
     retry_delay: 2
-    rate_limit_per_min: 480
+    rate_limit_per_min: 140   # 与套餐频率上限对齐（月卡 150次/分钟，留余量）
     timeout: 30            # 单次 HTTP 超时秒数（防请求挂死）
-    # 数据服务基地址：使用 minitick.top 镜像（含 VIP 接口，如 fina_indicator_vip）。
-    # 也可在 .env 用 TUSHARE_HTTP_URL 覆盖；留空走官方 HTTPS。
-    http_url: "https://minitick.top/"
+    # 数据服务基地址：以 Action Secret / 环境变量 TUSHARE_HTTP_URL 为准（生产唯一真源）。
+    # 这里留空——不再硬编码任何镜像地址，避免 Secret 漏配时悄悄回退到过期镜像。
+    # 本地临时跑可在 .env 设 TUSHARE_HTTP_URL；留空且无环境变量则走官方 HTTPS。
+    http_url: ""
 
 # 数据库（连接信息从 .env 读取；本地验证用 --db sqlite:///./data/local.db 覆盖）
 database:

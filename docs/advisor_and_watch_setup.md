@@ -8,7 +8,7 @@
 | 前置项 | 用途 | 怎么配 |
 |---|---|---|
 | `TUSHARE_TOKEN` | 拉真实行情/估值、盘中实时价(`rt_k`) | GitHub Secrets，或本地 `.env` |
-| `TUSHARE_HTTP_URL` | 数据服务基地址（含 VIP 接口） | 一般填 `https://minitick.top/` |
+| `TUSHARE_HTTP_URL` | 数据服务基地址（含 VIP 接口） | 填当前镜像地址（如 `https://ts.gyzcloud.top/api`，随所购套餐给的地址为准，结尾按其文档要求带 `/api`） |
 | 真实数据入库 | 投顾录入要校验代码命中 `stock_info`；盯盘 MA/买点位来自 `stock_daily` | 见下方「数据回填」 |
 | 持久后端 | 信号/持仓/计划要留存 | 生产 MySQL（云端自动化）或本地 `data/real.db`（自己机器） |
 
@@ -87,7 +87,7 @@ python scripts/build_action_plan.py --advisor-led --risk --out results/action_pl
 | Secret（配法①） | `DB_PASS` | DB 密码（含特殊字符也行，代码会转义） |
 | Secret（配法②，替代①） | `INVEST_DB_URL` | `mysql+pymysql://用户:密码@host:3306/invest?charset=utf8mb4` |
 | Secret | `TUSHARE_TOKEN` | 你的 Tushare token |
-| Secret | `TUSHARE_HTTP_URL` | `https://minitick.top/` |
+| Secret | `TUSHARE_HTTP_URL` | 当前镜像地址，如 `https://ts.gyzcloud.top/api`（随套餐给的地址；生产唯一真源，代码不再硬编码） |
 | Variable(可选) | `INVEST_DB_NAME` | 覆盖库名，默认 `invest` |
 | Variable(可选) | `ACCOUNT_CASH` | 账户现金，如 `54089` |
 | Variable(可选) | `PLAN_ARGS` | 覆盖默认 `--advisor-led --risk --trend-filter --concentration medium --time-stop-days 8` |
@@ -117,7 +117,7 @@ python scripts/build_action_plan.py --advisor-led --risk --out results/action_pl
 4. **首次回填建议在本地机器跑**（已白名单 minitick），直接写 RDS，避免 Actions 单次时长限制：
    ```bash
    export INVEST_DB_URL='mysql+pymysql://用户:密码@RDS外网:3306/invest?charset=utf8mb4'
-   export TUSHARE_TOKEN=... TUSHARE_HTTP_URL=https://minitick.top/
+   export TUSHARE_TOKEN=... TUSHARE_HTTP_URL=https://ts.gyzcloud.top/api
    python scripts/run_pipeline.py --mode update --start 20190101
    python scripts/run_pipeline.py --mode all
    ```
