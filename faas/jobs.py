@@ -142,6 +142,27 @@ def _build_and_post_plan() -> dict:
     return {"plan": res}
 
 
+def _latest_closed_trade_day(repo) -> str | None:
+    """日历上「严格早于今天、必然已完全收盘」的最近交易日 —— 未推进类告警的判据。
+
+    只有当某个数据（恐慌/快照）落后于这个"铁定该有数据"的日子，才算真卡住。用它能
+    滤掉三类正常场景的误报：① 周末/节假日跑（今天本就没新交易日）② 同日重跑（日期没变
+    很正常）③ 盘中提前跑（今天虽是交易日但还没收盘、EOD 未出）。查询失败返回 None（不告警，
+    宁缺毋滥——当天真故障另有「数据更新失败」告警兜底）。"""
+    try:
+        today = gh_notify.bj_now().strftime("%Y%m%d")
+        if not repo.table_exists("trade_calendar"):
+            return None
+        df = repo.read_sql(
+            "SELECT MAX(cal_date) d FROM trade_calendar WHERE is_open=1 AND cal_date<:t",
+            {"t": today})
+        d = df["d"].iloc[0] if not df.empty else None
+        return str(d) if d is not None else None
+    except Exception as e:  # noqa: BLE001
+        print(f"trade_calendar 查询失败，未推进告警跳过（宁缺毋滥）：{e}")
+        return None
+
+
 def _persist_fear_daily() -> str:
     """恐慌指数按日落库（仪表盘历史曲线）；失败不阻断出计划。
 
@@ -158,16 +179,20 @@ def _persist_fear_daily() -> str:
         from scripts.fear_gauge import persist_fear
         engine = make_engine()
         repo = BaseRepository(engine)
-        prev = repo.read_sql("SELECT MAX(trade_date) d FROM fear_daily")["d"].iloc[0]
         g = fear_gauge(engine)
         persist_fear(engine, g)
         cur = str(g.get("date"))
-        if prev is not None and str(prev) == cur:
-            # 行情未推进到新交易日 → fear_daily 仍是同一天，仪表盘看起来「卡住」。
+        # 告警判据：只有当「日历上严格早于今天、必然已收盘的最近交易日」比恐慌日期更新时，
+        # 才算真卡住。旧逻辑用 prev==cur（跟上次比没前进）会在三类正常场景误报——
+        # ① 周末/节假日跑（今天本就没新数据）② 同日重跑（date 当然没变）③ 盘中提前跑
+        # （今天虽是交易日但还没收盘 EOD 未出）。当天真故障另有 daily_update_plan 的
+        # 「数据更新失败」告警同日兜底，这里只做「落后于铁定该有的交易日」的多日卡死兜底。
+        expected = _latest_closed_trade_day(repo)
+        if expected is not None and cur < expected:
             gh_notify.alert("fear_daily", RuntimeError(
-                f"恐慌指数未推进：最新交易日仍为 {cur}（stock_daily 未更新到新交易日？"
-                f"请检查 daily_update_plan 的数据更新步骤是否成功）"))
-            return f"stale:{cur}"
+                f"恐慌指数落后：最近已收盘交易日应为 {expected}，恐慌仍停在 {cur}"
+                f"（stock_daily 未更新到 {expected}？请检查 daily_update_plan 的数据更新步骤）"))
+            return f"stale:{cur}<{expected}"
         return f"ok:{cur}"
     except Exception as e:  # noqa: BLE001
         print(f"WARN fear_daily 落库失败：{e}")
