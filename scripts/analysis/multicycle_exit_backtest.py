@@ -40,7 +40,8 @@ from invest_model.data import make_engine  # noqa: E402
 from invest_model.repositories.base import BaseRepository  # noqa: E402
 from invest_model.portfolio.risk import RiskConfig  # noqa: E402
 from chinext_cycle_backtest import (  # noqa: E402  复用生产口径的离场函数，不重写
-    _load, _stats, _exit_system, _exit_top, _system_with_reentry, _exit_reain_ma60,
+    _load, _stats, _exit_system, _exit_top, _system_with_reentry,
+    _exit_reain_ma60, _exit_confirmed_ma60, CONFIRM_DAYS,
 )
 
 # 预登记周期资格（跑数前写死）
@@ -114,12 +115,14 @@ def _run_cycle(df: pd.DataFrame, ma60: np.ndarray, s: int, e: int, cfg: RiskConf
     """单周期跑全部策略，返回各策略指标 + 周期元信息。"""
     ea, ra = _exit_reain_ma60(df, ma60, s, e, 0.0)
     ea1, ra1 = _exit_reain_ma60(df, ma60, s, e, 0.01)
+    ea2, ra2 = _exit_confirmed_ma60(df, ma60, s, e, 0.0)   # A'' 忠实"有效跌破"（连 N 日确认）
     eb, rb = _exit_system(df, s, cfg)
     eb = min(eb, e)                              # 不越过周期终点，公平对齐
     ec, rc = _exit_top(df.iloc[:e + 1], s)
     ec = min(ec, e)
     A = _stats(df["close"], s, ea, "A", ra)
     A1 = _stats(df["close"], s, ea1, "A'", ra1)
+    A2 = _stats(df["close"], s, ea2, "A''", ra2)
     B = _stats(df["close"], s, eb, "B", rb)
     C = _stats(df["close"], s, ec, "C", rc)
     b2 = _system_with_reentry(df, s, e, cfg)
@@ -131,7 +134,7 @@ def _run_cycle(df: pd.DataFrame, ma60: np.ndarray, s: int, e: int, cfg: RiskConf
         "start": str(df["trade_date"].iloc[s]), "end": str(df["trade_date"].iloc[e]),
         "peak_ret": peak_ret, "hold_ret": hold_ret,
         "above_frac": _above_frac(df, s, e),
-        "A": A, "A1": A1, "B": B, "C": C, "b2": b2["总收益"], "c_fired": c_fired,
+        "A": A, "A1": A1, "A2": A2, "B": B, "C": C, "b2": b2["总收益"], "c_fired": c_fired,
     }
 
 
@@ -205,7 +208,8 @@ def run(repo: BaseRepository) -> str:
         w = sum(1 for v, h in zip(vals, hold_base) if np.isfinite(v) and v > h)
         return w / n
 
-    for key, disp in [("A", "A 重远·裸破MA60"), ("A1", "A' 重远·破MA60(1%)"),
+    for key, disp in [("A", "A 重远·裸破MA60(单日)"), ("A1", "A' 重远·破MA60(单日+1%)"),
+                      ("A2", f"A'' 重远·有效跌破(连{CONFIRM_DAYS}日)"),
                       ("B", "B 系统(单段)"), ("C", "C 顶部识别")]:
         rets = col(key, "持有收益")
         gb = col(key, "自峰值回撤")
@@ -226,8 +230,20 @@ def run(repo: BaseRepository) -> str:
     L.append(f"| 基线·买入持有到终点 | {med_h:+.1%} | {mean_h:+.1%} | "
              f"{_agg(hold_gb)[1]:+.1%} | {_agg(hold_cap)[1]:.0%} | — |")
 
-    # 三、三组对抗性对照
-    L.append("\n## 三、三组对抗性对照")
+    # 三、对抗性对照
+    L.append("\n## 三、对抗性对照")
+
+    # (0) 断章取义检验：裸破(单日) vs 有效跌破(确认) —— 重远说的是"有效跌破"，不是单日插针
+    a_cap = _agg([r["A"]["捕获率"] for r in all_cycles])[1]
+    a2_cap = _agg([r["A2"]["捕获率"] for r in all_cycles])[1]
+    a_ret = _agg([r["A"]["持有收益"] for r in all_cycles])[1]
+    a2_ret = _agg([r["A2"]["持有收益"] for r in all_cycles])[1]
+    a2_win = winrate([r["A2"]["持有收益"] for r in all_cycles])
+    L.append(f"\n**(0) 「裸破 vs 有效跌破」——重远原话是「有效跌破」，单日破线即走是最不利的稻草人**："
+             f"裸破(单日) 平均捕获率 {a_cap:.0%}、平均收益 {a_ret:+.1%}；"
+             f"有效跌破(连{CONFIRM_DAYS}日确认) 平均捕获率 **{a2_cap:.0%}**、平均收益 **{a2_ret:+.1%}**、"
+             f"对买入持有胜率 {a2_win:.0%}。确认口径{'显著改善' if a2_cap > a_cap + 0.2 else '未见明显改善'}"
+             f"→ {'之前用单日裸破确有低估重远之嫌，确认版才是公平对比。' if a2_cap > a_cap + 0.2 else '即便忠实确认口径，机械 MA60 在本样本仍不占优。'}")
 
     # (1) 控回撤：B give-back vs A' give-back（越接近0越好）
     pair = [(r["B"]["自峰值回撤"], r["A1"]["自峰值回撤"]) for r in all_cycles]
@@ -246,15 +262,15 @@ def run(repo: BaseRepository) -> str:
     med_af = np.nanmedian(af)
     clean = [r for r in all_cycles if np.isfinite(r["above_frac"]) and r["above_frac"] >= med_af]
     choppy = [r for r in all_cycles if np.isfinite(r["above_frac"]) and r["above_frac"] < med_af]
-    cap_clean = _agg([r["A1"]["捕获率"] for r in clean])[1]
-    cap_choppy = _agg([r["A1"]["捕获率"] for r in choppy])[1]
-    gb_clean = _agg([r["A1"]["自峰值回撤"] for r in clean])[1]
-    gb_choppy = _agg([r["A1"]["自峰值回撤"] for r in choppy])[1]
-    L.append(f"\n**(3) E9 v2 核心假设（重远 MA60 在干净趋势市更管用）**："
+    cap_clean = _agg([r["A2"]["捕获率"] for r in clean])[1]     # 用忠实版 A''（有效跌破）做条件化检验
+    cap_choppy = _agg([r["A2"]["捕获率"] for r in choppy])[1]
+    gb_clean = _agg([r["A2"]["自峰值回撤"] for r in clean])[1]
+    gb_choppy = _agg([r["A2"]["自峰值回撤"] for r in choppy])[1]
+    L.append(f"\n**(3) E9 v2 核心假设（重远 MA60 在干净趋势市更管用；用忠实版 A'' 有效跌破）**："
              f"按周期 MA60 上方天数占比中位数 {med_af:.0%} 切分——")
-    L.append(f"- 干净趋势组（占比≥{med_af:.0%}，n={len(clean)}）：重远 A' 平均捕获率 **{cap_clean:.0%}**，"
+    L.append(f"- 干净趋势组（占比≥{med_af:.0%}，n={len(clean)}）：重远 A'' 平均捕获率 **{cap_clean:.0%}**，"
              f"平均自峰值回撤 {gb_clean:+.1%}")
-    L.append(f"- 震荡组（占比<{med_af:.0%}，n={len(choppy)}）：重远 A' 平均捕获率 **{cap_choppy:.0%}**，"
+    L.append(f"- 震荡组（占比<{med_af:.0%}，n={len(choppy)}）：重远 A'' 平均捕获率 **{cap_choppy:.0%}**，"
              f"平均自峰值回撤 {gb_choppy:+.1%}")
     L.append(f"- 差值（干净−震荡）：捕获率 {cap_clean - cap_choppy:+.0%}。"
              f"{'✅ 方向支持条件化假设' if cap_clean > cap_choppy else '❌ 未见干净趋势更优，条件化假设本样本不成立'}"

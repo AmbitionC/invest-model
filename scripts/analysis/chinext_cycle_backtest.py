@@ -41,6 +41,7 @@ TOP_VOL_LOOKBACK = 250
 TOP_VOLUME_RATIO = 1.5       # 5 日均量 / 60 日均量
 TOP_MIN_PROFIT = 0.15        # 仅在浮盈曾达此值后才允许顶部离场（避开建仓初期噪声）
 BREAK_BUFFER = 0.0           # 重远"有效跌破"缓冲（0=收盘破线即算；另附 1% 口径对照）
+CONFIRM_DAYS = 3             # 重远"有效跌破"确认日数：连续 N 日收盘破 MA60 才算真破（非单日插针）
 
 
 def _load(repo: BaseRepository, code: str) -> pd.DataFrame:
@@ -116,6 +117,26 @@ def _exit_reain_ma60(df, ma60, s: int, e: int, x: float) -> tuple[int, str]:
         if np.isfinite(ma60[i]) and c[i] < ma60[i] * (1 - x):
             return i, f"有效跌破MA60(x={x:.0%})"
     return e, "至样本末未破位"
+
+
+def _exit_confirmed_ma60(df, ma60, s: int, e: int, x: float = 0.0,
+                         confirm: int = CONFIRM_DAYS) -> tuple[int, str]:
+    """A''｜重远"有效跌破"（忠实版）：连续 confirm 日收盘 < MA60×(1-x) 才离场。
+
+    重远原话是"**有效**跌破"——不是单日插针即走。裸破（confirm=1）是最不利的机械稻草人，
+    会被牛市途中的正常回踩反复震出。确认版容忍途中 1~2 日假破，只在真站不稳时离场；
+    代价是离场记在确认满足当日（比首破晚 confirm-1 日、价更低），这是"确认"应付的成本。
+    """
+    c = df["close"].to_numpy(dtype=float)
+    run = 0
+    for i in range(s + 1, len(c)):
+        if np.isfinite(ma60[i]) and c[i] < ma60[i] * (1 - x):
+            run += 1
+            if run >= confirm:
+                return i, f"有效跌破MA60(连{confirm}日,x={x:.0%})"
+        else:
+            run = 0
+    return e, "至样本末未确认破位"
 
 
 def _exit_system(df, s: int, cfg: RiskConfig) -> tuple[int, str]:
