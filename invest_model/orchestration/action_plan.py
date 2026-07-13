@@ -340,6 +340,17 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     warm = (pd.to_datetime(dt) - pd.Timedelta(days=150)).strftime("%Y%m%d")
     reset_floor = (pd.to_datetime(dt) - pd.Timedelta(days=35)).strftime("%Y%m%d")  # 档位回放窗口下限(≈1个调仓周期)
     trail_white = _trailing_only()
+    # P16 顶部特征自动减半（用户 2026-07-13 定：控回撤证据充分，直升自动减仓）：
+    # 浮盈达标持仓 波动骤放大+放量 → 目标减半一次。start_lb 取 ~2 年，够 250 日波动分位。
+    top_start_lb = f"{int(dt[:4]) - 2}{dt[4:]}"
+    top_trimmed: set[str] = set()                      # 近一个调仓周期内已因顶部特征减半者 → 不重复减
+    try:
+        _tt = loop.repo.read_sql(
+            "SELECT DISTINCT code FROM action_plan WHERE plan_date>=:s AND plan_date<:d "
+            "AND reason LIKE :r", {"s": reset_floor, "d": dt, "r": "%顶部特征%"})
+        top_trimmed = set(_tt["code"].tolist()) if not _tt.empty else set()
+    except Exception:  # noqa: BLE001 — 首日无历史计划不阻断
+        top_trimmed = set()
     rows: list[dict] = []
     for c in all_codes:
         cw = cur_w.get(c, 0.0)
@@ -409,6 +420,27 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                             reason = ts.reason
             if not np.isfinite(stop_price) and cost_map[c] > 0:
                 stop_price = cost_map[c] * (1 - rc.hard_stop_pct)
+
+            # P16 顶部特征自动减半：仅在其它风控未触发（reason 为空）、非白名单核心仓、
+            # 未在本周期减过时；浮盈达标+波动骤放大+放量 → 目标减半一次（锁盈不砍损）。
+            if (rc.enabled and not reason and c not in trail_white
+                    and c not in top_trimmed and cw > 1e-6):
+                try:
+                    from invest_model.signals.top_feature import top_feature_now
+                    tf_close = _close_hist(loop, c, top_start_lb, dt)
+                    _vs = loop.repo.read_sql(
+                        "SELECT trade_date, volume FROM stock_daily "
+                        "WHERE code=:c AND trade_date>=:s AND trade_date<=:d ORDER BY trade_date",
+                        {"c": c, "s": top_start_lb, "d": dt})
+                    tf_vol = (pd.to_numeric(_vs.set_index("trade_date")["volume"], errors="coerce")
+                              if not _vs.empty else pd.Series(dtype=float))
+                    tf_vol.index = tf_vol.index.astype(str)
+                    if (not tf_close.empty and top_feature_now(
+                            tf_close, tf_vol.reindex(tf_close.index),
+                            cost_map.get(c, 0.0), entry_map.get(c) or None)):
+                        tw, reason = cw * 0.5, "顶部特征减半（P16·波动骤放大+放量、浮盈达标）"
+                except Exception:  # noqa: BLE001 — 顶部信号失败不阻断计划
+                    pass
 
         # 动作判定
         if reason:                                    # 风控已判定（清仓/减仓/时间止损/逻辑证伪）
@@ -561,13 +593,15 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     except Exception:  # noqa: BLE001
         pass
 
-    # 顶部特征预警（P16 提示版）：持仓浮盈达标后 波动骤放大+放量 → 提示主动兑现（只提示不自动减仓）。
-    # 判据同回测预登记常量；个股 6901 周期控回撤证据强但差 E12 第②条 → 仅影子提示，见 model_change_proposals P16。
+    # 顶部特征追加提示（P16 自动减半已在动作层执行）：对本周期已减半、但顶部特征仍在的持仓，
+    # 提示可考虑进一步兑现（避免重复自动减仓，改由人工判断二次动作）。新触发已成 trim 动作行，不在此列。
     try:
         from invest_model.signals.top_feature import top_feature_now
         start_lb = f"{int(dt[:4]) - 2}{dt[4:]}"          # 约 2 年回看，够 250 日波动分位
-        top_hits: list[str] = []
+        still_top: list[str] = []
         for c in held_codes:
+            if c not in top_trimmed:                      # 仅看"已减半"的；新触发走动作行
+                continue
             close = _close_hist(loop, c, start_lb, dt)
             if close.empty:
                 continue
@@ -580,13 +614,12 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             vol.index = vol.index.astype(str)
             if top_feature_now(close, vol.reindex(close.index), cost_map.get(c, 0.0),
                                entry_map.get(c) or None):
-                top_hits.append(names.get(c, c))
-        if top_hits:
+                still_top.append(names.get(c, c))
+        if still_top:
             hints.append(
-                f"顶部特征预警（仅提示·不自动减仓）：{'、'.join(top_hits)} 现"
-                f"波动骤放大+放量且浮盈达标，顶部风险升高，考虑主动减仓兑现"
-                f"（P16 候选，个股回测控回撤证据强；判据见 model_change_proposals）")
-    except Exception:  # noqa: BLE001 — 顶部预警失败不阻断计划
+                f"顶部特征仍在（本周期已自动减半）：{'、'.join(still_top)}——"
+                f"顶部风险未消，可人工考虑进一步兑现（P16，见 model_change_proposals）")
+    except Exception:  # noqa: BLE001 — 顶部提示失败不阻断计划
         pass
 
     # ── 套利统一资金账本（一体两面）：单一资金池按 A/B/α 分配、强制零杠杆 ──
