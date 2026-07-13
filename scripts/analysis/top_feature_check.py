@@ -54,7 +54,7 @@ def _diag(close: pd.Series, volume: pd.Series, cost: float, entry: str | None) -
 
 def run(repo: BaseRepository) -> str:
     dt = repo.read_sql("SELECT MAX(trade_date) AS d FROM stock_daily")["d"].iloc[0]
-    hold = HoldingRepo(repo).get_all()
+    hold = HoldingRepo(repo.engine).get_all()
     L = [f"# 当日持仓·顶部特征体检（数据日 {dt}）", ""]
     L.append(f"判据：浮盈曾达 ≥{TOP_MIN_PROFIT:.0%} 且 20日波动≥近250日{TOP_VOL_PCTL:.0%}分位 且 5/60量比≥{TOP_VOLUME_RATIO}", )
     if hold is None or hold.empty:
