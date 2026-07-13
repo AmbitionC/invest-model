@@ -561,6 +561,34 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     except Exception:  # noqa: BLE001
         pass
 
+    # 顶部特征预警（P16 提示版）：持仓浮盈达标后 波动骤放大+放量 → 提示主动兑现（只提示不自动减仓）。
+    # 判据同回测预登记常量；个股 6901 周期控回撤证据强但差 E12 第②条 → 仅影子提示，见 model_change_proposals P16。
+    try:
+        from invest_model.signals.top_feature import top_feature_now
+        start_lb = f"{int(dt[:4]) - 2}{dt[4:]}"          # 约 2 年回看，够 250 日波动分位
+        top_hits: list[str] = []
+        for c in held_codes:
+            close = _close_hist(loop, c, start_lb, dt)
+            if close.empty:
+                continue
+            vser = loop.repo.read_sql(
+                "SELECT trade_date, volume FROM stock_daily "
+                "WHERE code=:c AND trade_date>=:s AND trade_date<=:d ORDER BY trade_date",
+                {"c": c, "s": start_lb, "d": dt})
+            vol = (pd.to_numeric(vser.set_index("trade_date")["volume"], errors="coerce")
+                   if not vser.empty else pd.Series(dtype=float))
+            vol.index = vol.index.astype(str)
+            if top_feature_now(close, vol.reindex(close.index), cost_map.get(c, 0.0),
+                               entry_map.get(c) or None):
+                top_hits.append(names.get(c, c))
+        if top_hits:
+            hints.append(
+                f"顶部特征预警（仅提示·不自动减仓）：{'、'.join(top_hits)} 现"
+                f"波动骤放大+放量且浮盈达标，顶部风险升高，考虑主动减仓兑现"
+                f"（P16 候选，个股回测控回撤证据强；判据见 model_change_proposals）")
+    except Exception:  # noqa: BLE001 — 顶部预警失败不阻断计划
+        pass
+
     # ── 套利统一资金账本（一体两面）：单一资金池按 A/B/α 分配、强制零杠杆 ──
     # ARB_ENABLED=0（默认观察态）：不发 arb 行、不缩放引擎 B → 计划与今天逐字一致。
     arb_rows: list[dict] = []
