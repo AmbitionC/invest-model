@@ -1,2 +1,2 @@
-e13
-# E13 负Gamma×到期挤压探针预登记验证：yfinance拉SPY/QQQ/VIX 15y，跑冻结判据回帖验证issue。
+daily
+# E13(2026-07-13)=FAIL：US-O5维持off。恢复daily模式，正常出计划。
