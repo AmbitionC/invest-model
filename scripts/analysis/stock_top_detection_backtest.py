@@ -42,7 +42,7 @@ MIN_CYCLES_TOTAL = 20   # 少于此周期数则提示样本偏薄（不阻断）
 
 
 def _load_stock(repo: BaseRepository, code: str) -> pd.DataFrame:
-    """取个股前复权收盘 + 原始成交量，对齐成 df(trade_date, close, volume)。"""
+    """取个股前复权收盘 + 原始成交量，对齐成 df(trade_date, close, volume)。（单票，保留供调试）"""
     raw = repo.read_sql(
         "SELECT trade_date, close, volume FROM stock_daily WHERE code=:c ORDER BY trade_date",
         {"c": code})
@@ -58,6 +58,58 @@ def _load_stock(repo: BaseRepository, code: str) -> pd.DataFrame:
         "volume": pd.to_numeric(raw["volume"], errors="coerce").values,
     })
     return out.dropna(subset=["close"]).reset_index(drop=True)
+
+
+def _qfq_inmem(close: pd.Series, adj: pd.DataFrame | None) -> pd.Series:
+    """内存前复权：逻辑与 data.adjust.apply_qfq 一致，但不再走 DB（用已批量取好的 adj 子表）。"""
+    if adj is None or adj.empty:
+        return close
+    fac = pd.to_numeric(adj.set_index("trade_date")["adj_factor"], errors="coerce").dropna()
+    if fac.empty:
+        return close
+    fac = fac[~fac.index.duplicated(keep="last")]
+    f = fac.reindex(close.index).ffill().bfill()
+    last = pd.to_numeric(f.iloc[-1], errors="coerce")
+    if not pd.notna(last) or float(last) <= 0 or f.isna().any():
+        return close
+    return close * f.astype(float) / float(last)
+
+
+def _load_batch(repo: BaseRepository, codes: list[str]) -> dict[str, pd.DataFrame]:
+    """一次性批量取一组 code 的 stock_daily(+stock_adj)，内存前复权——消除每股 DB 往返。"""
+    safe = [c for c in codes if all(ch.isalnum() or ch in "._" for ch in c)]  # code 来自本库，白名单兜底
+    if not safe:
+        return {}
+    ph = ",".join(f"'{c}'" for c in safe)
+    daily = repo.read_sql(
+        f"SELECT code, trade_date, close, volume FROM stock_daily "
+        f"WHERE code IN ({ph}) ORDER BY code, trade_date", {})
+    if daily.empty:
+        return {}
+    daily["trade_date"] = daily["trade_date"].astype(str)
+    adj_by: dict[str, pd.DataFrame] = {}
+    try:
+        if repo.table_exists("stock_adj"):
+            adj = repo.read_sql(
+                f"SELECT code, trade_date, adj_factor FROM stock_adj "
+                f"WHERE code IN ({ph}) ORDER BY code, trade_date", {})
+            if not adj.empty:
+                adj["trade_date"] = adj["trade_date"].astype(str)
+                adj_by = {c: g for c, g in adj.groupby("code")}
+    except Exception:  # noqa: BLE001 复权失败 fail-open（同 apply_qfq）
+        adj_by = {}
+    out: dict[str, pd.DataFrame] = {}
+    for code, g in daily.groupby("code"):
+        g = g.reset_index(drop=True)
+        s = pd.to_numeric(g.set_index("trade_date")["close"], errors="coerce")
+        qfq = _qfq_inmem(s, adj_by.get(code))
+        df = pd.DataFrame({
+            "trade_date": g["trade_date"].values,
+            "close": pd.to_numeric(qfq.values, errors="coerce"),
+            "volume": pd.to_numeric(g["volume"], errors="coerce").values,
+        })
+        out[str(code)] = df.dropna(subset=["close"]).reset_index(drop=True)
+    return out
 
 
 def run(repo: BaseRepository, limit: int | None) -> str:
@@ -76,33 +128,36 @@ def run(repo: BaseRepository, limit: int | None) -> str:
         L.append(f"\n⚠️ stock_daily 无 ≥{MIN_ROWS} 日的个股，检查数据回填。")
         return "\n".join(L)
 
-    print(f"[progress] 个股池 {len(codes)} 只，开始逐票回测…", flush=True)
+    CHUNK = 300           # 每批一次性取，消除每股 DB 往返（原每股 2 次查询→每批 2 次）
+    print(f"[progress] 个股池 {len(codes)} 只，分 {(-(-len(codes)//CHUNK))} 批批量取数回测…", flush=True)
     cycles: list[dict] = []
     n_stocks_with_cycle = 0
-    for idx, code in enumerate(codes, 1):
-        if idx % 100 == 0:
-            print(f"[progress] {idx}/{len(codes)} 只已处理，累计周期 {len(cycles)}", flush=True)
-        df = _load_stock(repo, code)
-        if len(df) < 200:
-            continue
-        ma60 = df["close"].rolling(60).mean().to_numpy()
-        cyc = _detect_all_cycles(df)
-        if cyc:
-            n_stocks_with_cycle += 1
-        for s, e in cyc:
-            ec, rc = _exit_top(df.iloc[:e + 1], s)
-            ec = min(ec, e)
-            ea2, ra2 = _exit_confirmed_ma60(df, ma60, s, e, 0.0)
-            C = _stats(df["close"], s, ec, "C", rc)
-            A2 = _stats(df["close"], s, ea2, "A''", ra2)
-            hold_ret = float(df["close"].iloc[e]) / float(df["close"].iloc[s]) - 1
-            peak_ret = float(df["close"].iloc[s:e + 1].max()) / float(df["close"].iloc[s]) - 1
-            cycles.append({
-                "code": code, "days": e - s,
-                "peak_ret": peak_ret, "hold_ret": hold_ret,
-                "above_frac": _above_frac(df, s, e),
-                "C": C, "A2": A2, "c_fired": "未" not in rc,
-            })
+    for bi in range(0, len(codes), CHUNK):
+        batch = codes[bi:bi + CHUNK]
+        dfs = _load_batch(repo, batch)
+        for code, df in dfs.items():
+            if len(df) < 200:
+                continue
+            ma60 = df["close"].rolling(60).mean().to_numpy()
+            cyc = _detect_all_cycles(df)
+            if cyc:
+                n_stocks_with_cycle += 1
+            for s, e in cyc:
+                ec, rc = _exit_top(df.iloc[:e + 1], s)
+                ec = min(ec, e)
+                ea2, ra2 = _exit_confirmed_ma60(df, ma60, s, e, 0.0)
+                C = _stats(df["close"], s, ec, "C", rc)
+                A2 = _stats(df["close"], s, ea2, "A''", ra2)
+                hold_ret = float(df["close"].iloc[e]) / float(df["close"].iloc[s]) - 1
+                peak_ret = float(df["close"].iloc[s:e + 1].max()) / float(df["close"].iloc[s]) - 1
+                cycles.append({
+                    "code": code, "days": e - s,
+                    "peak_ret": peak_ret, "hold_ret": hold_ret,
+                    "above_frac": _above_frac(df, s, e),
+                    "C": C, "A2": A2, "c_fired": "未" not in rc,
+                })
+        print(f"[progress] {min(bi + CHUNK, len(codes))}/{len(codes)} 只已处理，"
+              f"累计周期 {len(cycles)}", flush=True)
 
     n = len(cycles)
     L.append(f"\n## 一、样本")
