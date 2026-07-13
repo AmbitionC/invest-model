@@ -54,18 +54,19 @@ def _load(repo: BaseRepository, code: str) -> pd.DataFrame:
     return df.dropna(subset=["close"]).reset_index(drop=True)
 
 
-def _detect_cycle(df: pd.DataFrame) -> tuple[int, int]:
-    """检测本轮牛市：入场=最近一段持续上行前的 MA60 新鲜突破；结束=其后首次有效跌破 MA60。
+def _detect_cycle(df: pd.DataFrame, base_gap: int = 10) -> tuple[int, int]:
+    """检测本轮牛市：终点=最后一次有效跌破 MA60；入场=该轮"站上 MA60 区制"的起点。
 
-    做法（数据驱动、不手挑日期）：取全序列最后一次"有效跌破 MA60"作为周期终点 e；
-    在 e 之前，从后往前找最近一次"新鲜突破 MA60（昨收<MA60、今收>MA60）且 MA60 上行"
-    作为入场 s。返回 (s, e) 的行下标。
+    修正要点：不能只找"最近一次突破"——顶部破位前常有 1~2 日假突破会被误当起点。
+    改用**区制回溯**：从终点前一日往回走，容忍牛市途中 ≤base_gap 日的短暂回落（正常回踩），
+    一旦遇到连续 >base_gap 日在 MA60 下方的"底部基座"，就认定牛市在基座之后启动。
+    返回 (s=入场, e=终点) 行下标。数据驱动、不手挑日期。
     """
     c = df["close"].to_numpy(dtype=float)
     ma60 = df["close"].rolling(60).mean().to_numpy()
     n = len(c)
-    below = c < ma60 * (1 - BREAK_BUFFER)
-    # 终点：最后一个"新鲜跌破"（昨在线上、今破位），且 MA60 已算出
+    below = (c < ma60 * (1 - BREAK_BUFFER)) | ~np.isfinite(ma60)
+    # 终点：最后一个"新鲜跌破"（昨在线上、今破位）
     e = None
     for i in range(n - 1, 60, -1):
         if np.isfinite(ma60[i]) and below[i] and not below[i - 1]:
@@ -73,16 +74,22 @@ def _detect_cycle(df: pd.DataFrame) -> tuple[int, int]:
             break
     if e is None:
         e = n - 1
-    # 入场：e 之前最近一次"新鲜突破"（昨破位/今站上）且 MA60 上行
-    s = None
-    for i in range(e - 1, 60, -1):
-        rising = np.isfinite(ma60[i]) and np.isfinite(ma60[i - 20]) and ma60[i] > ma60[i - 20]
-        fresh_up = c[i] > ma60[i] and c[i - 1] <= ma60[i - 1]
-        if rising and fresh_up:
-            s = i
-            break
-    if s is None:                      # 兜底：MA60 可算的最早上行段起点
-        s = 61
+    # 入场：从 e-1 往回走，容忍 ≤base_gap 日回落；遇到 >base_gap 连续在线下的基座即停
+    s = e - 1
+    gap = 0
+    i = e - 1
+    while i > 61:
+        if below[i]:
+            gap += 1
+            if gap > base_gap:         # 命中底部基座 → 牛市在其之后
+                break
+        else:
+            gap = 0
+            s = i                      # 记录最近的"在线上"日
+        i -= 1
+    # s 回推到该区制第一个站上 MA60 的突破日
+    while s > 61 and not below[s - 1]:
+        s -= 1
     return s, e
 
 
