@@ -31,6 +31,22 @@ def persist_fear(engine, g: dict) -> None:
     }]), ["trade_date"])
 
 
+def persist_fear_intraday(engine, g: dict, snapshot_ts: str) -> None:
+    """盘中恐慌落库 fear_intraday（不动 fear_daily）。snapshot_ts=北京 YYYY-MM-DD HH:MM:SS。"""
+    import pandas as pd
+
+    from invest_model.data import create_schema
+    from invest_model.repositories.base import BaseRepository
+
+    create_schema(engine)
+    BaseRepository(engine).upsert("fear_intraday", pd.DataFrame([{
+        "trade_date": str(g["date"]), "snapshot_ts": snapshot_ts,
+        "score": g["score"], "level": g["level"],
+        "components": json.dumps(g.get("components", {}), ensure_ascii=False),
+        "raw": json.dumps(g.get("raw", {}), ensure_ascii=False),
+    }]), ["trade_date", "snapshot_ts"])
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="A股恐慌指数")
     ap.add_argument("--db", default="sqlite:///./data/real.db")

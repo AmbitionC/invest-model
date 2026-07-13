@@ -178,6 +178,53 @@ def _persist_fear_daily() -> str:
         return f"WARN: {e}"
 
 
+def _in_trading_hours(bj) -> bool:
+    """A 股连续竞价时段：9:30-11:30 / 13:00-15:00（含尾盘 15:00 一次收官快照）。"""
+    hm = bj.hour * 60 + bj.minute
+    return (9 * 60 + 30) <= hm <= (11 * 60 + 30) or (13 * 60) <= hm <= (15 * 60)
+
+
+def job_fear_intraday() -> dict:
+    """盘中恐慌（近似）：交易时段每小时用腾讯全市场快照重算，落 fear_intraday。
+
+    与日频 fear_daily 完全独立、同一套分量公式；非交易日/非交易时段毫秒级退出；
+    腾讯拉取不足（源故障/受限）→ 降级不写（前端自动退回日频）。绝不动 fear_daily。
+    """
+    bj = gh_notify.bj_now()
+    day = bj.strftime("%Y%m%d")
+    if not _is_trade_day(day) or not _in_trading_hours(bj):
+        return {"job": "fear_intraday", "skipped": "off-hours", "ts": bj.strftime("%H:%M")}
+    try:
+        from invest_model.data import make_engine
+        from invest_model.repositories.base import BaseRepository
+        from invest_model.signals.fear import fear_intraday
+        from invest_model.signals.realtime import get_realtime_etf, get_realtime_market
+        from scripts.fear_gauge import persist_fear_intraday
+
+        engine = make_engine()
+        repo = BaseRepository(engine)
+        # 全市场股票代码：取最新交易日截面（个股，排除已退市/无行情）
+        codes = repo.read_sql(
+            "SELECT DISTINCT code FROM stock_daily WHERE trade_date="
+            "(SELECT MAX(trade_date) FROM stock_daily)")["code"].tolist()
+        if len(codes) < 2000:
+            return {"job": "fear_intraday", "skipped": f"universe-small:{len(codes)}"}
+        price_map = get_realtime_market(codes)
+        idx_q = get_realtime_etf(["000300.SH"]).get("000300.SH") or {}
+        idx_price = idx_q.get("price")
+        g = fear_intraday(engine, price_map, idx_price, day)
+        if g is None:
+            return {"job": "fear_intraday", "skipped": "fetch-degraded",
+                    "got": len(price_map)}
+        snap = bj.strftime("%Y-%m-%d %H:%M:%S")
+        persist_fear_intraday(engine, g, snap)
+        return {"job": "fear_intraday", "ok": g["score"], "level": g["level"],
+                "got": len(price_map), "ts": snap}
+    except Exception as e:  # noqa: BLE001 — 盘中辅助指标失败绝不影响其它任务
+        print(f"WARN fear_intraday 失败：{e}")
+        return {"job": "fear_intraday", "error": str(e)}
+
+
 def _ingest_and_build_arb() -> str:
     """套利：自动算三水表 + 可选 α CSV 录入 + 构建 flow_score（best-effort，不阻断出计划）。
 
@@ -549,4 +596,5 @@ JOBS = {
     "watermeter_remind": job_watermeter_remind,
     "ingest_advisor": job_ingest_advisor,
     "ingest_snapshot": job_ingest_snapshot,
+    "fear_intraday": job_fear_intraday,
 }

@@ -526,6 +526,20 @@ fear_daily = Table(
     _created_at(),
 )
 
+# 盘中恐慌（近似）：交易时段每小时用全市场腾讯快照重算，与日频同一套分量公式，
+# 只是「当日」未定格。日频 fear_daily 仍是收盘官方值、计划/风控只引用它；
+# 本表仅供仪表盘盘中透出，(trade_date, snapshot_ts) 主键、当日多行留时间序列。
+fear_intraday = Table(
+    "fear_intraday", metadata,
+    Column("trade_date", String(8), primary_key=True),
+    Column("snapshot_ts", String(19), primary_key=True),  # 北京时间 YYYY-MM-DD HH:MM:SS
+    Column("score", Numeric(6, 2)),
+    Column("level", String(32)),
+    Column("components", Text),
+    Column("raw", Text),
+    _created_at(),
+)
+
 # ── 套利模块（arbitrage）表 ──────────────────────────────────
 # 说明：套利与交易是同一资金池的一体两面。以下表全部按 (code|id, trade_date) /
 # version 命名空间落库，回测/复盘/看板复用既有骨架。数据缺失时对应 sleeve 预算

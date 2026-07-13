@@ -54,6 +54,40 @@ def _to_qt_code(ts_code: str) -> str:
     return ("sh" if ex.upper() == "SH" else "sz") + num
 
 
+def _parse_qt(text: str, rev: dict[str, str]) -> dict[str, dict]:
+    """解析腾讯 qt.gtimg.cn 返回体（~ 分隔，GBK）。rev: qt_code→ts_code。"""
+    def _f(parts: list[str], i: int) -> float:
+        try:
+            return float(parts[i])
+        except (ValueError, IndexError):
+            return float("nan")
+
+    out: dict[str, dict] = {}
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        var, _, payload = line.partition("=")
+        ts_code = rev.get(var.strip().replace("v_", ""))
+        if not ts_code:
+            continue
+        parts = payload.strip().strip(";").strip('"').split("~")
+        if len(parts) < 6:
+            continue
+        price = _f(parts, 3)
+        if not price or price != price:       # 无有效现价（停牌/取数异常）跳过
+            continue
+        out[ts_code] = {
+            "price": price,
+            "pre_close": _f(parts, 4),
+            "open": _f(parts, 5),
+            "high": _f(parts, 33),
+            "low": _f(parts, 34),
+            "vol": _f(parts, 6),
+            "name": parts[1],
+        }
+    return out
+
+
 def get_realtime_etf(codes: list[str]) -> dict[str, dict]:
     """ETF 实时价：腾讯免费源 qt.gtimg.cn（无需鉴权）。
 
@@ -73,35 +107,31 @@ def get_realtime_etf(codes: list[str]) -> dict[str, dict]:
         text = resp.text
     except Exception:  # noqa: BLE001
         return {}
+    return _parse_qt(text, rev)
 
-    def _f(parts: list[str], i: int) -> float:
-        try:
-            return float(parts[i])
-        except (ValueError, IndexError):
-            return float("nan")
+
+def get_realtime_market(codes: list[str], chunk: int = 60) -> dict[str, dict]:
+    """全市场股票盘中现价：腾讯免费源分批拉取（无鉴权、独立于 minitick/Tushare）。
+
+    用于盘中恐慌指数全量重算（~5000 只 / 60 一批 ≈ 85 请求）。腾讯源覆盖 A 股+ETF，
+    单批失败只跳过该批（fail-open）；返回 {ts_code: {price, pre_close, ...}}。
+    受限容器可能被代理 403（本地测试请注入 price_map，勿依赖真实拉取）；
+    FC/Actions runner 外网可达。
+    """
+    codes = list(dict.fromkeys(codes))
+    if not codes:
+        return {}
+    import requests
 
     out: dict[str, dict] = {}
-    for line in text.splitlines():
-        if "=" not in line:
-            continue
-        var, _, payload = line.partition("=")
-        qcode = var.strip().replace("v_", "")
-        ts_code = rev.get(qcode)
-        if not ts_code:
-            continue
-        parts = payload.strip().strip(";").strip('"').split("~")
-        if len(parts) < 6:
-            continue
-        price = _f(parts, 3)
-        if not price or price != price:       # 无有效现价（停牌/取数异常）跳过
-            continue
-        out[ts_code] = {
-            "price": price,
-            "pre_close": _f(parts, 4),
-            "open": _f(parts, 5),
-            "high": _f(parts, 33),
-            "low": _f(parts, 34),
-            "vol": _f(parts, 6),
-            "name": parts[1],
-        }
+    for i in range(0, len(codes), chunk):
+        batch = codes[i:i + chunk]
+        qt = [_to_qt_code(c) for c in batch]
+        rev = dict(zip(qt, batch))
+        try:
+            resp = requests.get("https://qt.gtimg.cn/q=" + ",".join(qt), timeout=15)
+            resp.encoding = "gbk"
+            out.update(_parse_qt(resp.text, rev))
+        except Exception:  # noqa: BLE001
+            continue                          # 单批失败跳过，不中断整轮
     return out

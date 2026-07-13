@@ -115,6 +115,55 @@ def fear_gauge(engine, dt: str | None = None, benchmark: str = "000300.SH",
     }
 
 
+def fear_intraday(engine, price_map: dict, idx_price: float | None, dt: str,
+                  benchmark: str = "000300.SH", min_stocks: int = 2000) -> dict | None:
+    """盘中恐慌指数：用当前现价拼一行「今日」，喂给 fear_gauge 走**同一套分量公式**。
+
+    与日频 fear_gauge 的唯一差别：今日那行收盘价换成盘中现价（price_map，腾讯全市场
+    快照），历史行仍取自 stock_daily/index_daily。这样盘中值与收盘值口径完全一致、
+    可直接比较，只是"当日"未定格。
+
+      price_map：{ts_code: {price, pre_close, ...}}（get_realtime_market 结果）
+      idx_price：基准指数盘中点位（None 则该指数动量/波动仍用最近收盘近似）
+      dt：交易日 YYYYMMDD（今日）
+      min_stocks：有效现价少于此值判定拉取降级 → 返回 None（前端退回日频兜底）
+
+    返回结构同 fear_gauge()（date/score/level/components/raw），失败或降级返回 None。
+    """
+    repo = BaseRepository(engine)
+    # 有效现价行（price>0 且有 pre_close 算涨跌幅）
+    rows = []
+    for code, q in (price_map or {}).items():
+        px = q.get("price"); pc = q.get("pre_close")
+        if not (px and px == px and px > 0):
+            continue
+        pct = (px / pc - 1) * 100 if (pc and pc == pc and pc > 0) else float("nan")
+        rows.append({"code": code, "trade_date": dt, "close": px, "pct_chg": pct})
+    if len(rows) < min_stocks:
+        return None                            # 拉取不足 → 降级，不写脏数据
+
+    sstart = (pd.to_datetime(dt) - pd.Timedelta(days=200)).strftime("%Y%m%d")
+    hist = repo.read_sql(
+        "SELECT code, trade_date, close, pct_chg FROM stock_daily "
+        "WHERE trade_date>=:s AND trade_date<:d", {"s": sstart, "d": dt})
+    stock_df = pd.concat([hist, pd.DataFrame(rows)], ignore_index=True)
+
+    istart = (pd.to_datetime(dt) - pd.Timedelta(days=420)).strftime("%Y%m%d")
+    ihist = repo.read_sql(
+        "SELECT code, trade_date, close FROM index_daily "
+        "WHERE code=:c AND trade_date>=:s AND trade_date<:d",
+        {"c": benchmark, "s": istart, "d": dt})
+    if idx_price and idx_price == idx_price and idx_price > 0:
+        ihist = pd.concat(
+            [ihist, pd.DataFrame([{"code": benchmark, "trade_date": dt, "close": idx_price}])],
+            ignore_index=True)
+    idx_df = ihist if not ihist.empty else None
+
+    g = fear_gauge(engine, dt=dt, benchmark=benchmark, stock_df=stock_df, idx_df=idx_df)
+    g["intraday"] = True
+    return g
+
+
 def format_fear(g: dict) -> str:
     c = g["components"]
     comp = " / ".join(f"{k}{v:.0f}" for k, v in c.items())
