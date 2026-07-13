@@ -29,6 +29,16 @@ def _last_close(repo, code: str) -> float | None:
     return float(s.iloc[-1]) if len(s) else None
 
 
+def _closes_indexed(repo, code: str) -> pd.Series:
+    """收盘序列（index=trade_date 字符串），供需要日期对齐的信号（如 US-O5 挤压窗口）。"""
+    df = repo.read_sql(
+        "SELECT trade_date, close FROM us_stock_daily WHERE code=:c ORDER BY trade_date",
+        {"c": code})
+    if df.empty:
+        return pd.Series(dtype=float)
+    return pd.Series(df["close"].values, index=df["trade_date"].astype(str))
+
+
 def build_plan(engine, fetch_chain=None) -> dict:
     """生成当日计划。fetch_chain 可注入（测试用），默认 yfinance 实取。"""
     repo = BaseRepository(engine)
@@ -46,6 +56,14 @@ def build_plan(engine, fetch_chain=None) -> dict:
     regime = S.vix_regime(vix)
     dip = S.dip_window(vix, dd)
     put_mode = S.selling_puts_mode(vix, trend)
+
+    # ── US-O5 负 Gamma×到期 挤压探针（P17；overlay 默认 off——E13 达标前零改动）──
+    squeeze = False
+    if C.GAMMA_OVERLAY != "off":
+        squeeze = S.gamma_squeeze_now(
+            _closes_indexed(repo, C.TREND_BENCH), _closes_indexed(repo, C.VIX_CODE))
+        if squeeze and C.GAMMA_OVERLAY == "strict":
+            put_mode = "strict"   # 挤压窗口内收紧卖 put（叠加于 US-O4 恐慌 strict 之上）
 
     # ── 估值锚（V2，全哥"第一前提是便宜"）──
     vals = repo.read_sql(
@@ -220,8 +238,14 @@ def build_plan(engine, fetch_chain=None) -> dict:
         "cash": round(cash, 2), "market_value": round(mv, 2),
         "vix": vix, "vix_regime": regime, "spy_trend": trend,
         "drawdown": round(dd, 4),
-        "notes": ("恐慌抄底观察窗开启：现金弹药可分批接（先过个股基本面闸）〔规则US-T1〕"
-                  if dip else ""),
+        "notes": " ".join(filter(None, [
+            ("恐慌抄底观察窗开启：现金弹药可分批接（先过个股基本面闸）〔规则US-T1〕"
+             if dip else ""),
+            ("⚠️负Gamma×到期挤压窗口：临近月度OpEx+VIX骤升+破MA10，"
+             + ("已收紧卖put(strict)〔规则US-O5〕" if C.GAMMA_OVERLAY == "strict"
+                else "仅观察提示、卖put未改(US-O5预登记待E13)〔规则US-O5〕")
+             if squeeze else ""),
+        ])),
     }
     repo.upsert("us_plan_account", pd.DataFrame([account]), ["plan_date"])
     md = render_markdown(plan_date, account, plan_df, opts)

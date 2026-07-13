@@ -43,9 +43,14 @@ jobs:
         run: pip install -e . yfinance
       - name: Run us daily (update + plan + notify)
         run: |
+          set -o pipefail
           MODE=$(head -1 ops/us-invoke.trigger 2>/dev/null | tr -d ' \r\n' || echo daily)
           if [ "$MODE" = "verify" ]; then
             python scripts/us_daily.py --verify
+          elif [ "$MODE" = "e13" ]; then
+            # E13：负 Gamma×到期 挤压探针预登记验证（yfinance 拉 SPY/QQQ/VIX，回帖验证 issue）
+            python scripts/validation/e13_gamma_squeeze.py --period 15y \
+              --out results/e13_gamma_squeeze.md --post-issue
           else
             python scripts/us_daily.py
           fi

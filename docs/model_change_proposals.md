@@ -373,6 +373,12 @@ E9 与之不矛盾：E9 证「无脑用 MA60 在 A股失效」，重远强调「
 
 **诚实分级（关键）**：这是**代理法探针**——我们没有真实 dealer Gamma 数据，用"临近到期+VIX 骤升+破 MA10"近似负 Gamma 环境。E13 的作用正是检验"这个代理窗口是否真的让卖 put 更差"；**若 E13 证不出显著恶化（<20 样本或恶化<5pp），说明代理无效 → 不上线、不自欺**。绝不因笔记里一段生动的死亡螺旋描述就直接改生产。
 
+**状态（2026-07-13 更新·已实现待判据）：**
+- **预登记口径细化（跑数前 · 未见任何结果）**：到期口径由"月度或周度"**收窄为仅标准月度 OpEx（第三个周五）**——周度到期使"临近"近乎恒真、失判别力，且负 Gamma 集中于月度 OpEx。此为跑数前诚实修订，记录在案（非看结果改判据）。
+- **代码已落地（overlay 默认 off，卖 put 行为零改动）**：窗口探测纯函数 `us/signals.py:label_squeeze_windows / gamma_squeeze_now`（生产与 E13 **同一函数**）；参数 `us/config.py:US_GAMMA_*`；`us/plan.py` 已接 `US_GAMMA_OVERLAY`（off｜observe 仅提示｜strict 收紧卖 put），**默认 off**。单测 `tests/test_us_module.py`（5 条，含三条件缺一不中、远离 OpEx 不中）。
+- **E13 已实现可跑**：`scripts/validation/e13_gamma_squeeze.py`（yfinance 拉 SPY/QQQ/VIX 15y，全历史标窗口 → 20 日浮亏/回本率 → 冻结判据判定 → 回帖「🧪 验证报告」）；跑在 `us-update.yml` 的 `e13` 模式（bump `ops/us-invoke.trigger=e13`）。
+- **晋升门**：E13 跑出 PASS **且** 满足「高置信直升」四条 → 把 `US_GAMMA_OVERLAY` 默认切 strict（直升）；FAIL/样本不足 → 永久保持 off（代理无效诚实不上线）。**判据未跑出前系统卖 put 行为不变。**
+
 ---
 
 ## 建议实施顺序与依据
