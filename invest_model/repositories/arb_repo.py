@@ -27,7 +27,7 @@ class WaterMeterRepo(BaseRepository):
     def get_active(self, dt: str) -> pd.DataFrame:
         """当期有效水表信号：as_of_date<=dt 且（valid_until 空或 >=dt）。"""
         df = self.read_sql(
-            f"SELECT as_of_date, meter, dimension, key, flow_score, direction, "
+            f"SELECT as_of_date, meter, dimension, `key`, flow_score, direction, "
             f"evidence, source, valid_until FROM {self.TABLE} "
             f"WHERE as_of_date<=:d AND (valid_until IS NULL OR valid_until='' "
             f"OR valid_until>=:d)",
@@ -76,7 +76,7 @@ class CarryRepo(BaseRepository):
         if sleeve:
             sql += " AND sleeve=:s"
             params["s"] = sleeve
-        return self.read_sql(sql + " ORDER BY rank", params)
+        return self.read_sql(sql + " ORDER BY `rank`", params)
 
 
 class AlphaRepo(BaseRepository):

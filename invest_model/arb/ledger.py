@@ -135,8 +135,8 @@ def build_arb_plan(engine, dt: str, cfg: ArbConfig, equity: float, gross: float,
                             sleeve=sleeve)
         # carry_signal 按各自 version 落库；这里放宽 version 直接按 sleeve 读
         cs = repo.read_sql(
-            "SELECT code, expected_carry, rank, metric FROM carry_signal "
-            "WHERE trade_date=:d AND sleeve=:s ORDER BY rank LIMIT :n",
+            "SELECT code, expected_carry, `rank`, metric FROM carry_signal "
+            "WHERE trade_date=:d AND sleeve=:s ORDER BY `rank` LIMIT :n",
             {"d": dt, "s": sleeve, "n": 1 if sleeve == "reverse_repo" else cfg.dividend_top_n})
         for _, r in cs.iterrows():
             ec = float(r["expected_carry"]) if pd.notna(r["expected_carry"]) else 0.0
