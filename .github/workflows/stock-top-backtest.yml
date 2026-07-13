@@ -24,7 +24,7 @@ permissions:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
       MYSQL_HOST: ${{ secrets.DB_HOST }}

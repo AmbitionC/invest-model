@@ -76,9 +76,12 @@ def run(repo: BaseRepository, limit: int | None) -> str:
         L.append(f"\n⚠️ stock_daily 无 ≥{MIN_ROWS} 日的个股，检查数据回填。")
         return "\n".join(L)
 
+    print(f"[progress] 个股池 {len(codes)} 只，开始逐票回测…", flush=True)
     cycles: list[dict] = []
     n_stocks_with_cycle = 0
-    for code in codes:
+    for idx, code in enumerate(codes, 1):
+        if idx % 100 == 0:
+            print(f"[progress] {idx}/{len(codes)} 只已处理，累计周期 {len(cycles)}", flush=True)
         df = _load_stock(repo, code)
         if len(df) < 200:
             continue
