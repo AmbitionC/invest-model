@@ -149,6 +149,64 @@ def test_is_trade_day(sqlite_db):
     assert jobs._is_trade_day("20991231") is True  # 无记录按交易日处理
 
 
+@pytest.fixture()
+def fear_db(tmp_path, monkeypatch):
+    db = f"sqlite:///{tmp_path}/fear.db"
+    eng = create_engine(db)
+    with eng.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE trade_calendar (cal_date TEXT PRIMARY KEY, is_open INTEGER)"))
+        # 周五0710交易、0711/0712周末、周一0713交易
+        conn.execute(text("INSERT INTO trade_calendar VALUES "
+                          "('20260710',1),('20260711',0),('20260712',0),('20260713',1)"))
+    monkeypatch.setenv("INVEST_DB_URL", db)
+    return db
+
+
+def _dt(*a):
+    return __import__("datetime").datetime(*a)
+
+
+def test_latest_closed_trade_day(fear_db, monkeypatch):
+    from invest_model.data import make_engine
+    from invest_model.repositories.base import BaseRepository
+    repo = BaseRepository(make_engine(fear_db))
+    monkeypatch.setattr(gh_notify, "bj_now", lambda: _dt(2026, 7, 11, 0, 8))  # 周六
+    assert jobs._latest_closed_trade_day(repo) == "20260710"
+    monkeypatch.setattr(gh_notify, "bj_now", lambda: _dt(2026, 7, 13, 17, 0))  # 周一(今天不算)
+    assert jobs._latest_closed_trade_day(repo) == "20260710"
+    monkeypatch.setattr(gh_notify, "bj_now", lambda: _dt(2026, 7, 14, 17, 0))  # 周二
+    assert jobs._latest_closed_trade_day(repo) == "20260713"
+
+
+def _patch_fear(monkeypatch, cur_date):
+    import scripts.fear_gauge as fg
+    import invest_model.signals.fear as fearmod
+    monkeypatch.setattr(fearmod, "fear_gauge", lambda engine, **k: {
+        "date": cur_date, "score": 50, "level": "中性", "components": {}, "raw": {}})
+    monkeypatch.setattr(fg, "persist_fear", lambda engine, g: None)
+
+
+def test_fear_no_alert_on_weekend_rerun(fear_db, monkeypatch):
+    """周末重跑：恐慌停在0710，周六最近已收盘交易日=0710，不落后→不告警（旧逻辑此处误报）。"""
+    alerts = []
+    monkeypatch.setattr(gh_notify, "alert", lambda job, err: alerts.append(job))
+    monkeypatch.setattr(gh_notify, "bj_now", lambda: _dt(2026, 7, 11, 0, 8))
+    _patch_fear(monkeypatch, "20260710")
+    assert jobs._persist_fear_daily() == "ok:20260710"
+    assert alerts == []
+
+
+def test_fear_alert_when_behind_closed_day(fear_db, monkeypatch):
+    """周二0714恐慌仍停在0710，最近已收盘=0713>0710→真卡住，告警。"""
+    alerts = []
+    monkeypatch.setattr(gh_notify, "alert", lambda job, err: alerts.append(job))
+    monkeypatch.setattr(gh_notify, "bj_now", lambda: _dt(2026, 7, 14, 17, 0))
+    _patch_fear(monkeypatch, "20260710")
+    assert jobs._persist_fear_daily().startswith("stale:20260710")
+    assert alerts == ["fear_daily"]
+
+
 def test_snapshot_remind_skips_non_trading_day(sqlite_db, monkeypatch):
     monkeypatch.setattr(gh_notify, "bj_now",
                         lambda: __import__("datetime").datetime(2026, 7, 2, 15, 20))
