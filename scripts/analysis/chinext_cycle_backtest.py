@@ -206,8 +206,10 @@ def _exit_top(df, s: int) -> tuple[int, str]:
     v = df["volume"].astype(float)
     ret = c.pct_change()
     vol20 = ret.rolling(TOP_VOL_WIN).std() * np.sqrt(250)
+    # 当前波动在近 250 日窗内的分位（=窗内 ≤ 当前 的占比）。raw=True 传 numpy 数组，
+    # 比 raw=False 传 Series 快一个量级——个股全池全历史时这步是瓶颈。
     vol_rank = vol20.rolling(TOP_VOL_LOOKBACK, min_periods=60).apply(
-        lambda w: (w.iloc[-1] >= w).mean(), raw=False)
+        lambda w: (w[-1] >= w).mean(), raw=True)
     vratio = v.rolling(5).mean() / v.rolling(60).mean()
     cost = float(c.iloc[s])
     peak = cost
