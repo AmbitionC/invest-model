@@ -1,0 +1,51 @@
+name: multicycle-exit-backtest
+
+# 全样本多周期离场策略对照回测（把 chinext n=1 升级为跨周期统计裁决）。
+# 只读 index_daily + risk.py 生产函数；不落库、不改生产。报告打印到日志（Claude 读取）+ 上传 artifact。
+# 触发：手动 / 改 ops/multicycle-backtest.trigger 后 push（仅 master）。
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/multicycle-backtest.trigger'
+
+concurrency:
+  group: multicycle-backtest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 回测（全样本多周期离场对照）
+        run: |
+          python scripts/analysis/multicycle_exit_backtest.py \
+            --out results/multicycle_exit_backtest.md
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: multicycle-backtest
+          path: results/multicycle_exit_backtest.md
+          if-no-files-found: warn
