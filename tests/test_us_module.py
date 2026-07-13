@@ -291,3 +291,64 @@ def test_schema_contains_us_tables(us_db):
               "us_option_candidate", "us_action_plan", "us_plan_account",
               "us_account_snapshot", "us_current_holding", "us_valuation"):
         assert repo.table_exists(t), t
+
+
+# ── US-O5 负 Gamma×到期 挤压窗口探测器（P17/E13 核心纯函数）────────────────
+
+def test_third_friday():
+    import datetime as dt
+    assert S._third_friday(2024, 1) == dt.date(2024, 1, 19)
+    assert S._third_friday(2024, 2) == dt.date(2024, 2, 16)
+    assert S._third_friday(2026, 7) == dt.date(2026, 7, 17)
+
+
+def test_opex_trading_days_holiday_shift():
+    # 构造含"第三个周五恰为假日缺席"的月：手动去掉 2024-01-19
+    didx = [d.strftime("%Y%m%d") for d in pd.bdate_range("2024-01-01", "2024-01-31")]
+    opex = S._opex_trading_days(didx)
+    assert "20240119" in opex                       # 正常：第三个周五在交易日历里
+    didx2 = [d for d in didx if d != "20240119"]
+    opex2 = S._opex_trading_days(didx2)
+    assert "20240118" in opex2                      # 顺延到 ≤第三个周五 的最近交易日
+
+
+def test_squeeze_window_all_three_conditions_required():
+    didx = [d.strftime("%Y%m%d") for d in pd.bdate_range("2024-01-01", "2024-04-30")]
+    down = pd.Series(np.linspace(100, 80, len(didx)), index=didx)  # 一路破 MA10
+    flat = pd.Series(100.0, index=didx)                            # 恒在均线上
+    vix_calm = pd.Series(15.0, index=didx)
+    vix_spike = vix_calm.copy()
+    vix_spike.loc["20240118"] = 15 * 1.3           # OpEx(01-19) 前 1 日骤升 +30%
+
+    # 三条同时满足 → 命中
+    w = S.label_squeeze_windows(down, vix_spike, days_to_expiry_max=2,
+                                vix_spike_pct=0.15, vix_abs=35, ma_window=10)
+    assert bool(w.loc["20240118"])
+    # 缺 VIX 骤升 → 不命中
+    w2 = S.label_squeeze_windows(down, vix_calm, days_to_expiry_max=2,
+                                 vix_spike_pct=0.15, vix_abs=35, ma_window=10)
+    assert not w2.any()
+    # 有骤升但在均线上（未破位）→ 不命中
+    w3 = S.label_squeeze_windows(flat, vix_spike, days_to_expiry_max=2,
+                                 vix_spike_pct=0.15, vix_abs=35, ma_window=10)
+    assert not w3.any()
+
+
+def test_squeeze_window_far_from_opex_not_triggered():
+    # VIX 骤升 + 破位，但发生在远离 OpEx 的月初 → 不命中（到期临近条件把关）
+    didx = [d.strftime("%Y%m%d") for d in pd.bdate_range("2024-01-01", "2024-01-31")]
+    down = pd.Series(np.linspace(100, 90, len(didx)), index=didx)
+    vix = pd.Series(15.0, index=didx)
+    vix.iloc[2] = vix.iloc[1] * 1.4                 # 月初骤升（远离 01-19 OpEx）
+    w = S.label_squeeze_windows(down, vix, days_to_expiry_max=2,
+                                vix_spike_pct=0.15, vix_abs=35, ma_window=10)
+    assert not w.iloc[2]
+
+
+def test_gamma_squeeze_now_reads_latest():
+    didx = [d.strftime("%Y%m%d") for d in pd.bdate_range("2024-01-01", "2024-01-19")]
+    down = pd.Series(np.linspace(100, 90, len(didx)), index=didx)
+    vix = pd.Series(15.0, index=didx)
+    vix.iloc[-1] = vix.iloc[-2] * 1.3               # 最新日恰为 OpEx 且骤升+破位
+    assert S.gamma_squeeze_now(down, vix, days_to_expiry_max=2,
+                               vix_spike_pct=0.15, vix_abs=35, ma_window=10)

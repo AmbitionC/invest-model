@@ -60,3 +60,13 @@ VAL_CHEAP_YEARS = _f("US_VAL_CHEAP_YEARS", 15.0)   # 回本 ≤15年 = cheap（~
 VAL_FAIR_YEARS = _f("US_VAL_FAIR_YEARS", 25.0)     # 15-25年 = fair；>25 或不赚真钱 = expensive
 VAL_CHASE_RALLY = _f("US_VAL_CHASE_RALLY", 0.80)   # 距一年低点涨幅>80%且非cheap = 追高禁买
 PROBE_CAPEX_NI = _f("US_PROBE_CAPEX_NI", 1.2)      # capex/净利>1.2 = 以战养战黑洞探针
+
+# ── 负 Gamma×到期 挤压探针（规则 US-O5 / 提案 P17；参数与 E13 冻结判据镜像）──
+# 窗口 = 距月度 OpEx（标准第三个周五）≤GAMMA_DTE_MAX 交易日 且（VIX 单日涨幅≥GAMMA_VIX_SPIKE
+# 或 VIX≥GAMMA_VIX_ABS）且 基准收于 GAMMA_MA 日线下方。overlay 默认 off——
+# **E13 未证出显著恶化前不接线**，卖 put 行为零改动；E13 达标+高置信直升才切 strict/observe。
+GAMMA_DTE_MAX = int(_f("US_GAMMA_DTE_MAX", 2))       # 距月度 OpEx 交易日数
+GAMMA_VIX_SPIKE = _f("US_GAMMA_VIX_SPIKE", 0.15)     # VIX 单日涨幅阈值
+GAMMA_VIX_ABS = _f("US_GAMMA_VIX_ABS", 35.0)         # VIX 绝对高位阈值
+GAMMA_MA = int(_f("US_GAMMA_MA", 10))                # 基准短均线（破位）
+GAMMA_OVERLAY = os.getenv("US_GAMMA_OVERLAY", "off")  # off | observe（仅提示）| strict（收紧卖put）
