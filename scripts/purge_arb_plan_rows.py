@@ -32,7 +32,8 @@ ARB_SLEEVES = ("defense_A", "alpha")
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="删除 action_plan 套利 sleeve 行")
-    ap.add_argument("--db", default=os.getenv("INVEST_DB_URL") or "sqlite:///./data/real.db")
+    # 缺省 None → make_engine 走 resolve_db_url：INVEST_DB_URL 空则回退 MYSQL_*/DB_* env（生产）。
+    ap.add_argument("--db", default=os.getenv("INVEST_DB_URL") or None)
     ap.add_argument("--date", default=None, help="仅删某 plan_date（YYYYMMDD）；缺省删全部")
     args = ap.parse_args()
 
