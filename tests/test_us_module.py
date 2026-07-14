@@ -352,3 +352,12 @@ def test_gamma_squeeze_now_reads_latest():
     vix.iloc[-1] = vix.iloc[-2] * 1.3               # 最新日恰为 OpEx 且骤升+破位
     assert S.gamma_squeeze_now(down, vix, days_to_expiry_max=2,
                                vix_spike_pct=0.15, vix_abs=35, ma_window=10)
+
+
+# ── 财报日标注（DDOG/RKLB 研报移植：财报=一级风险事件，仅标注不拦截）────────
+
+def test_spans_earnings():
+    assert O.spans_earnings("20260820", "20260806", "20260714")        # 到期跨财报
+    assert not O.spans_earnings("20260801", "20260806", "20260714")    # 财报在到期后
+    assert not O.spans_earnings("20260820", "20260701", "20260714")    # 财报已过
+    assert not O.spans_earnings("20260820", None, "20260714")          # 无数据不标注

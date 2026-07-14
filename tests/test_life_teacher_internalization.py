@@ -189,3 +189,13 @@ def test_fmt_attr_compact():
     assert _fmt_attr("ep+0.82|mom_60+1.15|roe-0.31") == "低PE↑、中期动量↑、净资产收益↓"
     assert _fmt_attr("unknown_f+0.5") == "unknown_f↑"
     assert _fmt_attr(None) == ""
+
+
+def test_plan_data_footer_line():
+    from invest_model.orchestration.action_plan import _footer_line
+    f = _footer_line("20260714", "20260714", "20260714", "20260714")
+    assert "行情/决策日 20260714" in f and "⚠️" not in f
+    assert "价格锚为决策日收盘" in f
+    # 快照落后决策日 → 标 ⚠️；缺失 → 标缺失
+    f2 = _footer_line("20260714", "20260710", None, "20260714")
+    assert "持仓快照 20260710⚠️落后" in f2 and "投顾信号至 缺失⚠️" in f2
