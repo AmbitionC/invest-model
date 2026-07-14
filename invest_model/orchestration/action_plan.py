@@ -209,6 +209,19 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         cost_map[h["code"]] = float(h["cost_price"] or 0)
         shares_map[h["code"]] = float(h["shares"] or 0)
         entry_map[h["code"]] = str(h["entry_date"] or "")
+    # 现金真源：调用方未传 cash（--cash 0）时回退读最新 account_snapshot 的现金——
+    # 持仓快照 ingest 已把券商现金写入，令快照成为现金唯一真源，免手工维护 ACCOUNT_CASH 变量。
+    if cash <= 0:
+        try:
+            if loop.repo.table_exists("account_snapshot"):
+                cs = loop.repo.read_sql(
+                    "SELECT cash FROM account_snapshot "
+                    "WHERE snapshot_date=(SELECT MAX(snapshot_date) FROM account_snapshot)")
+                if not cs.empty and pd.notna(cs["cash"].iloc[0]) and float(cs["cash"].iloc[0]) > 0:
+                    cash = float(cs["cash"].iloc[0])
+        except Exception:  # noqa: BLE001
+            pass
+
     mv = {c: last_close[c] * shares_map[c] for c in held_codes}
     equity = sum(mv.values()) + max(0.0, cash)
     if equity <= 0:
