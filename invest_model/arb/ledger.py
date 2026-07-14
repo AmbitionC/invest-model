@@ -124,6 +124,16 @@ def build_arb_plan(engine, dt: str, cfg: ArbConfig, equity: float, gross: float,
                     return float(d["close"].iloc[0])
         return 100.0
 
+    def _name(code: str) -> str | None:
+        """真实标的名：股票走 stock_info，可转债走 cb_basic.bond_short_name。取不到返 None。"""
+        for tbl, col in (("stock_info", "name"), ("cb_basic", "bond_short_name")):
+            if repo.table_exists(tbl):
+                d = repo.read_sql(
+                    f"SELECT {col} nm FROM {tbl} WHERE ts_code=:c LIMIT 1", {"c": code})
+                if not d.empty and pd.notna(d["nm"].iloc[0]) and str(d["nm"].iloc[0]).strip():
+                    return str(d["nm"].iloc[0]).strip()
+        return None
+
     # defense_A：逆回购(1) + 红利(top) + 可转债(top)，等分 defense 预算
     defense_budget = alloc["defense_A"]
     defense_items: list[tuple[str, str, float]] = []   # (code, note, expected_carry)
@@ -147,12 +157,12 @@ def build_arb_plan(engine, dt: str, cfg: ArbConfig, equity: float, gross: float,
             px = _px(code)
             carry_expected_total += w_each * ec
             arb_rows.append({
-                "plan_date": dt, "code": code, "name": label, "action": "buy",
+                "plan_date": dt, "code": code, "name": _name(code) or label, "action": "buy",
                 "cur_weight": 0.0, "tgt_weight": round(w_each, 4),
                 "shares_delta": _round_lot(w_each * equity / px) if px > 0 else 0.0,
                 "reason": f"{label}·稳吃利差", "stop_price": None,
                 "ref_price": round(px, 3), "grade": None,
-                "trigger": None, "model_rank": None, "model_view": "防守底盘",
+                "trigger": None, "model_rank": None, "model_view": f"防守底盘·{label}",
                 "sleeve": "defense_A"})
 
     # alpha：alpha_candidate 未证伪的等权（单票 ≤ name_cap，总 ≤ alpha 预算）
@@ -167,10 +177,12 @@ def build_arb_plan(engine, dt: str, cfg: ArbConfig, equity: float, gross: float,
                     px = _px(str(r["code"]))
                     arb_rows.append({
                         "plan_date": dt, "code": str(r["code"]),
-                        "name": str(r.get("theme") or "盲区α"), "action": "buy",
+                        "name": _name(str(r["code"])) or str(r.get("theme") or "盲区α"),
+                        "action": "buy",
                         "cur_weight": 0.0, "tgt_weight": round(w_each, 4),
                         "shares_delta": _round_lot(w_each * equity / px) if px > 0 else 0.0,
-                        "reason": "盲区α·买高赔率概率（亏得起）", "stop_price": None,
+                        "reason": f"盲区α·{r.get('theme') or ''}·买高赔率概率（亏得起）",
+                        "stop_price": None,
                         "ref_price": round(px, 3), "grade": str(r.get("grade") or ""),
                         "trigger": "逻辑止损:水表反转", "model_rank": None,
                         "model_view": "盲区α", "sleeve": "alpha"})

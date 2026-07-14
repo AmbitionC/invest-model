@@ -99,13 +99,18 @@ jobs:
               issue = created.data;
             }
 
-            // 防重：链式触发与 cron 兜底同一天都到达时，只发第一封
+            // 防重：**一决策日只发一份计划**——按决策日(planDate)去重，不按墙钟日。
+            // 修复：盘中 bump plan-notify 会用旧数据(planDate=昨收)重算，若按墙钟标题去重
+            // 就会贴出一条"今日盘后计划（决策日=昨日）"——盘中却写"盘后"、且不含当日盘中新信号，
+            // 造成 issue 刷屏+误导。改为决策日去重后：该决策日已有计划即跳过（盘中重算落在旧决策日→静默跳过），
+            // 今晚 17:00 收盘数据入库后 planDate 前进到今日→正常发当日正式计划，互不影响。
             const existing = await github.rest.issues.listComments({
-              owner, repo, issue_number: issue.number, per_page: 30,
+              owner, repo, issue_number: issue.number, per_page: 50,
               sort: 'created', direction: 'desc',
             });
-            if (existing.data.some(c => c.body.startsWith(header))) {
-              core.info(`决策日 ${planDate} 的计划已发过，跳过（链式/cron 双触发防重）。`);
+            const decisionTag = `（决策日 ${planDate}）`;
+            if (existing.data.some(c => c.body.includes(decisionTag))) {
+              core.info(`决策日 ${planDate} 的计划已发过，跳过（一决策日一计划）。`);
               return;
             }
             await github.rest.issues.createComment({
