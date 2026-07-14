@@ -162,3 +162,15 @@ def fetch_valuation(code: str) -> dict:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"us valuation {code} 失败（该标的按 unknown 档处理）：{e}")
         return {}
+
+
+def fetch_next_earnings(code: str) -> str | None:
+    """下一次财报日（YYYYMMDD），yfinance calendar 口径；取不到返 None（不阻断）。"""
+    try:
+        cal = _yf().Ticker(code).calendar or {}
+        dates = cal.get("Earnings Date") or []
+        if dates:
+            return pd.to_datetime(dates[0]).strftime("%Y%m%d")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"us earnings {code} 获取失败（不标注跨财报）：{e}")
+    return None

@@ -39,7 +39,7 @@ def _closes_indexed(repo, code: str) -> pd.Series:
     return pd.Series(df["close"].values, index=df["trade_date"].astype(str))
 
 
-def build_plan(engine, fetch_chain=None) -> dict:
+def build_plan(engine, fetch_chain=None, fetch_earnings=None) -> dict:
     """生成当日计划。fetch_chain 可注入（测试用），默认 yfinance 实取。"""
     repo = BaseRepository(engine)
     latest = repo.read_sql(
@@ -191,6 +191,11 @@ def build_plan(engine, fetch_chain=None) -> dict:
             px = _last_close(repo, c) or 1e9
             if px * 100 * (1 - C.OPT_MIN_SAFETY) <= income_budget:
                 cand_codes.append(c)
+        # 财报日标注（DDOG/RKLB 研报移植：财报=一级风险事件；仅标注不拦截）
+        fe = fetch_earnings
+        if fe is None and fetch_chain is None and _yf_available():
+            from invest_model.us import datasource as _ds
+            fe = _ds.fetch_next_earnings
         for code in cand_codes[:6]:                    # 控制 API 量
             close = _last_close(repo, code)
             v = val_map.get(code)
@@ -200,7 +205,18 @@ def build_plan(engine, fetch_chain=None) -> dict:
                               quality_ok=grade_map.get(code) in ("A", "B"),
                               anchor=anchor, mode=put_mode)
             if not got.empty:
-                opt_rows.append(got.head(3))
+                got = got.head(3)
+                try:
+                    ne = fe(code) if fe is not None else None
+                    if ne:
+                        mask = got["expiry"].astype(str).map(
+                            lambda x: O.spans_earnings(x, ne, plan_date))
+                        got.loc[mask, "reason"] = (
+                            got.loc[mask, "reason"]
+                            + f"·⚠️到期跨财报({ne[4:6]}/{ne[6:8]})跳空风险知情")
+                except Exception:  # noqa: BLE001 — 财报日失败不阻断候选
+                    pass
+                opt_rows.append(got)
         for code, h in hold_map.items():
             if float(h["shares"]) >= 100:
                 close = _last_close(repo, code)
@@ -300,6 +316,8 @@ def render_markdown(plan_date: str, account: dict, plan: pd.DataFrame,
                 f"| ${float(o['strike']):.1f} | ${float(o['premium']):.2f} "
                 f"| {float(o['annualized_yield']):.0%} | {float(o['safety_margin']):.0%} "
                 f"| ${float(o['collateral']):,.0f} |")
+    lines.append(f"\n> 数据口径：行情/决策日 {plan_date}（美东收盘）｜期权链为当日快照，"
+                 "盘中价与扩展时段价不作触发/止损确认依据。")
     lines.append("\n---\n*纯建议输出（人工执行）；每条规则编号见 docs/us_rulebook.md，"
                  "方法论出处 life-teachers 美股专题篇（V2·全哥体系）。零杠杆、绝不裸卖期权、"
                  "不做买方主仓。理性预期：三五年一倍已属顶尖，别追求一年多少倍。*")

@@ -33,9 +33,38 @@ class ActionPlan:
     plan_date: str
     rows: list[dict] = field(default_factory=list)
     account: dict = field(default_factory=dict)
+    footer: str = ""            # 数据口径页脚（各数据源截至日+锚定声明），render 末尾输出
 
     def to_markdown(self) -> str:
         return render_markdown(self)
+
+
+def _footer_line(dt: str, snap_d: str | None, adv_d: str | None,
+                 fear_d: str | None) -> str:
+    """数据口径页脚（纯函数）：各源截至日 + 落后决策日的标 ⚠️ + 价格锚声明。"""
+    def _seg(label: str, d: str | None) -> str:
+        if not d:
+            return f"{label} 缺失⚠️"
+        return f"{label} {d}" + ("" if str(d) >= dt else "⚠️落后")
+    segs = [f"行情/决策日 {dt}", _seg("持仓快照", snap_d),
+            _seg("投顾信号至", adv_d), _seg("恐慌指数至", fear_d)]
+    return ("> 数据口径：" + " · ".join(segs)
+            + " ｜ 价格锚为决策日收盘，盘中价不作触发/止损确认依据。")
+
+
+def _build_data_footer(loop, dt: str) -> str:
+    """回读各数据源最新日期，生成口径页脚（best-effort，失败不阻断计划）。"""
+    def _max(table: str, col: str) -> str | None:
+        try:
+            if loop.repo.table_exists(table):
+                d = loop.repo.read_sql(f"SELECT MAX({col}) m FROM {table}")
+                v = d["m"].iloc[0]
+                return str(v) if v is not None and pd.notna(v) else None
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+    return _footer_line(dt, _max("holding_snapshot", "snapshot_date"),
+                        _max("advisor_reco", "rec_date"), _max("fear_daily", "trade_date"))
 
 
 def _latest_data_date(loop: ClosedLoop) -> str:
@@ -691,7 +720,8 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     }
 
     rows = rows + arb_rows + watch_rows
-    plan = ActionPlan(plan_date=dt, rows=rows, account=account)
+    plan = ActionPlan(plan_date=dt, rows=rows, account=account,
+                      footer=_build_data_footer(loop, dt))
     if persist and rows:
         cols = ["plan_date", "code", "name", "action", "cur_weight", "tgt_weight",
                 "shares_delta", "reason", "stop_price", "ref_price", "grade",
@@ -928,6 +958,8 @@ def render_markdown(plan: ActionPlan) -> str:
     else:
         lines.append("（观察池为空）")
     _render_ledger(lines, a, arb)
+    if plan.footer:
+        lines += ["", plan.footer]
     return "\n".join(lines)
 
 

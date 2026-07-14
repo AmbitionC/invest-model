@@ -110,3 +110,17 @@ def score_cc(chain: pd.DataFrame, close: float, cost_price: float,
                    f"〔规则US-O2〕"), axis=1)
     ok = ok.sort_values("annualized_yield", ascending=False)
     return ok[cols].reset_index(drop=True)
+
+
+def spans_earnings(expiry: str, next_earnings: str | None,
+                   today: str | None = None) -> bool:
+    """期权到期日是否跨越下一次财报日（纯函数，供 CSP 候选标注跳空风险）。
+
+    跨财报卖 put：财报跳空使被行权概率/深度陡增而接盘价锚不变——不是禁止，
+    是必须知情（DDOG/RKLB 研报把财报日当一级风险事件管理的移植）。
+    """
+    if not next_earnings or not expiry:
+        return False
+    e, x = str(next_earnings), str(expiry)
+    lo = str(today) if today else ""
+    return (e <= x) and (not lo or e >= lo)
