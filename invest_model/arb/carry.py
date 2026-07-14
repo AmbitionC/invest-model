@@ -113,11 +113,19 @@ def build_carry_signals(engine, dt: str, cfg: ArbConfig | None = None,
                                     "expected_carry", "horizon_days", "rank", "metric"]])
 
     # 红利 carry（股息率来自 stock_fundamental.dv_ratio）
+    # 可交易性硬闸（E14 判据②前置）：剔除 B 股（200xxx 深B / 900xxx 沪B——A 股账户不可交易，
+    # 且其高股息常虚高误导排序）；有 stock_info 时再剔 ST/*ST（退市/基本面风险，不当防守底盘）。
     if cfg.dividend and repo.table_exists("stock_fundamental"):
+        st_join, st_cond = "", ""
+        if repo.table_exists("stock_info"):
+            st_join = "JOIN stock_info i ON f.code=i.ts_code "
+            st_cond = "AND i.name NOT LIKE '%%ST%%' "
         dv = repo.read_sql(
-            "SELECT code, dv_ratio FROM stock_fundamental "
-            "WHERE trade_date=(SELECT MAX(trade_date) FROM stock_fundamental "
-            "WHERE trade_date<=:d) AND dv_ratio>=:m ORDER BY dv_ratio DESC LIMIT :n",
+            f"SELECT f.code, f.dv_ratio FROM stock_fundamental f {st_join}"
+            f"WHERE f.trade_date=(SELECT MAX(trade_date) FROM stock_fundamental "
+            f"WHERE trade_date<=:d) AND f.dv_ratio>=:m "
+            f"AND f.code NOT LIKE '200%%' AND f.code NOT LIKE '900%%' "
+            f"{st_cond}ORDER BY f.dv_ratio DESC LIMIT :n",
             {"d": dt, "m": cfg.dividend_min_dv, "n": cfg.dividend_top_n})
         rows = []
         for _, r in dv.iterrows():
