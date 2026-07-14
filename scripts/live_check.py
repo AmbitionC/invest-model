@@ -812,15 +812,17 @@ def _once(args: argparse.Namespace) -> dict:
     _persist_alerts(ctx["engine"], now, new)
     crit = [(k, line) for k, line, sev in new if sev == "crit"]
     batch = [(k, line) for k, line, sev in new if sev != "crit"]
-    # ETF 实时自检（每日一次，提示类）
+    # ETF 实时取价自检（内部诊断）：全取到就不打扰用户，只在**有未取到**时提示盯盘价可能不准。
     if ctx["etf_codes"]:
         got = [(c, rt.get(c, {}).get("price")) for c in ctx["etf_codes"]]
         n_ok = sum(1 for _, p in got if p)
-        key = f"ETFSELF:{now:%Y%m%d}:{n_ok}"
-        if key not in seen:
-            batch.append((key, f"🔎 ETF实时自检：{n_ok}/{len(got)} 取到现价"))
-            _persist_alerts(ctx["engine"], now,
-                            [(key, f"🔎 ETF实时自检：{n_ok}/{len(got)} 取到现价", "batch")])
+        if n_ok < len(got):
+            miss = len(got) - n_ok
+            msg = f"⚠️ 实时取价：{miss} 只ETF未取到现价（{n_ok}/{len(got)}），盯盘价可能暂不准、以收盘为准"
+            key = f"ETFSELF:{now:%Y%m%d}:{n_ok}"
+            if key not in seen:
+                batch.append((key, msg))
+                _persist_alerts(ctx["engine"], now, [(key, msg, "batch")])
     flush = bool(crit) or _once_flush_batch(hm, args.digest_window, args.once_step)
     items = crit + (batch if flush else [])
     if items:
@@ -917,20 +919,22 @@ def _watch(args: argparse.Namespace) -> None:
             print(f"⚠️ {now:%H:%M} CST 本轮取数/评估失败，跳过：{repr(e)[:160]}")
             time.sleep(interval)
             continue
-        if first and ctx["etf_codes"]:     # 首轮自检：ETF 实时价（rt_etf_k）是否取到
+        if first and ctx["etf_codes"]:     # 首轮取价自检：ETF 实时价（rt_etf_k）是否取到
             got = [(c, rt.get(c, {}).get("price")) for c in ctx["etf_codes"]]
             n = sum(1 for _, p in got if p)
             detail = "，".join(f"{c}={p}" if p else f"{c}=无价" for c, p in got)
-            tail = "" if n else "（腾讯免费源 qt.gtimg.cn 未取到，检查 Actions 外网/代码格式）"
-            line = f"🔎 ETF实时自检：{n}/{len(got)} 取到现价（{detail}）{tail}"
-            print(line)
-            key = f"ETFSELF:{today}:{n}"    # 含结果数，状态变化即重发一次；去重跨重启
-            if key not in seen:            # 自检属提示类：进摘要缓冲，不单发邮件
-                seen.add(key)
-                if not pending:
-                    pending_since = now
-                pending.append((key, line))
-                _persist_alerts(ctx["engine"], now, [(key, line, "batch")])
+            print(f"🔎 ETF实时自检：{n}/{len(got)} 取到现价（{detail}）")  # 仅日志诊断
+            if n < len(got):               # 全取到就不打扰用户；只在有未取到时提示
+                tail = "（腾讯免费源 qt.gtimg.cn 未取到，以收盘价为准）" if not n else ""
+                line = (f"⚠️ 实时取价：{len(got) - n} 只ETF未取到现价（{n}/{len(got)}），"
+                        f"盯盘价可能暂不准、以收盘为准{tail}")
+                key = f"ETFSELF:{today}:{n}"    # 含结果数，状态变化即重发一次；去重跨重启
+                if key not in seen:            # 提示类：进摘要缓冲，不单发邮件
+                    seen.add(key)
+                    if not pending:
+                        pending_since = now
+                    pending.append((key, line))
+                    _persist_alerts(ctx["engine"], now, [(key, line, "batch")])
         # 分级：卖出类风控(crit)立即推；买点/提示类(batch)进缓冲合并推
         new = [(k, line, sev) for k, line, sev in alerts if k not in seen]
         for k, _, _ in new:
