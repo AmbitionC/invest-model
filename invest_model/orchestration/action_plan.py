@@ -849,8 +849,21 @@ def _model_view(mr, trust: float, top_factors: str | None = None) -> str:
     return f"{base} · {attr}" if attr else base
 
 
+# 因子代码 → 中文（面向用户展示；↑=该维度抬升排名，↓=拖累排名）
+_FACTOR_CN = {
+    "ep": "低PE", "bp": "低PB", "sp": "低PS",
+    "roe": "净资产收益", "roa": "总资产收益", "gross_margin": "毛利率",
+    "rev_yoy": "营收增速", "profit_yoy": "利润增速",
+    "mom_60": "中期动量", "mom_120": "长期动量", "reversal_5": "短期反转",
+    "lowvol_20": "低波动", "small_size": "小市值", "low_turnover": "低换手",
+    "nb_ratio_chg_20": "北向加仓", "adv_stance": "投顾立场",
+    "growth_accel": "增速加速", "bp_ex_goodwill": "扣商誉低PB",
+    "dividend_yield": "股息率", "insider_conviction": "高管增持",
+}
+
+
 def _fmt_attr(top_factors) -> str:
-    """"ep+0.82|mom_60+1.15" → "ep↑mom_60↑"（因子名+推拉方向，紧凑展示）。"""
+    """"ep+0.82|mom_60+1.15" → "低PE↑、中期动量↑"（中文因子名+推拉方向）。"""
     if not top_factors or not isinstance(top_factors, str):
         return ""
     parts = []
@@ -859,8 +872,9 @@ def _fmt_attr(top_factors) -> str:
         i = max(seg.rfind("+"), seg.rfind("-"))
         if i <= 0:
             continue
-        parts.append(f"{seg[:i]}{'↑' if seg[i] == '+' else '↓'}")
-    return "".join(parts)
+        name = _FACTOR_CN.get(seg[:i], seg[:i])
+        parts.append(f"{name}{'↑' if seg[i] == '+' else '↓'}")
+    return "、".join(parts)
 
 
 def _table(lines: list[str], rows: list[dict]) -> None:
@@ -888,18 +902,8 @@ def render_markdown(plan: ActionPlan) -> str:
         f"账户风控(risk_off): {'⚠️ 触发，建议降仓' if a.get('risk_off') else '正常'}")
     mir = a.get("model_ic_ir")
     if mir is not None:
-        lines.append(
-            f"- 🔬 模型层置信度: **{a.get('model_conf_label')}**"
-            f"（rank-IC {(a.get('model_ic_mean') or 0):.3f} · IC_IR {mir:.2f} · 胜率 {(a.get('model_hit') or 0):.0%}）"
-            "— 衡量因子对未来约1月收益的区分力，决定下方「模型研判」的整体可信度")
-    lines.append(
-        "- 「模型研判」= 方向(看好/偏多/中性/偏弱/看淡) + 全市场分位 + 置信★"
-        "（★越多＝模型对该票越决断且历史越准；ETF/无覆盖记「—」）"
-        " + 因子归因（如 ep↑mom_60↑ = 该票排名主要由哪些因子推动）。"
-        "**标的由投顾定，模型只做参谋+时机+风控，不选股。**")
-    lines.append(
-        "- 可解释性：理由列的「定位:成长/修复/红利」= 买前定位赚哪种钱；"
-        "每条规则的参数、依据与知识库出处见 `docs/rulebook.md`（决策可溯源）。")
+        lines.append(f"- 🔬 模型置信度: **{a.get('model_conf_label')}**（★越多越可信）")
+    lines.append("- 标的由投顾定，模型只做参谋+时机+风控；名词解释与规则出处见 `docs/rulebook.md`。")
 
     # 套利 sleeve 行（defense_A/alpha）单列，不混入引擎 B 的买入/持仓/观察
     arb = [r for r in plan.rows if r.get("sleeve") in ("defense_A", "alpha")]
@@ -928,12 +932,11 @@ def render_markdown(plan: ActionPlan) -> str:
 
 
 def _render_ledger(lines: list[str], a: dict, arb_rows: list[dict]) -> None:
-    """套利统一资金账本段（一体两面）。account 无 sleeve 字段则跳过（向后兼容）。"""
-    if a.get("offense_pct") is None and not arb_rows:
+    """套利统一资金账本段。观察态（ARB_ENABLED=0，无 arb 行）不渲染——
+    面向用户的计划只在账本真正启用（E14 过关+签核）后才出现该段，避免噪音。"""
+    if not arb_rows:
         return
-    enabled = bool(arb_rows) or (a.get("ledger_ok") is not None)
-    tag = "" if arb_rows else "（观察态·未动用资金）"
-    lines += ["", f"## 四、套利/守恒 sleeve 账本{tag}"]
+    lines += ["", "## 四、套利/守恒 sleeve 账本"]
     dpct = a.get("defense_pct"); opct = a.get("offense_pct"); apct = a.get("alpha_pct")
     if opct is not None:
         ok = "✅零杠杆" if a.get("ledger_ok") else "⚠️超100%已收缩"
@@ -947,12 +950,9 @@ def _render_ledger(lines: list[str], a: dict, arb_rows: list[dict]) -> None:
         if ce:
             lines.append(f"- 防守底盘预期 carry（加权年化）：约 {ce:.2%}")
         lines.append("- 红线：全程自有资金·零杠杆；α 小仓位对赔率、单笔亏得起；跟水不跟价（逻辑止损）。")
-    if arb_rows:
-        lines += ["", "| sleeve | 标的 | 动作 | 目标权重 | 参考价 | 逻辑 |",
-                  "|---|---|---|---:|---:|---|"]
-        for r in sorted(arb_rows, key=lambda x: (x.get("sleeve", ""), -float(x.get("tgt_weight") or 0))):
-            lines.append(
-                f"| {r.get('sleeve')} | {r.get('name')}({r.get('code')}) | {r.get('action')} "
-                f"| {float(r.get('tgt_weight') or 0):.1%} | {r.get('ref_price', '—')} | {r.get('reason', '')} |")
-    else:
-        lines.append("- （启用 `ARB_ENABLED=1` 后此处列出逆回购/红利/可转债/盲区α 的具体挂单。）")
+    lines += ["", "| sleeve | 标的 | 动作 | 目标权重 | 参考价 | 逻辑 |",
+              "|---|---|---|---:|---:|---|"]
+    for r in sorted(arb_rows, key=lambda x: (x.get("sleeve", ""), -float(x.get("tgt_weight") or 0))):
+        lines.append(
+            f"| {r.get('sleeve')} | {r.get('name')}({r.get('code')}) | {r.get('action')} "
+            f"| {float(r.get('tgt_weight') or 0):.1%} | {r.get('ref_price', '—')} | {r.get('reason', '')} |")

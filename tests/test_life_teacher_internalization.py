@@ -185,5 +185,7 @@ def test_return_sources_labels():
 
 def test_fmt_attr_compact():
     from invest_model.orchestration.action_plan import _fmt_attr
-    assert _fmt_attr("ep+0.82|mom_60+1.15|roe-0.31") == "ep↑mom_60↑roe↓"
+    # 因子代码 → 中文展示（用户可读；未知代码原样保留兜底）
+    assert _fmt_attr("ep+0.82|mom_60+1.15|roe-0.31") == "低PE↑、中期动量↑、净资产收益↓"
+    assert _fmt_attr("unknown_f+0.5") == "unknown_f↑"
     assert _fmt_attr(None) == ""
