@@ -440,7 +440,7 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
                            if lv.get("prev_below") else
                            ("破MA20减半(未盈利新仓缓冲，盘后确认)", True))
             elif cost and lv.get("prev_below"):
-                st, hit = "MA20下方转盈·非新鲜破位持有(站回MA20后再破位才清)", True
+                st, hit = "无需操作·MA20下方转盈·非新鲜破位持有(站回MA20后再破位才清)", True
             else:
                 st, hit = "破MA20，盘后确认清仓", True
         elif pp_on and not ex and 1 - px / peak >= args.pp_exit_dd:
@@ -521,7 +521,7 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
                            if lv.get("prev_below") else
                            ("破MA20减半(未盈利缓冲，盘后确认)", True))
             elif cost and lv.get("prev_below"):
-                st, hit = "MA20下方转盈·非新鲜破位持有(站回MA20后再破位才清)", True
+                st, hit = "无需操作·MA20下方转盈·非新鲜破位持有(站回MA20后再破位才清)", True
             else:
                 st, hit = "破MA20，盘后确认减/清", True
         elif pnl <= -args.hard_stop + 0.02:
