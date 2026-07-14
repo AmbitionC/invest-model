@@ -564,7 +564,7 @@ def _arb_alerts(engine) -> list[tuple[str, str, str]]:
     # WATER：flow_score 最近两期 composite 由正转负 → 水表反转
     if repo.table_exists("flow_score"):
         fs = repo.read_sql(
-            "SELECT trade_date, key, composite FROM flow_score "
+            "SELECT trade_date, `key`, composite FROM flow_score "
             "WHERE trade_date>=(SELECT MIN(td) FROM (SELECT DISTINCT trade_date td FROM "
             "flow_score ORDER BY trade_date DESC LIMIT 2) x)")
         if not fs.empty and fs["trade_date"].nunique() >= 2:
