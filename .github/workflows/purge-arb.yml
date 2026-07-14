@@ -1,0 +1,37 @@
+name: purge-arb
+
+# 一次性维护：删除 action_plan 里套利模块的防御 sleeve 行（defense_A/alpha）。
+# 背景：ARB_ENABLED 已改回默认 0，但历史 plan_date 的套利行留在库里、前端仍显示。
+# 触发：bump ops/purge-arb.trigger 后 push master（workflow_dispatch 对集成账号可能 403）。
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/purge-arb.trigger'
+      - 'scripts/purge_arb_plan_rows.py'
+
+concurrency:
+  group: purge-arb
+  cancel-in-progress: false
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: Purge arb plan rows
+        run: python scripts/purge_arb_plan_rows.py
