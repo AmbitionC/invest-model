@@ -1,6 +1,14 @@
-"""套利 carry 纯函数单测。"""
+"""套利 carry 纯函数单测 + 红利筛选可交易性硬闸（B股/ST 剔除）。"""
 
-from invest_model.arb.carry import double_low, dividend_carry_net, reverse_repo_carry
+import pandas as pd
+from sqlalchemy import create_engine
+
+from invest_model.arb.carry import (
+    build_carry_signals,
+    dividend_carry_net,
+    double_low,
+    reverse_repo_carry,
+)
 from invest_model.arb.config import ArbConfig
 
 
@@ -47,3 +55,39 @@ def test_double_low_lower_is_better():
 def test_double_low_invalid_inputs():
     r = double_low(0, 0, 0)
     assert r["score"] != r["score"]         # nan
+
+
+# ── 红利筛选可交易性硬闸（E14 判据②前置：B股/ST 不得入防守底盘）──────────
+
+def _div_db():
+    """构造含 B股/ST/正常股 的最小库：stock_fundamental(dv_ratio) + stock_info。"""
+    from invest_model.data import create_schema
+    from invest_model.repositories.base import BaseRepository
+    e = create_engine("sqlite:///:memory:")
+    create_schema(e)
+    repo = BaseRepository(e)
+    rows = [
+        # code, name, dv
+        ("200521.SZ", "深XXB", 9.0),     # 深B：应剔除
+        ("900905.SH", "沪XXB", 8.5),     # 沪B：应剔除
+        ("600188.SH", "ST兖矿", 7.0),    # ST：应剔除
+        ("601088.SH", "中国神华", 6.0),  # 正常：应入选
+        ("600028.SH", "中国石化", 5.0),  # 正常：应入选
+        ("601006.SH", "大秦铁路", 2.0),  # 低于 dv 下限 3.0：应剔除
+    ]
+    repo.upsert("stock_info", pd.DataFrame(
+        [{"ts_code": c, "name": n} for c, n, _ in rows]), ["ts_code"])
+    repo.upsert("stock_fundamental", pd.DataFrame(
+        [{"code": c, "trade_date": "20260714", "dv_ratio": dv} for c, _, dv in rows]),
+        ["code", "trade_date"])
+    return e
+
+
+def test_dividend_screen_excludes_b_shares_and_st():
+    e = _div_db()
+    out = build_carry_signals(e, "20260714", ArbConfig(), persist=False)
+    assert "dividend_carry" in out
+    picked = set(out["dividend_carry"]["code"])
+    assert picked == {"601088.SH", "600028.SH"}        # 只剩正常高息股
+    for bad in ("200521.SZ", "900905.SH", "600188.SH", "601006.SH"):
+        assert bad not in picked
