@@ -1,0 +1,50 @@
+name: buypoint-compare-backtest
+
+# 两类买点对照回测：趋势中继(回踩MA20) vs 突破新高（用户命题 2026-07-15·一次性分析）。
+# 只读 stock_daily/stock_adj；不落库、不改生产。报告打印到日志（Claude 读取）+ artifact。
+# 触发：手动 / 改 ops/buypoint-compare-backtest.trigger 后 push master。
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/buypoint-compare-backtest.trigger'
+
+concurrency:
+  group: buypoint-compare-backtest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 回测（回踩MA20 vs 突破新高 对照）
+        run: |
+          python scripts/analysis/buypoint_compare_backtest.py \
+            --start 20190101 \
+            --out results/buypoint_compare_backtest.md
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: buypoint-compare-backtest
+          path: results/buypoint_compare_backtest.md
+          if-no-files-found: warn
