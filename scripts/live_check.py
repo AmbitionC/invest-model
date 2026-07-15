@@ -555,8 +555,50 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         alerts += _arb_alerts(ctx.get("engine"))
     except Exception:  # noqa: BLE001
         pass
+    # 恐慌抄底窗口提醒（小时级 fear_intraday）——纯提醒层，best-effort
+    try:
+        alerts += _fear_alerts(ctx.get("engine"))
+    except Exception:  # noqa: BLE001
+        pass
     min_dist = min(dists) if dists else float("inf")
     return hold_rows, watch_rows, etf_rows, alerts, min_dist
+
+
+def _fear_alerts(engine) -> list[tuple[str, str, str]]:
+    """恐慌抄底窗口盘中提醒：读小时级 fear_intraday，阈值与生产买点闸同源（fear_buy=75）。
+
+    纯提醒层，不改任何买卖闸门：极端恐慌窗口通常很短，等 17:00 收盘计划会错过盘中
+    时点，故恐慌 ≥75 当日首次出现即时推"窗口开启"（crit）；此后回落到 <70（5 分滞回带，
+    防贴阈值来回抖动）给一条摘要级"窗口回落"。去重键按日按状态，一日各至多一条；
+    当日无小时级数据（源降级/非整点前）静默跳过，与前端"退回日频"行为一致。
+    """
+    from invest_model.signals.buypoint import BuyPointConfig
+
+    thr = BuyPointConfig.fear_buy
+    day = _now_cst().strftime("%Y%m%d")
+    df = BaseRepository(engine).read_sql(
+        "SELECT snapshot_ts, score FROM fear_intraday WHERE trade_date=:d "
+        "ORDER BY snapshot_ts", {"d": day})
+    if df.empty:
+        return []
+    scores = pd.to_numeric(df["score"], errors="coerce")
+    if scores.notna().sum() == 0:
+        return []
+    last = scores.last_valid_index()
+    score = float(scores[last])
+    ts = str(df["snapshot_ts"][last])[11:16]
+    day_max = float(scores.max())
+    if score >= thr:
+        return [(f"F:{day}:抄底窗口",
+                 f"🟣 恐慌抄底窗口开启：恐慌 {score:.0f}（小时级 {ts}）≥{thr:.0f} — "
+                 f"今晚计划环境闸将放松(0.6→0.4，仅限基本面未走坏标的)；盘中重点盯"
+                 f"观察池回踩/突破触发（技术闸/量化闸不放松），分批小仓、不追一次性满上",
+                 "crit")]
+    if day_max >= thr and score < thr - 5:
+        return [(f"F:{day}:窗口回落",
+                 f"🟣 恐慌回落：{score:.0f}（小时级 {ts}，日内峰值 {day_max:.0f}）"
+                 f"— 抄底窗口提示解除，回到常规闸门", "batch")]
+    return []
 
 
 def _arb_alerts(engine) -> list[tuple[str, str, str]]:
