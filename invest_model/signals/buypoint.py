@@ -2,7 +2,7 @@
 
 把投顾《圈子选股体系执行细则》第 2 步的"精确买点"用日线 OHLCV 做近似，并叠加本量化
 系统自有的两个信号，实现"投顾定方向、技术抓时机、量化把质量与环境"：
-  - 技术（手册近似）：MA60 走平/上行 且（趋势中继回踩 MA20 放量阳线 ∨ 底部反转吞没放量突破）
+  - 技术（手册近似+P18 v2）：MA60 走平/上行 且（趋势中继回踩 MA20 放量阳线 ∨ 突破新高阳线）
   - 量化确认：多因子 rank_pct ≥ 阈值（基本面不拖后腿）
   - 环境：大盘择时 gross ≥ 阈值（差行情不追新仓）
 
@@ -27,7 +27,7 @@ class BuyPointConfig:
     trend_ma: int = 60
     pullback_pct: float = 0.03       # 回踩 MA20 的贴合带（|close/MA20-1| ≤ 此值）
     retrace_vol_mult: float = 1.2    # 趋势中继：放量倍数（vs 20 日均量）
-    breakout_vol_mult: float = 2.0   # 底部反转：放量倍数（vs 5 日均量）
+    breakout_vol_mult: float = 2.0   # [已弃用·P18 v2] 保留字段仅为回退兼容，突破分支不再用量能
     breakout_lookback: int = 20      # 突破平台/新高回看天数
     quant_min_rank: float = 0.5      # 量化 rank_pct 下限（中位以上）
     min_gross: float = 0.6           # 大盘环境闸：gross 下限
@@ -46,7 +46,7 @@ class BuyPointConfig:
 class BuyPoint:
     code: str
     is_buy: bool
-    kind: str        # "趋势中继" | "底部反转" | ""
+    kind: str        # "趋势中继" | "突破新高" | ""
     reason: str      # 触发或未触发的简述
     last: float = float("nan")        # 最新收盘
     ma20: float = float("nan")        # 回踩买点参考位
@@ -116,8 +116,7 @@ def detect_buypoints(engine, dt: str, codes: list[str], gross: float,
         vol = pd.to_numeric(g["volume"], errors="coerce")
         ma20, ma60 = _ma(cl, 20), _ma(cl, 60)
         c0, o0, v0 = float(cl.iloc[-1]), float(o.iloc[-1]), float(vol.iloc[-1])
-        pc, po = float(cl.iloc[-2]), float(o.iloc[-2])
-        vma20 = float(vol.tail(20).mean()); vma5 = float(vol.tail(5).mean())
+        vma20 = float(vol.tail(20).mean())
         platform_high = float(cl.iloc[-(cfg.breakout_lookback + 1):-1].max())
         px = dict(last=round(c0, 2), ma20=round(ma20, 2) if np.isfinite(ma20) else float("nan"),
                   breakout=round(platform_high, 2))
@@ -133,13 +132,15 @@ def detect_buypoints(engine, dt: str, codes: list[str], gross: float,
                    and abs(c0 / ma20 - 1.0) <= cfg.pullback_pct
                    and float(low.tail(3).min()) <= ma20 * (1 + cfg.pullback_pct)
                    and c0 > o0 and v0 >= cfg.retrace_vol_mult * vma20)
-        # 买点1 底部反转：阳线吞没昨阴 + 突破平台/20日新高 + 放量2倍
-        engulf = c0 > o0 and o0 <= min(po, pc) and c0 >= max(po, pc)
-        breakout = engulf and c0 >= platform_high and v0 >= cfg.breakout_vol_mult * vma5
+        # 买点1 突破新高（P18 v2）：趋势内 20 日收盘新高 + 当日阳线。
+        # v1 的"阳线吞没+放量2×"确认经全样本回测证伪（run 29399834503：吞没使趋势突破
+        # 结构上无法触发、量能确认为负贡献——保留1%信号且胜率反而更低），已删除；
+        # 假突破防御交给止损纪律（P10/硬止损），与海龟/52周新高动量的处理一致。
+        breakout = c0 > o0 and c0 >= platform_high
 
-        kind = "趋势中继" if retrace else ("底部反转" if breakout else "")
+        kind = "趋势中继" if retrace else ("突破新高" if breakout else "")
         if not kind:
-            out[c] = BuyPoint(c, False, "", "观察：趋势在但未现买点（待回踩 MA20/放量突破）", **px)
+            out[c] = BuyPoint(c, False, "", "观察：趋势在但未现买点（待回踩 MA20/突破新高）", **px)
             continue
 
         # 量化确认 + 环境
