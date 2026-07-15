@@ -358,8 +358,12 @@ def _build_context(args: argparse.Namespace) -> dict:
                          if ln.split("#")[0].strip()}
     dt = repo.read_sql("SELECT MAX(trade_date) d FROM stock_daily")["d"].iloc[0]
     holds = HoldingRepo(engine).get_all()
-    reco = AdvisorRepo(engine).get_active_reco(dt)
-    exit_codes = AdvisorRepo(engine).get_exit_codes(dt)
+    # 信号筛选用北京自然日（而非最新行情日）：当天盘中入库的投顾信号（rec_date=今天>昨收日）
+    # 下一轮盯盘即进观察池/离场管理，不必等收盘数据推进；均线/买点位仍按昨收(dt)计算，
+    # 盘中现价与其比较本就是盯盘语义。收盘后二者相等，行为不变。
+    sig_dt = max(str(dt), _now_cst().strftime("%Y%m%d"))
+    reco = AdvisorRepo(engine).get_active_reco(sig_dt)
+    exit_codes = AdvisorRepo(engine).get_exit_codes(sig_dt)
     held = list(holds["code"]) if not holds.empty else []
     if reco.empty:
         watch = []
