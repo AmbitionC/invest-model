@@ -491,3 +491,24 @@ def test_reentry_after_profit_exit(engine):
                       portfolio=PortfolioConfig(advisor_led=True))
     plan2 = build_action_plan(engine, cfg2, cash=100000, buypoint=False, persist=False)
     assert not [r for r in plan2.rows if r["code"] == "RE1.SH"]
+
+
+def test_buypoint_breakout_v2_no_volume_no_engulf(tmp_path):
+    """P18 v2：趋势内 20 日收盘新高 + 阳线即触发突破——不再要求吞没形态与放量。"""
+    eng = make_engine(f"sqlite:///{tmp_path}/bp3.db"); create_schema(eng)
+    import numpy as _np
+    # 连续上行且末日创出 75 日内收盘新高；昨日也是阳线（v1 吞没条件必不成立）、量能平平
+    closes = list(_np.linspace(60, 120, 79)) + [122.0]
+    vols = [1e6] * 80                                   # 无放量
+    opens = [closes[0]] + closes[:-1]
+    opens[-1] = 120.5                                   # 末日阳线（open<close）、高于昨实体下沿
+    dt = _seed_ohlcv(eng, "BK.SH", closes, vols, opens)
+    bp = detect_buypoints(eng, dt, ["BK.SH"], gross=0.9,
+                          rank_map={"BK.SH": 0.9})["BK.SH"]
+    assert bp.is_buy and bp.kind == "突破新高", (bp.kind, bp.reason)
+    # 阴线新高不触发（保留阳线要求）
+    opens2 = list(opens); opens2[-1] = 123.0            # open>close=阴线
+    dt2 = _seed_ohlcv(eng, "BK2.SH", closes, vols, opens2)
+    bp2 = detect_buypoints(eng, dt2, ["BK2.SH"], gross=0.9,
+                           rank_map={"BK2.SH": 0.9})["BK2.SH"]
+    assert not bp2.is_buy
