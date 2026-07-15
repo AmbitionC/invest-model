@@ -1,0 +1,44 @@
+name: plan-signal-replay
+
+# 历史计划买入信号全量回放（只读 stock_daily/stock_adj，不落库不改生产）。
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/signal-replay.trigger'
+
+concurrency:
+  group: signal-replay
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 回放历史买入信号
+        run: python scripts/analysis/plan_signal_replay.py --out results/plan_signal_replay.md
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-replay
+          path: results/plan_signal_replay.md
+          if-no-files-found: warn
