@@ -43,7 +43,7 @@ from invest_model.repositories.base import BaseRepository  # noqa: E402
 from chinext_cycle_backtest import _load, _exit_top  # noqa: E402
 from multicycle_exit_backtest import _detect_all_cycles, INDEX_CANDIDATES  # noqa: E402
 
-DEFENSE = "H30269"       # 中证红利低波（登记时固定）
+DEFENSE = "H30269.CSI"       # 中证红利低波（登记时固定）
 COST_SIDE = 0.0005
 
 
