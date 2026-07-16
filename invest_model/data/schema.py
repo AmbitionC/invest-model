@@ -424,7 +424,7 @@ action_plan_account = Table(
     Column("model_ic_ir", Numeric(10, 6)),
     Column("model_hit", Numeric(8, 4)),
     Column("model_conf_label", String(32)),
-    Column("risk_hints", String(512)),                      # 执行对账/集中度/仓位偏离等账户级提示
+    Column("risk_hints", Text),                             # 执行对账/集中度/仓位偏离等账户级提示（清仓未执行+集中度+排雷影子叠加可超 512，用 TEXT）
     _created_at(),
 )
 
@@ -834,7 +834,7 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "sleeve": "VARCHAR(16)",                          # 套利：一张表容纳 A/B/α/可转债
     },
     "action_plan_account": {
-        "risk_hints": "VARCHAR(512)",
+        "risk_hints": "TEXT",
         "defense_pct": "DECIMAL(12,6)",
         "offense_pct": "DECIMAL(12,6)",
         "alpha_pct": "DECIMAL(12,6)",
@@ -850,6 +850,9 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
 # 后需加宽，否则 build_action_plan 落库报 DataError(1406 Data too long)。
 _COLUMN_WIDEN: dict[str, dict[str, str]] = {
     "action_plan": {"model_view": "VARCHAR(128)"},
+    # action_plan_account.risk_hints 原 VARCHAR(512)：多只清仓未执行 + 集中度 + 排雷影子
+    # 叠加时超 512，upsert 报 DataError(1406)、账户行静默不落库（前端浮亏/仓位不更新）。加宽到 TEXT。
+    "action_plan_account": {"risk_hints": "TEXT"},
 }
 
 
