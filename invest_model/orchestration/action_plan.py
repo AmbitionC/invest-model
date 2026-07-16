@@ -230,7 +230,10 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     shares_map: dict[str, float] = {}
     entry_map: dict[str, str] = {}
     for _, h in holdings.iterrows():
-        s = _close_hist(loop, h["code"], dt, dt)
+        # 近15日窗取"≤决策日最近有效收盘"：ETF 行情由独立 timer 入库，当日行缺失时
+        # 此前回退成本价 → 现价列失真、权益/权重分母跟着偏（0716 事故），改为回退昨收。
+        start15 = (pd.Timestamp(str(dt)) - pd.Timedelta(days=15)).strftime("%Y%m%d")
+        s = _close_hist(loop, h["code"], start15, dt)
         px = float(s.iloc[-1]) if not s.empty else float(h["cost_price"] or 0)
         if h["code"] in snap_px:
             px = snap_px[h["code"]][1]                # 券商快照现价(≥最新行情日)优先

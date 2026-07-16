@@ -330,6 +330,46 @@ def job_daily_update_plan() -> dict:
             "scorecard": sc, "arb": arb, **_build_and_post_plan()}
 
 
+def job_plan_watchdog() -> dict:
+    """计划兜底哨兵（owner 批准 2026-07-16）。
+
+    背景：17:00 daily-update-plan 定时器 0714-0716 连续三日静默丢失（0715 整组重建
+    无效、同函数其它 timer 均正常）。本哨兵由独立 timer 在 17:40/18:30 各触发一次：
+    交易日且 action_plan 尚无 决策日=今日 的行 → 就地补跑 daily_update_plan 并在
+    告警 issue 记一条；已有计划/非交易日毫秒级退出。plan-notify 按决策日去重，
+    与 17:00 正常触发或人工补跑并发也不会重复发计划（幂等）。
+    """
+    bj = gh_notify.bj_now()
+    day = bj.strftime("%Y%m%d")
+    if not _is_trade_day(day):
+        return {"job": "plan_watchdog", "skipped": "non-trade-day"}
+    if bj.hour * 60 + bj.minute < 17 * 60 + 35:   # 防误配 cron 提前触发（决策日需当日收盘）
+        return {"job": "plan_watchdog", "skipped": "too-early", "ts": bj.strftime("%H:%M")}
+    try:
+        from invest_model.data import make_engine
+        from invest_model.repositories.base import BaseRepository
+        repo = BaseRepository(make_engine())
+        n = int(repo.read_sql(
+            "SELECT COUNT(*) n FROM action_plan WHERE plan_date=:d",
+            {"d": day})["n"].iloc[0])
+    except Exception as e:  # noqa: BLE001 — 查库失败宁可不补跑，只告警
+        try:
+            gh_notify.alert("plan_watchdog", e)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"job": "plan_watchdog", "error": f"check-failed: {e}"}
+    if n > 0:
+        return {"job": "plan_watchdog", "ok": f"plan-exists({n} rows)"}
+    print(f"WARN {day} 计划缺失（17:00 定时器未产出），哨兵就地补跑 daily_update_plan")
+    try:
+        gh_notify.alert("plan_watchdog",
+                        RuntimeError(f"{day} 17:00 定时器未出计划，哨兵已自动补跑"))
+    except Exception:  # noqa: BLE001 — 告警失败不阻断补跑
+        pass
+    res = job_daily_update_plan()
+    return {"job": "plan_watchdog", "made_up": True, "daily": res}
+
+
 def _holding_market_value_at(repo, ch, codes: list[str], dt: str) -> float:
     """按 dt 收盘价重估 current_holding 的 stock+etf 市值（不含转债/现金）。
     停牌/缺 dt 收盘 → 回退 dt 及之前最近有效收盘；再回退最近快照 last_price
@@ -617,6 +657,7 @@ JOBS = {
     "snapshot_remind": job_snapshot_remind,
     "ingest_etf": job_ingest_etf,
     "daily_update_plan": job_daily_update_plan,
+    "plan_watchdog": job_plan_watchdog,
     "weekly_rebuild_review": job_weekly_rebuild_review,
     "watermeter_remind": job_watermeter_remind,
     "ingest_advisor": job_ingest_advisor,
