@@ -1,0 +1,46 @@
+name: e15-defense-rotation
+
+# E15：顶部触发防守切换（P19）预登记验证。只读 index_daily；不落库、不改生产。
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/e15-defense.trigger'
+
+concurrency:
+  group: e15-defense
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: E15 验证（判据预登记于 P19 段）
+        run: |
+          python scripts/analysis/e15_defense_rotation.py \
+            --out results/e15_defense_rotation.md
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: e15-defense
+          path: results/e15_defense_rotation.md
+          if-no-files-found: warn
