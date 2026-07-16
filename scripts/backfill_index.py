@@ -28,7 +28,11 @@ from invest_model.sources.tushare_client import TushareClient  # noqa: E402
 # E9v2/E12 多周期回测：补宽基（上证综指/深证成指/上证50/中证1000/科创50）扩样本；
 # 权限不足者 get_index_daily 空返回 WARN、下游按"无数据"跳过，不影响其它指数
 BROAD_EXTRA = ["000001.SH", "399001.SZ", "000016.SH", "000852.SH", "000688.SH"]
-DEFAULT_CODES = [*BENCHMARKS, "399006.SZ", "H30269.CSI", "000922.CSI", *BROAD_EXTRA]
+# P19/高低切监控 + 重远兑现统计复核：大金融行业指数（券商/银行/保险）——防守腿
+# 候选与"高低切是否在发生"的观察口径；权限不足同样空返回 WARN 不影响其它
+SECTOR_DEFENSE = ["399975.SZ", "399986.SZ", "399809.SZ"]
+DEFAULT_CODES = [*BENCHMARKS, "399006.SZ", "H30269.CSI", "000922.CSI",
+                 *BROAD_EXTRA, *SECTOR_DEFENSE]
 
 
 def main() -> None:
