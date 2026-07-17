@@ -348,7 +348,8 @@ def job_plan_watchdog() -> dict:
     try:
         from invest_model.data import make_engine
         from invest_model.repositories.base import BaseRepository
-        repo = BaseRepository(make_engine())
+        engine = make_engine()
+        repo = BaseRepository(engine)
         n = int(repo.read_sql(
             "SELECT COUNT(*) n FROM action_plan WHERE plan_date=:d",
             {"d": day})["n"].iloc[0])
@@ -358,8 +359,45 @@ def job_plan_watchdog() -> dict:
         except Exception:  # noqa: BLE001
             pass
         return {"job": "plan_watchdog", "error": f"check-failed: {e}"}
+    # v2（2026-07-17）：ETF 行情兜底——16:50 ingest-etf 同样被证实会静默丢失
+    # （0716/0717 连续两日），ETF 当日行缺失会让计划/快照按昨收估值。此处先查缺：
+    # 任一持仓 ETF 无当日行 → 就地补跑 ingest_etf（幂等全量窗口，正常日跳过零成本）。
+    etf_ingested = False
+    try:
+        etf_codes = [str(x) for x in repo.read_sql(
+            "SELECT DISTINCT code FROM holding_snapshot WHERE LOWER(asset_type)='etf' "
+            "AND snapshot_date=(SELECT MAX(snapshot_date) FROM holding_snapshot)")["code"]]
+        if etf_codes:
+            ph = ",".join(f":c{i}" for i in range(len(etf_codes)))
+            params = {f"c{i}": c for i, c in enumerate(etf_codes)}
+            params["d"] = day
+            got = int(repo.read_sql(
+                f"SELECT COUNT(DISTINCT code) n FROM stock_daily "
+                f"WHERE trade_date=:d AND code IN ({ph})", params)["n"].iloc[0])
+            if got < len(etf_codes):
+                print(f"WARN {day} ETF 行情缺 {len(etf_codes) - got}/{len(etf_codes)} 只，哨兵补跑 ingest_etf")
+                job_ingest_etf()
+                etf_ingested = True
+    except Exception as e:  # noqa: BLE001 — ETF 兜底失败不阻断计划兜底
+        print(f"WARN 哨兵 ETF 查缺失败（继续计划检查）：{e}")
+
     if n > 0:
-        return {"job": "plan_watchdog", "ok": f"plan-exists({n} rows)"}
+        if etf_ingested:
+            # 计划已出但当时 ETF 行情缺失（按昨收估值）：重算当日账户快照消除市值偏差；
+            # 计划本身按决策日去重不重发，ETF 风控线明日自然修正（如实告警留痕）。
+            try:
+                from sqlalchemy import text as _text
+                with engine.begin() as conn:
+                    conn.execute(_text("DELETE FROM account_snapshot WHERE snapshot_date=:d"),
+                                 {"d": day})
+                _persist_account_snapshot_daily()
+                gh_notify.alert("plan_watchdog",
+                                RuntimeError(f"{day} ETF 行情迟到已补拉并重算当日快照"
+                                             f"（当日计划以昨收估值 ETF，风控线明日修正）"))
+            except Exception as e:  # noqa: BLE001
+                print(f"WARN 快照重算失败：{e}")
+        return {"job": "plan_watchdog", "ok": f"plan-exists({n} rows)",
+                "etf_makeup": etf_ingested}
     print(f"WARN {day} 计划缺失（17:00 定时器未产出），哨兵就地补跑 daily_update_plan")
     try:
         gh_notify.alert("plan_watchdog",
