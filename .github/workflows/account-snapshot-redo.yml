@@ -1,0 +1,38 @@
+name: account-snapshot-redo
+
+# 重算指定日 account_snapshot（0716 ETF 收盘迟到导致快照偏高的修复）。
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/account-snapshot-redo.trigger'
+
+concurrency:
+  group: account-snapshot-redo
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  redo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 重算 20260716 快照
+        run: python scripts/redo_account_snapshot.py --date 20260716
