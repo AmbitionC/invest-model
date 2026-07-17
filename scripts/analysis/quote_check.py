@@ -26,8 +26,19 @@ def _codes(repo: BaseRepository, arg: str | None) -> list[tuple[str, str]]:
     if arg:
         return [(c.strip(), "") for c in arg.split(",") if c.strip()]
     try:
-        df = repo.read_sql("SELECT code, name FROM current_holding ORDER BY code")
-        return [(str(r["code"]), str(r.get("name") or "")) for _, r in df.iterrows()]
+        df = repo.read_sql("SELECT code FROM current_holding ORDER BY code")
+        codes = [str(r["code"]) for _, r in df.iterrows()]
+        names: dict[str, str] = {}
+        try:  # 名称补充：stock_info（ts_code, name），取不到留空不阻断
+            if repo.table_exists("stock_info") and codes:
+                ph = ",".join(f":c{i}" for i in range(len(codes)))
+                ni = repo.read_sql(
+                    f"SELECT ts_code, name FROM stock_info WHERE ts_code IN ({ph})",
+                    {f"c{i}": c for i, c in enumerate(codes)})
+                names = {str(r["ts_code"]): str(r["name"]) for _, r in ni.iterrows()}
+        except Exception:  # noqa: BLE001
+            names = {}
+        return [(c, names.get(c, "")) for c in codes]
     except Exception:  # noqa: BLE001
         return []
 
