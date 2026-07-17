@@ -1,2 +1,2 @@
-20260717-post-execution-reprice
-执行清仓6只后重算当日计划
+20260717-no-whitelist-reprice
+去白名单后重算——卫星化学应触发硬止损清仓
