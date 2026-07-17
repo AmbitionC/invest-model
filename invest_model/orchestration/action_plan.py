@@ -63,8 +63,38 @@ def _build_data_footer(loop, dt: str) -> str:
         except Exception:  # noqa: BLE001
             pass
         return None
+    adv_d = max(filter(None, [_max("advisor_reco", "rec_date"),
+                              _max("advisor_theme", "rec_date")]), default=None)
     return _footer_line(dt, _max("holding_snapshot", "snapshot_date"),
-                        _max("advisor_reco", "rec_date"), _max("fear_daily", "trade_date"))
+                        adv_d, _max("fear_daily", "trade_date"))
+
+
+def _advisor_stance(loop: ClosedLoop, dt: str) -> tuple[str, str, int]:
+    """投顾主题风向聚合（P20）：读有效主题，按方向分组计数出提示行；
+    大盘类主题（主题名含"大盘"）reduce 行数 ≥2 且多于 long → stance=reduce。
+    返回 (stance, 提示行文本, 大盘reduce行数)。失败返回 neutral（fail-open 不阻断计划）。"""
+    try:
+        th = loop.adv_repo.get_active_theme(dt)
+        if th is None or th.empty:
+            return "neutral", "", 0
+        th = th.copy()
+        th["theme"] = th["theme"].astype(str)
+        th["direction"] = th["direction"].astype(str)
+        # 提示行：主题×方向去重后计数（同一主题多源同向 = 共振强度）
+        segs = []
+        for theme, g in th.groupby("theme"):
+            dirs = g["direction"].value_counts().to_dict()
+            part = "/".join(f"{d}×{n}" for d, n in sorted(dirs.items()))
+            segs.append(f"{theme} {part}")
+        line = "｜".join(segs)
+        mkt = th[th["theme"].str.contains("大盘")]
+        n_red = int((mkt["direction"] == "reduce").sum())
+        n_long = int((mkt["direction"] == "long").sum())
+        stance = "reduce" if (n_red >= 2 and n_red > n_long) else \
+                 ("long" if (n_long >= 2 and n_long > n_red) else "neutral")
+        return stance, line, n_red
+    except Exception:  # noqa: BLE001
+        return "neutral", "", 0
 
 
 def _latest_data_date(loop: ClosedLoop) -> str:
@@ -282,6 +312,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         pass
     model_trust = _model_trust(m_ic_ir)
     gross = loop.mt.gross_exposure(dt, list(u) if u else None)
+    adv_stance, adv_stance_line, adv_mkt_reduce = _advisor_stance(loop, dt)
     targets, meta = loop._build_targets(dt, preds, gross, cur_codes=set(held_codes))
     exit_codes = loop.adv_repo.get_exit_codes(dt)
 
@@ -307,6 +338,13 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             a_codes = p[p["grade"] == "A"]["code"].tolist()
             b_codes = p[p["grade"] == "B"]["code"].tolist()
             pool = a_codes + b_codes[: max(0, WATCH_POOL_CAP - len(a_codes))]
+        # P20（owner 拍板 2026-07-17）：投顾大盘 reduce 共振（≥2 行）→ 环境闸收紧
+        # min_gross 0.6→0.8。只收紧不放松；恐慌抄底放松分支（fear_buy/fear_min_gross）
+        # 不受影响——经过验证的规则优先。ADVISOR_STANCE_GATE=0 一键回退。
+        if (adv_stance == "reduce"
+                and os.getenv("ADVISOR_STANCE_GATE", "1").lower() not in ("0", "false")):
+            from dataclasses import replace as _dc_replace
+            bp_cfg = _dc_replace(bp_cfg or BuyPointConfig(), min_gross=0.8)
         bps = detect_buypoints(engine, dt, pool, gross, rank_map, bp_cfg)
         buy_codes = {c for c, bp in bps.items() if bp.is_buy}
         fast_on = os.getenv("RESEARCH_FAST_ENTRY", "1").lower() not in ("0", "false")
@@ -387,6 +425,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         tw = float(targets.get(c, 0.0))
         px = last_close.get(c)
         reason, stop_price = "", float("nan")
+        buf_tier = 0
         grade = (meta.get(c, {}) or {}).get("grade")
 
         # 持仓的风控评估（优先级最高）
@@ -413,6 +452,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                 # 记不上档 → 新仓每天重复减半；记上了又是档 3 → 收复 MA20 转盈即被清）。
                 prev = replay_hold_tier(hist[hist.index < cur_day], cost_map[c], rc,
                                         replay_from=reset_from)
+                buf_tier = prev
                 # 硬止损对所有持仓一视同仁（owner 2026-07-17 去掉白名单逻辑）
                 dec = evaluate_holding(hist, cost_map[c], rc,
                                        in_exit_codes=(c in exit_codes), prev_tier=prev)
@@ -482,7 +522,14 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         elif c in held_codes:
             # 尊重真实持仓、实事求是：风控没触发就持有——不因"没挤进模型 top-N 目标"而强制换出/减配。
             # 换出只保留给风控触发 / 投顾明确剔除（exit_codes 已在风控里判为逻辑证伪清仓）。
-            action, reason, tw = "hold", "持有", cw
+            # 展示层区分三种"持有"：白名单豁免 / 破位缓冲期（首破已提示过减半）/ 健康持有。
+            if c in trail_white:
+                hold_txt = "持有(白名单核心仓·豁免硬止损·只按MA20管)"
+            elif buf_tier >= 1 and np.isfinite(stop_price):
+                hold_txt = f"持有观察(已破MA20缓冲·止损{stop_price:.2f}兜底)"
+            else:
+                hold_txt = "持有"
+            action, reason, tw = "hold", hold_txt, cw
         elif cw <= 1e-6 and tw > 1e-6:                 # 非持仓、进入目标 → 新建仓（买点已在观察池闸控）
             action, reason = "buy", _entry_reason(grade, meta.get(c, {}))
             if src_map.get(c):                          # 买前定位赚哪种钱（收益三来源）
@@ -563,6 +610,24 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
 
     # 账户级风险提示：执行对账（上一日计划的清仓是否执行）/ 行业与单票集中度 / 仓位 vs 目标
     hints: list[str] = []
+    if adv_stance_line:
+        gate_note = ""
+        if (adv_stance == "reduce"
+                and os.getenv("ADVISOR_STANCE_GATE", "1").lower() not in ("0", "false")):
+            gate_note = f"（大盘 reduce×{adv_mkt_reduce} 共振 → 新仓环境闸收紧 gross≥0.8·P20）"
+        hints.append(f"投顾风向：{adv_stance_line}{gate_note}")
+    # 参谋异议（提示层）：持仓中模型排位后 20%（rank_pct≤0.2）者单列——风控未触发不强制卖，供人工复核
+    try:
+        dissent = []
+        for hc in held_codes:
+            v = rank_map.get(hc)
+            if v is not None and pd.notna(v) and float(v) <= 0.20:
+                dissent.append(f"{names.get(hc, hc)}(前{(1 - float(v)) * 100:.0f}%)")
+        if dissent:
+            hints.append("参谋异议：持仓 " + "、".join(dissent)
+                         + " 模型排位后20%——风控未触发不强制卖出，供人工复核")
+    except Exception:  # noqa: BLE001
+        pass
     try:
         prev_plan = loop.repo.read_sql(
             "SELECT code, name, reason FROM action_plan "
