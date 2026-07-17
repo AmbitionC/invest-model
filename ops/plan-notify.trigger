@@ -1,2 +1,2 @@
-20260716-close-reprice-2
-列加宽后重算，把修正后的账户行真正落库
+20260717-post-execution-reprice
+执行清仓6只后重算当日计划
