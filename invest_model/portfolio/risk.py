@@ -170,15 +170,13 @@ class ExitDecision:
 
 
 def evaluate_holding(close_hist: pd.Series, cost: float, cfg: RiskConfig,
-                     in_exit_codes: bool = False, prev_tier: int = 0,
-                     exempt_hard_stop: bool = False) -> ExitDecision:
+                     in_exit_codes: bool = False, prev_tier: int = 0) -> ExitDecision:
     """对单只持仓做风控评估，返回退出决策（回测/实盘共用同一套判定）。
 
     优先级：逻辑证伪 > 硬止损 > 均线移动止盈 > 持有。
     close_hist：截至评估日(含)的收盘价序列；cost：建仓成本价；
     prev_tier：评估日之前已触发的档位（回测逐日传入；实盘传「回放至昨日」的档位）。
-    exempt_hard_stop：trailing_only 白名单核心仓豁免硬止损（只按均线移动止盈管，
-    与 live_check 盘中口径一致）；逻辑证伪与均线移动止盈不受豁免影响。
+    硬止损对所有持仓一视同仁，无白名单豁免（owner 2026-07-17 定：去掉白名单逻辑）。
     """
     s = pd.to_numeric(close_hist, errors="coerce").dropna()
     close = float(s.iloc[-1]) if not s.empty else float("nan")
@@ -190,8 +188,8 @@ def evaluate_holding(close_hist: pd.Series, cost: float, cfg: RiskConfig,
     # 1) 逻辑证伪 → 无条件清仓
     if in_exit_codes:
         return ExitDecision("exit", 0.0, "逻辑证伪清仓", **{**base, "new_tier": 3})
-    # 2) 硬止损（白名单核心仓豁免；stop_price 仍照算供展示）
-    if (cfg.hard_stop_pct and has_cost and not exempt_hard_stop
+    # 2) 硬止损（对所有持仓一视同仁，无豁免）
+    if (cfg.hard_stop_pct and has_cost
             and np.isfinite(close) and close / cost - 1 <= -cfg.hard_stop_pct):
         return ExitDecision("exit", 0.0, f"硬止损(-{cfg.hard_stop_pct:.0%})", **{**base, "new_tier": 3})
     # 3) 均线移动止盈

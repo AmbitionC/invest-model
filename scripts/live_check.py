@@ -350,12 +350,6 @@ def _build_context(args: argparse.Namespace) -> dict:
     """构建盘中不变的上下文：DB 基准日、持仓、观察池、均线基准（盘中复用，只需取一次）。"""
     engine = make_engine(args.db) if args.db else make_engine()
     repo = BaseRepository(engine)
-    # 移动止盈白名单：这些票按"破MA20"管，不套用 -8% 硬止损（如业绩爆发的核心仓）
-    tro = os.path.join(_ROOT, "config", "trailing_only.txt")
-    trailing_only = set()
-    if os.path.exists(tro):
-        trailing_only = {ln.split("#")[0].strip() for ln in open(tro, encoding="utf-8")
-                         if ln.split("#")[0].strip()}
     dt = repo.read_sql("SELECT MAX(trade_date) d FROM stock_daily")["d"].iloc[0]
     holds = HoldingRepo(engine).get_all()
     # 信号筛选用北京自然日（而非最新行情日）：当天盘中入库的投顾信号（rec_date=今天>昨收日）
@@ -386,7 +380,7 @@ def _build_context(args: argparse.Namespace) -> dict:
                 etf_levels[e["code"]] = lv
     return {"engine": engine, "repo": repo, "dt": dt, "holds": holds,
             "watch": watch, "levels": levels, "peaks": peaks, "g_of": g_of,
-            "trailing_only": trailing_only, "codes": held + watch,
+            "codes": held + watch,
             "etf_holds": etf_holds, "etf_levels": etf_levels,
             "etf_codes": [e["code"] for e in etf_holds],
             "cash": _account_cash(repo), "equity": _account_equity(repo)}
@@ -401,7 +395,7 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
     "batch"=买点/提示类（合并摘要推送）。最小距离用于自适应轮询频率。
     """
     holds = ctx["holds"]; levels = ctx["levels"]
-    trailing_only = ctx["trailing_only"]; g_of = ctx["g_of"]
+    g_of = ctx["g_of"]
     cash = ctx.get("cash", 0.0); equity = ctx.get("equity", 0.0) or 0.0
     buy_w = getattr(args, "buy_weight", 0.05)
     hold_rows, watch_rows, etf_rows, alerts = [], [], [], []
@@ -428,18 +422,16 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         chg = (px / pre - 1) if pre else 0
         pnl = (px / cost - 1) if cost else 0
         stop = cost * (1 - args.hard_stop); ma20 = lv.get("ma20")
-        ex = c in trailing_only            # 移动止盈白名单：不套硬止损
         # 盈利保护基准：持有期峰值收盘（EOD）与盘中现价取高
         peak = max(ctx.get("peaks", {}).get(c, 0.0), px)
         pp_on = bool(cost) and args.pp_trigger and peak / cost - 1 >= args.pp_trigger
-        if not ex and pnl <= -args.hard_stop:
+        # 硬止损对所有持仓一视同仁（owner 2026-07-17 去掉白名单逻辑）
+        if pnl <= -args.hard_stop:
             st, hit = "⚠️ 已触发硬止损，清仓", True
         elif ma20 and px < ma20 * 0.995:   # 0.5% 缓冲，避免贴线来回抖动
             # P10：未盈利新仓破MA20→减半(不清)、盈利仓仅「新鲜破位」(前日在线上)才清；
             # 前日已破位=缓冲期，不重复给卖单（首破当日已提示减半）。与盘后 evaluate_holding 对齐。
-            if ex:
-                st, hit = "破MA20移动止盈，确认清仓", True
-            elif cost and pnl < 0:
+            if cost and pnl < 0:
                 st, hit = (("无需操作·持有观察（在MA20下方，但前日已破位并减过仓，硬止损兜底）", True)
                            if lv.get("prev_below") else
                            ("破MA20减半(未盈利新仓缓冲，盘后确认)", True))
@@ -447,23 +439,23 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
                 st, hit = "无需操作·MA20下方转盈·非新鲜破位持有(站回MA20后再破位才清)", True
             else:
                 st, hit = "破MA20，盘后确认清仓", True
-        elif pp_on and not ex and 1 - px / peak >= args.pp_exit_dd:
+        elif pp_on and 1 - px / peak >= args.pp_exit_dd:
             st, hit = f"⚠️ 盈利保护：自峰值回撤超{args.pp_exit_dd:.0%}，止盈离场", True
-        elif pp_on and not ex and lv.get("ma10") and px < lv["ma10"]:
+        elif pp_on and lv.get("ma10") and px < lv["ma10"]:
             st, hit = "⚠️ 盈利保护：破MA10（盈利后梯子），止盈离场", True
-        elif pp_on and not ex and 1 - px / peak >= args.pp_trim_dd:
+        elif pp_on and 1 - px / peak >= args.pp_trim_dd:
             st, hit = f"⚠️ 盈利保护：自峰值回撤超{args.pp_trim_dd:.0%}，减半锁盈", True
-        elif pp_on and not ex and lv.get("ma5") and px < lv["ma5"]:
+        elif pp_on and lv.get("ma5") and px < lv["ma5"]:
             st, hit = "⚠️ 盈利保护：破MA5（盈利后梯子），减半锁盈", True
-        elif not ex and pnl <= -args.hard_stop + 0.02:
+        elif pnl <= -args.hard_stop + 0.02:
             st, hit = "逼近止损，盯紧", True
         else:
-            st, hit = ("持有(MA20移动止盈)" if ex else "持有"), False
+            st, hit = "持有", False
         hold_rows.append((q.get("name", c), px, chg, cost, pnl, stop, ma20, st))
         if not hit:
-            _track(px, None if ex else stop, ma20 * 0.995 if ma20 else None,
-                   peak * (1 - args.pp_trim_dd) if pp_on and not ex else None,
-                   lv.get("ma5") if pp_on and not ex else None)
+            _track(px, stop, ma20 * 0.995 if ma20 else None,
+                   peak * (1 - args.pp_trim_dd) if pp_on else None,
+                   lv.get("ma5") if pp_on else None)
         if hit:
             # 挂单信号：清仓类给「卖 全部股数 限价≈现价，占比→0，回笼资金」；
             # 盈利保护减半/未盈利破MA20缓冲给「卖一半」；逼近/缓冲持有只提示不给单

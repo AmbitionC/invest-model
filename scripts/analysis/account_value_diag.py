@@ -89,11 +89,6 @@ def main() -> None:
     from invest_model.data.adjust import qfq_close_hist
     from invest_model.portfolio.risk import RiskConfig, evaluate_holding, profit_protect
     import os
-    tro = Path(__file__).resolve().parents[2] / "config" / "trailing_only.txt"
-    white = set()
-    if tro.exists():
-        white = {ln.split("#")[0].strip() for ln in tro.read_text(encoding="utf-8").splitlines()
-                 if ln.split("#")[0].strip()}
     cfg = RiskConfig()
     ch2 = repo.read_sql("SELECT code, shares, cost_price, entry_date FROM current_holding ORDER BY code")
     print("\n### 持仓风控逐票重放（生产 evaluate_holding + profit_protect，prev_tier=0 新鲜视角）\n")
@@ -111,11 +106,10 @@ def main() -> None:
         ed = str(h.get("entry_date") or "")
         hold_hist = hist.loc[ed:] if ed and ed in hist.index else hist
         pp = profit_protect(hold_hist, cost, cfg, prev_tier=0)
-        tag = "（白名单：豁免硬止损，只按MA20管）" if c in white else ""
         print(f"{c} {nm.get(c,'?'):<8} 现价{px:.3f} 成本{cost:.3f} 盈亏{pnl:+.1%} "
               f"MA20={ma20:.3f}({'上方' if px >= ma20*0.995 else '下方'}) "
               f"MA60={ma60:.3f} → 动作={dec.action} 理由={dec.reason or '持有'} "
-              f"盈利保护={pp.action + '/' + (pp.reason or '') if pp is not None else '未武装'}{tag}")
+              f"盈利保护={pp.action + '/' + (pp.reason or '') if pp is not None else '未武装'}")
 
 
 if __name__ == "__main__":
