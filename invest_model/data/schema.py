@@ -405,7 +405,7 @@ action_plan = Table(
     Column("grade", String(2)),
     Column("trigger_hint", String(64)),                    # 买点挂单提示（trigger 为 MySQL 保留字）
     Column("model_rank", Numeric(10, 6)),                  # 全市场因子分位
-    Column("model_view", String(128)),                     # 模型研判+因子归因：看好 前8% ★★★ · ep↑roe↑
+    Column("model_view", String(128)),                     # 模型研判+因子归因：看多 前8% ★★★ · ep↑roe↑
     _created_at(),
 )
 
@@ -846,7 +846,7 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
 }
 
 # 已存在列需加宽（类型升级，ADD COLUMN 不触发）：老库 action_plan.model_view 原为
-# VARCHAR(32)，P8/P9 因子归因（如「看淡 前96% ★★★ · low_turnover↓lowvol_20↓ep↓」）
+# VARCHAR(32)，P8/P9 因子归因（如「看空 前96% ★★★ · low_turnover↓lowvol_20↓ep↓」）
 # 后需加宽，否则 build_action_plan 落库报 DataError(1406 Data too long)。
 _COLUMN_WIDEN: dict[str, dict[str, str]] = {
     "action_plan": {"model_view": "VARCHAR(128)"},

@@ -113,7 +113,7 @@ def test_action_plan_column_patch_on_old_table(tmp_path):
            "action": "watch", "cur_weight": 0.0, "tgt_weight": 0.0,
            "shares_delta": 0.0, "reason": "观察", "stop_price": None,
            "ref_price": 12.3, "grade": "A", "trigger_hint": "回踩≈12.0 / 突破>13.1",
-           "model_rank": 0.92, "model_view": "看好 前8% ★★★"}
+           "model_rank": 0.92, "model_view": "看多 前8% ★★★"}
     repo.upsert("action_plan", pd.DataFrame([row]), ["plan_date", "code"])
     df = repo.read_sql("SELECT trigger_hint, model_rank, model_view FROM action_plan")
     assert df["trigger_hint"].iloc[0].startswith("回踩")

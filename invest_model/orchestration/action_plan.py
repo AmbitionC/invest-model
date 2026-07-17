@@ -904,18 +904,18 @@ def _conf_label(trust: float, ic_ir) -> str:
 
 def _model_verdict(mr: float) -> str:
     if mr >= 0.85:
-        return "看好"
+        return "看多"
     if mr >= 0.65:
         return "偏多"
     if mr >= 0.45:
         return "中性"
     if mr >= 0.25:
-        return "偏弱"
-    return "看淡"
+        return "偏空"
+    return "看空"
 
 
 def _model_view(mr, trust: float, top_factors: str | None = None) -> str:
-    """单票模型研判：方向(看好/中性/看淡) + 全市场分位 + 置信★(决断度×模型信任)
+    """单票模型研判：方向(看多/偏多/中性/偏空/看空) + 全市场分位 + 置信★(决断度×模型信任)
     + 因子归因（top3 贡献因子，如 ep↑ mom60↑——决策可解释，出处见 rulebook）。"""
     v = _f(mr)
     if v is None:
