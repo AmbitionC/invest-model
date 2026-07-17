@@ -979,7 +979,7 @@ def render_markdown(plan: ActionPlan) -> str:
         f"现金占比: {a.get('cash_pct', 0):.0%} | 目标仓位: {a.get('gross_target', 0):.0%}")
     lines.append(
         f"- 持仓数: {a.get('n_holdings')} | 整体浮盈亏: {a.get('unrealized_pnl_pct', 0):+.1%} | "
-        f"账户风控(risk_off): {'⚠️ 触发，建议降仓' if a.get('risk_off') else '正常'}")
+        f"账户风控: {'⚠️ 账户回撤超限，建议降仓' if a.get('risk_off') else '正常'}")
     mir = a.get("model_ic_ir")
     if mir is not None:
         lines.append(f"- 🔬 模型置信度: **{a.get('model_conf_label')}**（★越多越可信）")

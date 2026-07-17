@@ -136,7 +136,7 @@ def build_plan(engine, fetch_chain=None, fetch_earnings=None) -> dict:
         vd = str(v["verdict"]) if v is not None else "unknown"
         pby = float(v["payback_years"]) if v is not None and pd.notna(v["payback_years"]) else None
         chase = bool(int(v["chase_high"])) if v is not None and pd.notna(v["chase_high"]) else False
-        val_note = (f"回本{pby:.0f}年·{vd}" if pby is not None and pby < 9999
+        val_note = (f"回本{pby:.0f}年·{_VAL_CN.get(vd, vd)}" if pby is not None and pby < 9999
                     else "不赚真钱" if pby is not None else "估值未知")
         target = sat_budget if grade == "A" else sat_budget / 2 if grade == "B" else 0.0
         if grade == "C":
@@ -149,10 +149,10 @@ def build_plan(engine, fetch_chain=None, fetch_earnings=None) -> dict:
             action = "hold"
         elif chase:
             action = "watch"
-            why += f"；追高禁令：距一年低点涨幅>{C.VAL_CHASE_RALLY:.0%}且非cheap（套牢你的是买贵）〔规则US-V3〕"
+            why += f"；追高禁令：距一年低点涨幅>{C.VAL_CHASE_RALLY:.0%}且估值非低估档（套牢你的是买贵）〔规则US-V3〕"
         elif vd == "expensive":
             action = "watch"
-            why += f"；估值闸：{val_note}——高于估值绝不碰，等回落或卖put等接〔规则US-V1〕"
+            why += f"；估值闸：{val_note}——高于估值绝不碰，等回落或卖认沽期权(put)等接〔规则US-V1〕"
         elif vd in ("cheap", "fair"):
             action = "buy" if (dip or grade == "A" or vd == "cheap") else "watch"
             why += f"；估值 {val_note} 通过准入〔规则US-V1〕"
@@ -173,8 +173,9 @@ def build_plan(engine, fetch_chain=None, fetch_earnings=None) -> dict:
             "plan_date": plan_date, "code": "-", "sleeve": "income",
             "action": "hold", "grade": "-", "target_value": 0.0,
             "source_tag": "造血",
-            "reason": (f"strict模式：VIX={vix:.1f}({regime})/趋势{trend}——情绪化最重=IV最厚"
-                       f"=期权最好时机（全哥），但只允许 cheap 档+接盘锚九折以下的行权价"
+            "reason": (f"严格模式：VIX={vix:.1f}（{_REGIME_CN.get(regime, regime)}）/"
+                       f"趋势{'线上' if trend == 'above' else '线下'}——情绪化最重=隐含波动率最厚"
+                       f"=期权最好时机（全哥），但只允许估值低估档+接盘锚九折以下的行权价"
                        f"（守本金收紧）〔规则US-O4·V2〕")})
     if fetch_chain is not None or _yf_available():
         fc = fetch_chain or _default_chain_fetcher
@@ -258,8 +259,8 @@ def build_plan(engine, fetch_chain=None, fetch_earnings=None) -> dict:
             ("恐慌抄底观察窗开启：现金弹药可分批接（先过个股基本面闸）〔规则US-T1〕"
              if dip else ""),
             ("⚠️负Gamma×到期挤压窗口：临近月度OpEx+VIX骤升+破MA10，"
-             + ("已收紧卖put(strict)〔规则US-O5〕" if C.GAMMA_OVERLAY == "strict"
-                else "仅观察提示、卖put未改(US-O5预登记待E13)〔规则US-O5〕")
+             + ("已收紧卖认沽期权（严格模式）〔规则US-O5〕" if C.GAMMA_OVERLAY == "strict"
+                else "仅观察提示、卖认沽期权行为未改（US-O5预登记待E13）〔规则US-O5〕")
              if squeeze else ""),
         ])),
     }
@@ -268,6 +269,10 @@ def build_plan(engine, fetch_chain=None, fetch_earnings=None) -> dict:
     logger.info(f"us plan {plan_date}：{len(plan_df)} 行建议，{len(opts)} 条期权候选")
     return {"plan": f"ok:{plan_date}", "rows": len(plan_df),
             "options": len(opts), "markdown": md}
+
+
+_REGIME_CN = {"calm": "平静", "alert": "警戒", "panic": "恐慌"}
+_VAL_CN = {"cheap": "低估", "fair": "合理", "expensive": "高估", "unknown": "未知"}
 
 
 def _yf_available() -> bool:
@@ -287,10 +292,10 @@ def render_markdown(plan_date: str, account: dict, plan: pd.DataFrame,
                     opts: pd.DataFrame) -> str:
     """三段式 Markdown（推 GitHub issue + 前端展示同源）。"""
     zh_act = {"hold": "持有", "buy": "买入", "watch": "观察", "trim": "减仓",
-              "sell": "离场", "csp": "卖出现金担保put", "cc": "卖出备兑call"}
+              "sell": "离场", "csp": "卖出现金担保认沽期权(CSP)", "cc": "卖出备兑看涨期权(CC)"}
     lines = [f"# 美股操作计划 — {plan_date}", "",
              f"**账户** 总资产 ${account['total_asset']:,.0f}｜现金 ${account['cash']:,.0f}｜"
-             f"VIX {account['vix']:.1f}（{account['vix_regime']}）｜"
+             f"VIX {account['vix']:.1f}（{_REGIME_CN.get(account['vix_regime'], account['vix_regime'])}）｜"
              f"{C.TREND_BENCH} {C.MA_TREND}日线{'上方' if account['spy_trend'] == 'above' else '下方'}｜"
              f"回撤 {account['drawdown']:.0%}"]
     if account.get("notes"):

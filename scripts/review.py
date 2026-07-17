@@ -173,12 +173,12 @@ def review_model(repo: BaseRepository) -> list[str]:
     if not spreads:
         return lines + ["（暂无足够样本算分档收益）"]
     sp = np.array(spreads)
-    lines.append(f"- 跨 {len(spreads)} 个调仓区间，按调仓日 rank_pct 分档，持有至下个调仓日的平均收益：")
+    lines.append(f"- 跨 {len(spreads)} 个调仓区间，按调仓日模型分位分档，持有至下个调仓日的平均收益：")
     lines.append("")
     lines.append("| 档位 | 平均区间收益 |")
     lines.append("|---|---|")
-    lines.append(f"| 高分档 (rank≥80%) | {np.mean(top_rets):+.2%} |")
-    lines.append(f"| 低分档 (rank≤20%) | {np.mean(bot_rets):+.2%} |")
+    lines.append(f"| 高分档（模型分位前20%） | {np.mean(top_rets):+.2%} |")
+    lines.append(f"| 低分档（模型分位后20%） | {np.mean(bot_rets):+.2%} |")
     lines.append(f"| **多空价差 (高-低)** | **{sp.mean():+.2%}** |")
     lines.append("")
     lines.append(f"- 多空价差为正的区间占比：{(sp > 0).mean():.0%}（越高说明分位越稳地区分强弱）")

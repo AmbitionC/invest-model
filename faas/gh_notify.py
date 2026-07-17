@@ -97,6 +97,16 @@ def post_issue_comment(title: str, seed_body: str, comment_body: str,
     return {"posted": True, "issue": number, "reason": "ok"}
 
 
+_JOB_CN = {
+    "live_watch": "盘中盯盘", "snapshot_remind": "持仓快照提醒",
+    "ingest_etf": "ETF行情入库", "daily_update_plan": "盘后计划链",
+    "plan_watchdog": "计划哨兵", "weekly_rebuild_review": "周末重建复盘",
+    "watermeter_remind": "水表提醒", "ingest_advisor": "投顾信号入库",
+    "ingest_snapshot": "持仓快照入库", "fear_intraday": "盘中恐慌",
+    "fear_daily": "恐慌指数落库",
+}
+
+
 def alert(job: str, err: BaseException) -> None:
     """任务失败告警：追加到「⚠️ FaaS 定时任务告警」issue → GitHub 邮件。
 
@@ -107,7 +117,7 @@ def alert(job: str, err: BaseException) -> None:
         post_issue_comment(
             "⚠️ FaaS 定时任务告警",
             seed_body="本 issue 由 FC 定时函数在任务失败时追加告警评论（原 Actions 失败邮件的替代）。",
-            comment_body=(f"## {now} `{job}` 执行失败\n\n"
+            comment_body=(f"## {now} {_JOB_CN.get(job, job)}（`{job}`）告警\n\n"
                           f"```\n{type(err).__name__}: {err}\n```\n"
                           "详情见阿里云 FC 函数日志（invest-scheduler / invest-live-watch）。"),
         )

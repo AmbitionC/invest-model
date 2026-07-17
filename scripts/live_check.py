@@ -634,7 +634,7 @@ def _arb_alerts(engine) -> list[tuple[str, str, str]]:
             days = int(pd.to_numeric(rr["interest_days"].iloc[0], errors="coerce") or 1)
             if rate >= 3.0 or days >= 3:
                 out.append((f"CARRY:204001:{int(rate*100)}:{days}",
-                            f"💰 逆回购carry窗口：GC001 年化{rate:.2f}%·计息{days}天，"
+                            f"💰 逆回购利率窗口：GC001 年化{rate:.2f}%·计息{days}天，"
                             "闲钱可停靠稳吃利差", "batch"))
     return out
 
