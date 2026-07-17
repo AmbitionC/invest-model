@@ -30,10 +30,11 @@ def main() -> None:
     engine = make_engine()
     repo = BaseRepository(engine)
 
+    # 生产 stock_daily 无 created_at 列（建表早于该字段），取证只看行是否存在
     for_df = repo.read_sql(
-        "SELECT code, trade_date, close, created_at FROM stock_daily "
+        "SELECT code, trade_date, close FROM stock_daily "
         "WHERE trade_date=:d AND code IN ('515050.SH','516120.SH','588010.SH')", {"d": d})
-    print(f"取证：{d} ETF 行情行（created_at=入库时间 UTC）")
+    print(f"取证：{d} ETF 行情行")
     print(for_df.to_string(index=False) if not for_df.empty else "（无行）")
 
     old = repo.read_sql(
