@@ -1,0 +1,2 @@
+20260716-holdings-quote-check
+核对麦格米特等持仓库内最新价与MA破位
