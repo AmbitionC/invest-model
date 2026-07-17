@@ -119,20 +119,6 @@ def _round_lot(shares: float) -> float:
     return float(round(shares / 100.0) * 100)
 
 
-def _trailing_only() -> set[str]:
-    """移动止盈白名单（config/trailing_only.txt）：核心主升浪仓，只按破MA20管，
-    豁免硬止损与盈利保护（与 scripts/live_check.py 同一份名单、同一语义）。"""
-    from pathlib import Path
-    p = Path(__file__).resolve().parents[2] / "config" / "trailing_only.txt"
-    if not p.exists():
-        return set()
-    try:
-        return {ln.split("#")[0].strip() for ln in p.read_text(encoding="utf-8").splitlines()
-                if ln.split("#")[0].strip()}
-    except Exception:  # noqa: BLE001
-        return set()
-
-
 def _update_policy_shadow(loop: ClosedLoop, dt: str, reco: pd.DataFrame, bps: dict) -> None:
     """研报速通影子验证：逐日更新两条虚拟净值，供 4~6 周后复核该政策。
 
@@ -384,7 +370,6 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             last_close[rr["code"]] = float(pd.to_numeric(rr["close"], errors="coerce"))
     warm = (pd.to_datetime(dt) - pd.Timedelta(days=150)).strftime("%Y%m%d")
     reset_floor = (pd.to_datetime(dt) - pd.Timedelta(days=35)).strftime("%Y%m%d")  # 档位回放窗口下限(≈1个调仓周期)
-    trail_white = _trailing_only()
     # P16 顶部特征自动减半（用户 2026-07-13 定：控回撤证据充分，直升自动减仓）：
     # 浮盈达标持仓 波动骤放大+放量 → 目标减半一次。start_lb 取 ~2 年，够 250 日波动分位。
     top_start_lb = f"{int(dt[:4]) - 2}{dt[4:]}"
@@ -428,12 +413,9 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                 # 记不上档 → 新仓每天重复减半；记上了又是档 3 → 收复 MA20 转盈即被清）。
                 prev = replay_hold_tier(hist[hist.index < cur_day], cost_map[c], rc,
                                         replay_from=reset_from)
-                # 白名单核心仓：只按均线移动止盈管，豁免硬止损/盈利保护/梯子
-                # （与 live_check 盘中口径一致——此前盘后漏传导致对白名单票照发硬止损）
-                exempt = c in trail_white
+                # 硬止损对所有持仓一视同仁（owner 2026-07-17 去掉白名单逻辑）
                 dec = evaluate_holding(hist, cost_map[c], rc,
-                                       in_exit_codes=(c in exit_codes), prev_tier=prev,
-                                       exempt_hard_stop=exempt)
+                                       in_exit_codes=(c in exit_codes), prev_tier=prev)
                 stop_price = dec.stop_price
                 if dec.action == "exit":
                     tw, reason = 0.0, dec.reason
@@ -466,9 +448,9 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             if not np.isfinite(stop_price) and cost_map[c] > 0:
                 stop_price = cost_map[c] * (1 - rc.hard_stop_pct)
 
-            # P16 顶部特征自动减半：仅在其它风控未触发（reason 为空）、非白名单核心仓、
+            # P16 顶部特征自动减半：仅在其它风控未触发（reason 为空）、
             # 未在本周期减过时；浮盈达标+波动骤放大+放量 → 目标减半一次（锁盈不砍损）。
-            if (rc.enabled and not reason and c not in trail_white
+            if (rc.enabled and not reason
                     and c not in top_trimmed and cw > 1e-6):
                 try:
                     from invest_model.signals.top_feature import top_feature_now

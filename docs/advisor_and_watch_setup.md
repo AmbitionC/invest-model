@@ -56,7 +56,7 @@ python scripts/ingest_advisor.py --kind theme --csv config/advisor_theme_templat
 python scripts/ingest_holding.py --csv config/holding_template.csv --db <DB>
 ```
 
-观察/白名单清单已就绪：`config/watch_etf.txt`、`config/trailing_only.txt`。
+ETF 观察清单：`config/watch_etf.txt`。（移动止盈白名单 `trailing_only.txt` 已于 2026-07-17 移除——硬止损对所有持仓一视同仁、无豁免。）
 
 ```bash
 python scripts/live_check.py --db <DB> --alert          # 盘中轮询，只报触发项
