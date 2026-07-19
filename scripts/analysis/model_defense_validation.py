@@ -99,7 +99,8 @@ def main() -> None:
         if len(hi) < 30 or len(lo) < 30:
             continue
         spread = float(hi.mean() - lo.mean())          # 单位：百分点（pct_chg 本身是百分数）
-        ic = float(m["rank_pct"].corr(m["pct_chg"], method="spearman"))
+        # Spearman = 双侧秩后的 Pearson（避免引入 scipy 依赖）
+        ic = float(m["rank_pct"].rank().corr(m["pct_chg"].rank()))
         bucket = "大跌日" if bret <= DOWN_TH else ("大涨日" if bret >= UP_TH else "其它")
         rows.append({"date": t, "bucket": bucket, "bench": bret,
                      "spread": spread, "ic": ic})
