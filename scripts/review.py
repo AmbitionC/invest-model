@@ -227,7 +227,9 @@ def review_model(repo: BaseRepository) -> list[str]:
     lines.append("")
     lines.append(f"- 多空价差为正的区间占比：{(sp > 0).mean():.0%}（越高说明分位越稳地区分强弱）")
     verdict = ("模型分位在收益上有正向区分力，可作参谋" if sp.mean() > 0
-               else "近端分位区分力偏弱，模型意见宜降权，多看投顾+趋势")
+               else "进攻端（选涨幅）区分力弱——与防御端验证结论并读：大跌日高低分组差 "
+                    "+1.10pp/日、87% 为正（run 29682743077，判据预登记全过），模型定位为防御参谋："
+                    "排位用于风险提示加权（参谋异议行），不用于选股加成")
     lines.append(f"- 📌 结论：{verdict}。")
     return lines
 
