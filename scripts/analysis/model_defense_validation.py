@@ -70,6 +70,22 @@ def main() -> None:
                           index=idx["trade_date"].astype(str)).dropna()
     idx_ret = idx_close.pct_change().dropna()
 
+    # 行情按月分块预载（逐日全市场查询在 Actions 上超时，改 ~15 次月块查询）
+    months = sorted({str(t)[:6] for t in idx_ret.index})
+    frames = []
+    for mo in months:
+        d = repo.read_sql(
+            "SELECT trade_date, code, pct_chg FROM stock_daily "
+            "WHERE trade_date>=:a AND trade_date<=:b",
+            {"a": mo + "01", "b": mo + "31"})
+        if not d.empty:
+            frames.append(d)
+        print(f"  loaded {mo}: {0 if d is None else len(d)} rows", flush=True)
+    allret = pd.concat(frames, ignore_index=True)
+    allret["pct_chg"] = pd.to_numeric(allret["pct_chg"], errors="coerce")
+    allret["trade_date"] = allret["trade_date"].astype(str)
+    by_day = dict(tuple(allret.dropna(subset=["pct_chg"]).groupby("trade_date")))
+
     rows = []
     pred_cache_date, pred_cache = None, None
     for t, bret in idx_ret.items():
@@ -86,12 +102,10 @@ def main() -> None:
             pred_cache["rank_pct"] = pd.to_numeric(pred_cache["rank_pct"], errors="coerce")
             pred_cache = pred_cache.dropna()
             pred_cache_date = pd_used
-        day = repo.read_sql(
-            "SELECT code, pct_chg FROM stock_daily WHERE trade_date=:d", {"d": t})
-        if day.empty:
+        day = by_day.get(str(t))
+        if day is None or day.empty:
             continue
-        day["pct_chg"] = pd.to_numeric(day["pct_chg"], errors="coerce")
-        m = pred_cache.merge(day.dropna(), on="code")
+        m = pred_cache.merge(day[["code", "pct_chg"]], on="code")
         if len(m) < 300:
             continue
         hi = m[m["rank_pct"] >= HI]["pct_chg"]
