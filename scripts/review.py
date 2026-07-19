@@ -63,6 +63,33 @@ def _names(repo: BaseRepository, codes: list[str]) -> dict[str, str]:
 
 
 # ── 1) 投顾研判复盘 ──────────────────────────────────────────────
+def _bench_series(repo: BaseRepository, start: str, end: str,
+                  code: str = "000300.SH") -> pd.Series:
+    """基准指数收盘序列（date→close），用于同窗口超额计算；失败返回空序列。"""
+    try:
+        if not repo.table_exists("index_daily"):
+            return pd.Series(dtype=float)
+        df = repo.read_sql(
+            "SELECT trade_date, close FROM index_daily WHERE code=:c "
+            "AND trade_date>=:s AND trade_date<=:e ORDER BY trade_date",
+            {"c": code, "s": start, "e": end})
+        return pd.Series(pd.to_numeric(df["close"], errors="coerce").values,
+                         index=df["trade_date"].astype(str)).dropna()
+    except Exception:  # noqa: BLE001
+        return pd.Series(dtype=float)
+
+
+def _bench_ret(bench: pd.Series, d0: str, d1: str) -> float:
+    """基准同窗口收益（d0→d1，均取 ≤该日的最近收盘）；数据不足返回 nan。"""
+    if bench.empty:
+        return float("nan")
+    s0 = bench[bench.index <= d0]
+    s1 = bench[bench.index <= d1]
+    if s0.empty or s1.empty or float(s0.iloc[-1]) <= 0:
+        return float("nan")
+    return float(s1.iloc[-1]) / float(s0.iloc[-1]) - 1.0
+
+
 def _advisor_rows(reco: pd.DataFrame, entry_win: pd.DataFrame) -> pd.DataFrame:
     """按 code 首评去重 + 严格次日收盘入场，返回 [code, grade, first, ret]。
 
@@ -87,6 +114,7 @@ def _advisor_rows(reco: pd.DataFrame, entry_win: pd.DataFrame) -> pd.DataFrame:
         if entry <= 0:
             continue
         rows.append({"code": c, "grade": r["grade"] or "?", "first": r["rec_date"],
+                     "entry_date": str(g["trade_date"].iloc[0]),
                      "ret": cur[c] / entry - 1.0})
     return pd.DataFrame(rows)
 
@@ -111,19 +139,35 @@ def review_advisor(repo: BaseRepository, asof: str, horizon: int) -> list[str]:
     df = _advisor_rows(reco, entry_win)
     if df.empty:
         return lines + ["（推荐标的暂无可对账收益）"]
+    bench = _bench_series(repo, str(df["entry_date"].min()), asof)
+    df["excess"] = [r["ret"] - _bench_ret(bench, r["entry_date"], asof)
+                    for _, r in df.iterrows()]
+    has_ex = df["excess"].notna().any()
     lines.append(f"- 基准：自各标的首次推荐日**次一交易日**收盘 → {asof} 收盘的实际涨跌"
                  f"（{len(df)} 个标的；同票多次推荐只记首评）")
+    if has_ex:
+        lines.append("- **超额=同窗口相对沪深300**：绝对涨跌含市场贝塔（普跌期整体为负不代表信号差），"
+                     "校准决策看超额列。")
     lines.append("")
-    lines.append("| 分级 | 标的数 | 平均涨跌 | 胜率 | 最好 | 最差 |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("| 分级 | 标的数 | 平均涨跌 | 平均超额 | 胜率 | 超额胜率 | 最好 | 最差 |")
+    lines.append("|---|---|---|---|---|---|---|---|")
+
+    def _ex_cols(sub):
+        ex = sub["excess"].dropna()
+        if ex.empty:
+            return "—", "—"
+        return f"{ex.mean():+.1%}", f"{(ex > 0).mean():.0%}"
+
     for g in ["A", "B", "C", "?"]:
         sub = df[df["grade"] == g]
         if sub.empty:
             continue
-        lines.append(f"| {g} | {len(sub)} | {sub['ret'].mean():+.1%} | "
-                     f"{(sub['ret'] > 0).mean():.0%} | {sub['ret'].max():+.1%} | {sub['ret'].min():+.1%} |")
+        exm, exw = _ex_cols(sub)
+        lines.append(f"| {g} | {len(sub)} | {sub['ret'].mean():+.1%} | {exm} | "
+                     f"{(sub['ret'] > 0).mean():.0%} | {exw} | {sub['ret'].max():+.1%} | {sub['ret'].min():+.1%} |")
     allr = df["ret"]
-    lines.append(f"| 全部 | {len(df)} | {allr.mean():+.1%} | {(allr > 0).mean():.0%} | "
+    exm, exw = _ex_cols(df)
+    lines.append(f"| 全部 | {len(df)} | {allr.mean():+.1%} | {exm} | {(allr > 0).mean():.0%} | {exw} | "
                  f"{allr.max():+.1%} | {allr.min():+.1%} |")
     # 最强/最弱个股
     nm = _names(repo, list(df["code"]))
@@ -220,7 +264,34 @@ def review_holdings(repo: BaseRepository) -> list[str]:
         lines.append(
             f"| {r['name'] or r['code']} | {r['market_value']:,.0f} | {r['pnl']:+,.0f} | {pp_s} | {contrib_s} |")
     if len(snaps) >= 2:
-        lines.append(f"\n- （已有 {len(snaps)} 个快照，后续将补区间盈亏变化归因）")
+        prev = str(snaps["snapshot_date"].iloc[-2])
+        hp = repo.read_sql(
+            "SELECT code, name, pnl FROM holding_snapshot WHERE snapshot_date=:d", {"d": prev})
+        hp["pnl"] = pd.to_numeric(hp["pnl"], errors="coerce")
+        prev_map = dict(zip(hp["code"].astype(str), hp["pnl"]))
+        prev_names = dict(zip(hp["code"].astype(str), hp["name"].astype(str)))
+        lines.append(f"\n### 区间归因（{prev} → {last} 浮盈亏变化）\n")
+        lines.append("| 标的 | 上期浮盈亏 | 本期浮盈亏 | 区间变化 |")
+        lines.append("|---|---|---|---|")
+        deltas = []
+        for _, r in stock.iterrows():
+            c = str(r["code"])
+            pv = prev_map.get(c)
+            if pv is None or not np.isfinite(pv):
+                deltas.append((str(r["name"] or c), float("nan"), r["pnl"], float("nan"), "本期新增"))
+            else:
+                deltas.append((str(r["name"] or c), pv, r["pnl"], r["pnl"] - pv, ""))
+        for nm2, pv, cv, dl, tag in sorted(
+                deltas, key=lambda x: (x[3] if np.isfinite(x[3]) else 0), reverse=True):
+            pv_s = f"{pv:+,.0f}" if np.isfinite(pv) else "—"
+            dl_s = f"{dl:+,.0f}" if np.isfinite(dl) else tag
+            lines.append(f"| {nm2} | {pv_s} | {cv:+,.0f} | {dl_s} |")
+        gone = [c for c in prev_map if c not in set(stock["code"].astype(str))
+                and np.isfinite(prev_map[c])]
+        if gone:
+            lines.append("\n- 期间清出：" + "、".join(
+                f"{prev_names.get(c, c)}（清出前浮盈亏 {prev_map[c]:+,.0f}，实现盈亏以成交为准）"
+                for c in gone))
     else:
         lines.append("\n- 📌 目前仅 1 个快照，随每日快照累积，将给出区间盈亏变化与选股/择时归因。")
     return lines
@@ -231,7 +302,7 @@ def review_discipline(repo: BaseRepository, asof: str) -> list[str]:
     lines = ["", "## 四、信号时效与纪律（买点/风控 事后验证）"]
     if not repo.table_exists("action_plan"):
         return lines + ["（无 action_plan 历史，随每日计划累积后生效）"]
-    ap = repo.read_sql("SELECT plan_date, code, action, ref_price FROM action_plan")
+    ap = repo.read_sql("SELECT plan_date, code, action, ref_price, reason FROM action_plan")
     if ap.empty:
         return lines + ["（action_plan 暂无记录）"]
     cn = {"buy": "买入", "add": "加仓", "sell": "清仓", "trim": "减仓", "hold": "持有", "watch": "观察"}
@@ -245,21 +316,74 @@ def review_discipline(repo: BaseRepository, asof: str) -> list[str]:
         codes = sorted(set(buys["code"]))
         cur_px = _closes_on(repo, [asof], codes)
         cur_map = dict(zip(cur_px["code"], cur_px["close"])) if not cur_px.empty else {}
-        rets = []
-        for _, r in buys.iterrows():
-            entry = _f(r["ref_price"])
-            if entry and entry > 0 and r["code"] in cur_map:
-                rets.append(cur_map[r["code"]] / entry - 1.0)
-        if rets:
-            rr = np.array(rets)
-            lines.append(f"- 历史买点信号 {len(rr)} 次：自触发至今平均 {rr.mean():+.1%}，胜率 {(rr > 0).mean():.0%}")
-            lines.append("- 📌 若买点触发后胜率长期偏低，需收紧买点条件（放量/趋势确认再进）。")
+        bench = _bench_series(repo, str(buys["plan_date"].min()), asof)
+
+        def _chan(reason: str) -> str:
+            r = str(reason or "")
+            if "免闸" in r or "研报" in r or "速通" in r:
+                return "研报速通"
+            if "回踩" in r or "突破" in r:
+                return "严格买点闸"
+            return "其它"
+
+        buys["chan"] = buys["reason"].map(_chan)
+        parts = []
+        for ch, sub in buys.groupby("chan"):
+            rets, exs = [], []
+            for _, r in sub.iterrows():
+                entry = _f(r["ref_price"])
+                if entry and entry > 0 and r["code"] in cur_map:
+                    ret = cur_map[r["code"]] / entry - 1.0
+                    rets.append(ret)
+                    b = _bench_ret(bench, str(r["plan_date"]), asof)
+                    if np.isfinite(b):
+                        exs.append(ret - b)
+            if rets:
+                rr = np.array(rets)
+                ex_s = (f"，超额 {np.mean(exs):+.1%}" if exs else "")
+                parts.append(f"{ch} {len(rr)} 次（均 {rr.mean():+.1%}{ex_s}，胜率 {(rr > 0).mean():.0%}）")
+        if parts:
+            lines.append("- 历史买点信号按通道：" + "；".join(parts))
+            lines.append("- 📌 通道口径：研报速通=A/B级研报免闸直入；严格买点闸=回踩/突破三闸全过。"
+                         "评估收紧对象须分通道看，勿混判。")
     else:
         lines.append("- 买点时效：历史买点信号累积中（当前无触发或前瞻样本不足）。")
     exits = ap[(ap["plan_date"] == last) & (ap["action"].isin(["sell", "trim"]))]
     if not exits.empty:
         lines.append(f"- 本次风控触发 {len(exits)} 笔（清仓/减仓）——执行到位是纪律关键，"
                      "复盘核对：是否按计划执行、有无该止损未止/该减未减。")
+    return lines
+
+
+def review_policy_shadow(repo: BaseRepository) -> list[str]:
+    """研报速通 vs 严格闸 影子对账（policy_shadow 逐信号净值，速通政策的裁决数据）。"""
+    lines = ["", "## 四·附、研报速通 vs 严格闸（影子对账）"]
+    if not repo.table_exists("policy_shadow"):
+        return lines + ["（无 policy_shadow 表——影子随速通信号累积后生效）"]
+    df = repo.read_sql("SELECT signal_date, code, grade, fast_ret, gate_ret, gate_date "
+                       "FROM policy_shadow")
+    if df.empty:
+        return lines + ["（影子暂无记录）"]
+    for c in ("fast_ret", "gate_ret"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    fast = df["fast_ret"].dropna()
+    gate_hit = df[df["gate_date"].notna()]["gate_ret"].dropna()
+    n_gate_miss = int((df["gate_date"].isna()).sum())
+    gate_all = pd.concat([gate_hit, pd.Series([0.0] * n_gate_miss)], ignore_index=True)
+    lines.append(f"- 影子信号 {len(df)} 条（research A/B 级）；严格闸未触发（对照＝空仓）{n_gate_miss} 条")
+    lines.append("")
+    lines.append("| 口径 | 条数 | 平均收益 | 胜率 |")
+    lines.append("|---|---|---|---|")
+    if len(fast):
+        lines.append(f"| 速通（立即买入） | {len(fast)} | {fast.mean():+.1%} | {(fast > 0).mean():.0%} |")
+    if len(gate_all):
+        lines.append(f"| 严格闸（触发才买·未触发空仓） | {len(gate_all)} | {gate_all.mean():+.1%} | "
+                     f"{(gate_all > 0).mean():.0%} |")
+    if len(fast) and len(gate_all):
+        diff = fast.mean() - gate_all.mean()
+        lines.append("")
+        lines.append(f"- **速通 − 严格闸 = {diff:+.1%}**（正=速通占优）。该对比是"
+                     "B级速通资格去留的裁决依据，样本仍在累积、勿按单周下结论。")
     return lines
 
 
@@ -319,6 +443,7 @@ def build_review(repo: BaseRepository, asof: str, horizon: int = 10) -> str:
                lambda: review_model(repo),
                lambda: review_holdings(repo),
                lambda: review_discipline(repo, asof),
+               lambda: review_policy_shadow(repo),
                lambda: review_arb(repo, asof)):
         try:
             lines += fn()
