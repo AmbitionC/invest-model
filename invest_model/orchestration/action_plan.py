@@ -981,6 +981,11 @@ def render_markdown(plan: ActionPlan) -> str:
     if mir is not None:
         lines.append(f"- 🔬 模型置信度: **{a.get('model_conf_label')}**（★越多越可信）")
     lines.append("- 标的由投顾定，模型只做参谋+时机+风控；名词解释与规则出处见 `docs/rulebook.md`。")
+    # 提示行（投顾风向/参谋异议/集中度/清仓未执行等）——此前只落库(action_plan_account.risk_hints)
+    # 供网站读、却漏渲染进 issue 计划；2026-07-20 修复：逐条随计划头输出，issue 与网站口径一致。
+    for _h in (a.get("risk_hints") or "").split(" | "):
+        if _h.strip():
+            lines.append(f"- 📌 {_h.strip()}")
 
     # 套利 sleeve 行（defense_A/alpha）单列，不混入引擎 B 的买入/持仓/观察
     arb = [r for r in plan.rows if r.get("sleeve") in ("defense_A", "alpha")]
