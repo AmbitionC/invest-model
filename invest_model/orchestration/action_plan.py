@@ -33,6 +33,7 @@ class ActionPlan:
     plan_date: str
     rows: list[dict] = field(default_factory=list)
     account: dict = field(default_factory=dict)
+    etf_watch: list = field(default_factory=list)   # ETF 观察清单（watch_etf.txt 趋势/买点位）
     footer: str = ""            # 数据口径页脚（各数据源截至日+锚定声明），render 末尾输出
 
     def to_markdown(self) -> str:
@@ -142,6 +143,48 @@ def _close_hist(loop: ClosedLoop, code: str, start: str, dt: str) -> pd.Series:
     避免分红/送转日的机械跳空假触发风控；无复权因子时 fail-open 退回原价。"""
     from invest_model.data.adjust import qfq_close_hist
     return qfq_close_hist(loop.repo, code, start, dt)
+
+
+def _etf_watch_rows(loop: ClosedLoop, dt: str, held: set[str]) -> list[dict]:
+    """ETF 观察清单（config/watch_etf.txt，非持仓部分）：从 stock_daily 前复权算
+    MA20/MA60/趋势/相对 MA20 位置，判定 回踩买点区/偏离上方/左侧。与计划同数据源
+    （stock_daily 由 ingest_etf_daily 灌前复权 ETF 日线），口径对齐 BuyPointConfig。"""
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[2] / "config" / "watch_etf.txt"
+    if not p.exists():
+        return []
+    warm = (pd.to_datetime(str(dt)) - pd.Timedelta(days=150)).strftime("%Y%m%d")
+    out: list[dict] = []
+    for ln in p.read_text(encoding="utf-8").splitlines():
+        head = ln.split("#")[0].strip()
+        if not head:
+            continue
+        code = head.split()[0]
+        if code in held:                       # 已持仓的在「当前持仓」段，观察段不重复
+            continue
+        note = ln.split("#", 1)[1].strip() if "#" in ln else ""
+        s = _close_hist(loop, code, warm, dt)
+        if s is None or len(s.dropna()) < 60:
+            out.append({"code": code, "note": note, "last": float("nan"),
+                        "ma20": float("nan"), "trend": "?", "dev": float("nan"),
+                        "state": "无数据（待 ingest-etf 回填）"})
+            continue
+        c = s.dropna().reset_index(drop=True)
+        last, ma20, ma60 = float(c.iloc[-1]), float(c.tail(20).mean()), float(c.tail(60).mean())
+        ma60_prev = float(c.tail(65).head(60).mean()) if len(c) >= 65 else ma60
+        ma60_up = ma60 > ma60_prev
+        dev = last / ma20 - 1
+        if not (last >= ma60 and ma60_up):
+            st = "左侧（MA60未走平/上行，不买）"
+        elif abs(dev) <= 0.03:
+            st = "✅回踩买点区（企稳放量则买）"
+        elif dev > 0.06:
+            st = f"偏离MA20 {dev:+.0%}，勿追、等回踩"
+        else:
+            st = "上方运行，等回踩MA20"
+        out.append({"code": code, "note": note, "last": last, "ma20": ma20,
+                    "trend": ("MA60↑" if ma60_up else "MA60↓"), "dev": dev, "state": st})
+    return out
 
 
 def _round_lot(shares: float) -> float:
@@ -767,7 +810,11 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     }
 
     rows = rows + arb_rows + watch_rows
-    plan = ActionPlan(plan_date=dt, rows=rows, account=account,
+    try:
+        etf_watch = _etf_watch_rows(loop, dt, set(held_codes))
+    except Exception:  # noqa: BLE001 — ETF 观察段失败不阻断计划
+        etf_watch = []
+    plan = ActionPlan(plan_date=dt, rows=rows, account=account, etf_watch=etf_watch,
                       footer=_build_data_footer(loop, dt))
     if persist and rows:
         cols = ["plan_date", "code", "name", "action", "cur_weight", "tgt_weight",
@@ -1009,6 +1056,17 @@ def render_markdown(plan: ActionPlan) -> str:
         _table(lines, watch)
     else:
         lines.append("（观察池为空）")
+    if plan.etf_watch:
+        lines += ["", f"## 四、ETF 观察·趋势/买点位（{len(plan.etf_watch)} 只，watch_etf.txt）",
+                  "| 代码 | 最新价 | MA20 | 距MA20 | 趋势 | 状态 | 备注 |",
+                  "|---|---:|---:|---:|---|---|---|"]
+        for e in plan.etf_watch:
+            last = f"{e['last']:.3f}" if e["last"] == e["last"] else "—"
+            ma20 = f"{e['ma20']:.3f}" if e["ma20"] == e["ma20"] else "—"
+            dev = f"{e['dev']:+.1%}" if e["dev"] == e["dev"] else "—"
+            note = (e["note"][:28] + "…") if len(e["note"]) > 29 else e["note"]
+            lines.append(f"| {e['code']} | {last} | {ma20} | {dev} | {e['trend']} "
+                         f"| {e['state']} | {note} |")
     _render_ledger(lines, a, arb)
     if plan.footer:
         lines += ["", plan.footer]
