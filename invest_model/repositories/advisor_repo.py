@@ -37,13 +37,37 @@ class AdvisorRepo(BaseRepository):
         df = df.sort_values("rec_date").drop_duplicates("code", keep="last")
         return df.reset_index(drop=True)
 
+    # 主题有效期时间窗（自然日）：盘中主题短效、研报/周末主题长效。
+    # 主题录入不像个股信号那样自动补 valid_until，此前空 valid_until=永不过期，
+    # 令投顾风向行无限累计历史主题。改为查询时按 source_type 兜底时间窗（2026-07-20）。
+    THEME_INTRADAY_DAYS = 7      # 盘中主题：rec_date + 7 自然日（≈5 交易日）
+    THEME_RESEARCH_DAYS = 30     # 研报/周末主题：rec_date + 30 自然日
+
     def get_active_theme(self, dt: str) -> pd.DataFrame:
-        return self.read_sql(
+        """当期有效主题。有效期两层：
+        ① 时间窗——显式 valid_until 优先；否则按 source_type 兜底（盘中短/研报长）。
+        ② 方向演化——同一主题名只保留 rec_date 最新那天的行（更新的 reduce 取代更早的
+           long，反之亦然）；不同主题名的分歧如实并记、不互相取代。"""
+        intra_floor = (pd.Timestamp(str(dt)) - pd.Timedelta(days=self.THEME_INTRADAY_DAYS)
+                       ).strftime("%Y%m%d")
+        res_floor = (pd.Timestamp(str(dt)) - pd.Timedelta(days=self.THEME_RESEARCH_DAYS)
+                     ).strftime("%Y%m%d")
+        df = self.read_sql(
             f"SELECT rec_date, theme, source_type, direction, thesis, valid_until "
-            f"FROM {self.THEME_TABLE} "
-            f"WHERE rec_date<=:d AND (valid_until IS NULL OR valid_until='' OR valid_until>=:d)",
-            {"d": dt},
+            f"FROM {self.THEME_TABLE} WHERE rec_date<=:d AND ("
+            f"  (valid_until IS NOT NULL AND valid_until<>'' AND valid_until>=:d)"
+            f"  OR ((valid_until IS NULL OR valid_until='') AND ("
+            f"       (source_type='intraday' AND rec_date>=:intra)"
+            f"       OR (source_type<>'intraday' AND rec_date>=:res)))"
+            f")",
+            {"d": dt, "intra": intra_floor, "res": res_floor},
         )
+        if df.empty:
+            return df
+        # 方向演化：同主题名只留最新 rec_date 的行（同日多源保留=共振；跨日反向被取代）
+        df["rec_date"] = df["rec_date"].astype(str)
+        latest = df.groupby("theme")["rec_date"].transform("max")
+        return df[df["rec_date"] == latest].reset_index(drop=True)
 
     def get_exit_codes(self, dt: str) -> set[str]:
         """当期 direction∈{avoid,exit} 的 code（逻辑止损 / 选股排除）。"""
