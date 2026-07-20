@@ -512,3 +512,50 @@ def test_buypoint_breakout_v2_no_volume_no_engulf(tmp_path):
     bp2 = detect_buypoints(eng, dt2, ["BK2.SH"], gross=0.9,
                            rank_map={"BK2.SH": 0.9})["BK2.SH"]
     assert not bp2.is_buy
+
+
+def test_theme_validity_window_and_direction_evolution(tmp_path):
+    """主题有效期两层：① source_type 时间窗（盘中短/研报长、显式 valid_until 优先）；
+    ② 方向演化——同主题名只留最新 rec_date 行（reduce 取代旧 long），跨主题分歧并记。"""
+    eng = make_engine(f"sqlite:///{tmp_path}/theme.db"); create_schema(eng)
+    repo = AdvisorRepo(eng)
+    dt = "20260720"
+    rows = [
+        # 盘中主题：3 天前有效、10 天前过期
+        {"rec_date": "20260717", "theme": "端侧AI", "source_type": "intraday",
+         "direction": "long", "thesis": "", "valid_until": None},
+        {"rec_date": "20260710", "theme": "影视院线", "source_type": "intraday",
+         "direction": "long", "thesis": "", "valid_until": None},
+        # 研报主题：20 天前仍有效、60 天前过期
+        {"rec_date": "20260701", "theme": "红利防御", "source_type": "research",
+         "direction": "long", "thesis": "", "valid_until": None},
+        {"rec_date": "20260520", "theme": "老赛道", "source_type": "research",
+         "direction": "long", "thesis": "", "valid_until": None},
+        # 方向演化：同主题名 科技 先 long 后 reduce → 只留 reduce
+        {"rec_date": "20260716", "theme": "科技成长", "source_type": "intraday",
+         "direction": "long", "thesis": "", "valid_until": None},
+        {"rec_date": "20260720", "theme": "科技成长", "source_type": "intraday",
+         "direction": "reduce", "thesis": "", "valid_until": None},
+        # 跨主题分歧：不同名 long+reduce 都保留
+        {"rec_date": "20260719", "theme": "大盘托底", "source_type": "research",
+         "direction": "long", "thesis": "", "valid_until": None},
+        {"rec_date": "20260720", "theme": "大盘救市存疑", "source_type": "research",
+         "direction": "reduce", "thesis": "", "valid_until": None},
+        # 显式 valid_until 覆盖：很旧的盘中主题但显式有效期未过 → 保留
+        {"rec_date": "20260601", "theme": "长效盘中", "source_type": "intraday",
+         "direction": "long", "thesis": "", "valid_until": "20260801"},
+    ]
+    repo.save_theme(pd.DataFrame(rows))
+    act = repo.get_active_theme(dt)
+    got = set(act["theme"])
+
+    assert "端侧AI" in got                    # 盘中 3 天前有效
+    assert "影视院线" not in got              # 盘中 10 天前过期
+    assert "红利防御" in got                  # 研报 20 天前有效
+    assert "老赛道" not in got                # 研报 60 天前过期
+    assert "长效盘中" in got                  # 显式 valid_until 覆盖时间窗
+    # 方向演化：科技成长只留 reduce（最新）
+    tech = act[act["theme"] == "科技成长"]
+    assert len(tech) == 1 and tech["direction"].iloc[0] == "reduce"
+    # 跨主题分歧：大盘两条不同名并记
+    assert "大盘托底" in got and "大盘救市存疑" in got
