@@ -466,10 +466,9 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                 elif entry_map[c] and not hold_hist.empty:
                     pp_prev = replay_pp_tier(hold_hist[hold_hist.index < cur_day],
                                              cost_map[c], rc)
-                    ppd = None if exempt else profit_protect(
-                        hold_hist, cost_map[c], rc, prev_tier=pp_prev)
+                    ppd = profit_protect(hold_hist, cost_map[c], rc, prev_tier=pp_prev)
                     # 盈利后均线梯子：与峰值回撤并行，先触发者生效（回测：回吐 19.8%→13.3%）
-                    lad = None if exempt else armed_ladder(hist, real_entry, cost_map[c], rc)
+                    lad = armed_ladder(hist, real_entry, cost_map[c], rc)
                     guard = None
                     for cand_dec in (ppd, lad):
                         if cand_dec is None:
@@ -522,10 +521,8 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         elif c in held_codes:
             # 尊重真实持仓、实事求是：风控没触发就持有——不因"没挤进模型 top-N 目标"而强制换出/减配。
             # 换出只保留给风控触发 / 投顾明确剔除（exit_codes 已在风控里判为逻辑证伪清仓）。
-            # 展示层区分三种"持有"：白名单豁免 / 破位缓冲期（首破已提示过减半）/ 健康持有。
-            if c in trail_white:
-                hold_txt = "持有(白名单核心仓·豁免硬止损·只按MA20管)"
-            elif buf_tier >= 1 and np.isfinite(stop_price):
+            # 展示层区分两种"持有"：破位缓冲期（首破已提示过减半）/ 健康持有。
+            if buf_tier >= 1 and np.isfinite(stop_price):
                 hold_txt = f"持有观察(已破MA20缓冲·止损{stop_price:.2f}兜底)"
             else:
                 hold_txt = "持有"
