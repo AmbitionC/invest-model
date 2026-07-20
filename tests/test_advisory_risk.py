@@ -526,10 +526,10 @@ def test_theme_validity_window_and_direction_evolution(tmp_path):
          "direction": "long", "thesis": "", "valid_until": None},
         {"rec_date": "20260710", "theme": "影视院线", "source_type": "intraday",
          "direction": "long", "thesis": "", "valid_until": None},
-        # 研报主题：20 天前仍有效、60 天前过期
-        {"rec_date": "20260701", "theme": "红利防御", "source_type": "research",
+        # 研报主题：10 天前仍有效（≤14天窗）、20 天前过期
+        {"rec_date": "20260710", "theme": "红利防御", "source_type": "research",
          "direction": "long", "thesis": "", "valid_until": None},
-        {"rec_date": "20260520", "theme": "老赛道", "source_type": "research",
+        {"rec_date": "20260630", "theme": "老赛道", "source_type": "research",
          "direction": "long", "thesis": "", "valid_until": None},
         # 方向演化：同主题名 科技 先 long 后 reduce → 只留 reduce
         {"rec_date": "20260716", "theme": "科技成长", "source_type": "intraday",
@@ -551,8 +551,8 @@ def test_theme_validity_window_and_direction_evolution(tmp_path):
 
     assert "端侧AI" in got                    # 盘中 3 天前有效
     assert "影视院线" not in got              # 盘中 10 天前过期
-    assert "红利防御" in got                  # 研报 20 天前有效
-    assert "老赛道" not in got                # 研报 60 天前过期
+    assert "红利防御" in got                  # 研报 10 天前有效(≤14天窗)
+    assert "老赛道" not in got                # 研报 20 天前过期(>14天窗)
     assert "长效盘中" in got                  # 显式 valid_until 覆盖时间窗
     # 方向演化：科技成长只留 reduce（最新）
     tech = act[act["theme"] == "科技成长"]
