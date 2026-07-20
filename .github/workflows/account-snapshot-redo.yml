@@ -35,4 +35,4 @@ jobs:
       - name: Install package
         run: pip install -e .
       - name: 重算 20260716 快照
-        run: python scripts/redo_account_snapshot.py --date 20260717
+        run: python scripts/redo_account_snapshot.py --date 20260720
