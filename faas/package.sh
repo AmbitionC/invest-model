@@ -8,7 +8,7 @@
 #   fe-journey-faas 的部署 CI 传入自定义输出目录：bash faas/package.sh "$PWD/invest-dist"
 #
 # invest-model 代码更新后重跑本脚本再部署即可（持仓快照/投顾信号都走 DB，
-# 不随包冻结；只有 watch_etf.txt / trailing_only.txt 这类慢变配置在包里，
+# 不随包冻结；只有 watch_etf.txt 这类慢变配置在包里，
 # 改动它们后需要重打包）。
 set -euo pipefail
 
@@ -38,7 +38,7 @@ cp "$ROOT"/faas/*.py "$BUILD/faas/"
 # 刻意不带 holding_snapshot_*.csv / advisor_*.csv —— 打包即冻结会过期，
 # 函数运行时自动回退查 DB（holding_snapshot / advisor_reco 表，永远最新）。
 cp "$ROOT/config/config.yaml" "$BUILD/config/"
-for f in watch_etf.txt trailing_only.txt; do
+for f in watch_etf.txt; do
   [ -f "$ROOT/config/$f" ] && cp "$ROOT/config/$f" "$BUILD/config/"
 done
 
