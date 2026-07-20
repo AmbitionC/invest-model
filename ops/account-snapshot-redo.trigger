@@ -1,3 +1,2 @@
-2026-07-17：重算 0716 account_snapshot（ETF 收盘迟到、快照按 0715 收盘写入偏高 5184）。
-2026-07-17 重跑：取证列降级（生产 stock_daily 无 created_at）。
-2026-07-17 二跑：ETF 0717 行情已补拉，重算当日快照。
+account-snapshot-redo trigger
+2026-07-20 redo 0720账户快照(修Bug②现金被写旧值285261→应250025)
