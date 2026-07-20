@@ -489,11 +489,21 @@ def _persist_account_snapshot_daily() -> str:
         # 防御：极端长区间只扫最近 90 个交易日，避免一次巨量回填拖垮日更。
         if len(target_dates) > 90:
             target_dates = target_dates[-90:]
-        # 现金/转债市值沿用最近一次快照（无新交易假设），补断档各日相同口径。
-        last = repo.read_sql(
-            "SELECT cash FROM account_snapshot ORDER BY snapshot_date DESC LIMIT 1")
-        cash = (float(last["cash"].iloc[0]) if not last.empty and last["cash"].iloc[0] is not None
-                else float(_os.getenv("ACCOUNT_CASH", "0") or 0))
+        # 现金真源：优先取最新持仓快照的 cash 行（用户上传=权威，含调仓后的现金）——
+        # 修 2026-07-20：原取「最新 account_snapshot.cash」，当哨兵删当日快照重算时
+        # 「最新」退回到前一日、把用户新上传的现金覆盖成旧值（250025→285261）。
+        # 持仓快照的 cash 行才是调仓后现金的权威源；无则回退旧口径。
+        cash_snap = repo.read_sql(
+            "SELECT market_value v FROM holding_snapshot "
+            "WHERE snapshot_date=(SELECT MAX(snapshot_date) FROM holding_snapshot) "
+            "AND LOWER(asset_type)='cash'")
+        if not cash_snap.empty and cash_snap["v"].iloc[0] is not None:
+            cash = float(cash_snap["v"].iloc[0])
+        else:
+            last = repo.read_sql(
+                "SELECT cash FROM account_snapshot ORDER BY snapshot_date DESC LIMIT 1")
+            cash = (float(last["cash"].iloc[0]) if not last.empty and last["cash"].iloc[0] is not None
+                    else float(_os.getenv("ACCOUNT_CASH", "0") or 0))
         bond_df = repo.read_sql(
             "SELECT SUM(market_value) v FROM holding_snapshot "
             "WHERE snapshot_date=(SELECT MAX(snapshot_date) FROM holding_snapshot) "

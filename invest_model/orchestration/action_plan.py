@@ -81,16 +81,32 @@ def _advisor_stance(loop: ClosedLoop, dt: str) -> tuple[str, str, int]:
         th = th.copy()
         th["theme"] = th["theme"].astype(str)
         th["direction"] = th["direction"].astype(str)
-        # 提示行：主题×方向去重后计数（同一主题多源同向 = 共振强度）
-        segs = []
-        for theme, g in th.groupby("theme"):
-            dirs = g["direction"].value_counts().to_dict()
-            part = "/".join(f"{d}×{n}" for d, n in sorted(dirs.items()))
-            segs.append(f"{theme} {part}")
-        line = "｜".join(segs)
+        # 汇总行（不逐主题 firehose）：按方向计数 + 大盘主题单列（宏观关键读数+驱动 P20）。
+        cn = {"long": "看多", "reduce": "减", "avoid": "避", "short": "看空",
+              "watch": "观望", "exit": "退出"}
+        dc = th["direction"].value_counts().to_dict()
+        order = ["long", "reduce", "avoid", "short", "watch", "exit"]
+        seg = "｜".join(f"{cn.get(d, d)}×{dc[d]}" for d in order if d in dc)
+        for d, n in dc.items():
+            if d not in order:
+                seg += f"｜{d}×{n}"
         mkt = th[th["theme"].str.contains("大盘")]
         n_red = int((mkt["direction"] == "reduce").sum())
         n_long = int((mkt["direction"] == "long").sum())
+        mtxt = ""
+        if not mkt.empty:
+            def _nm(t: str) -> str:
+                return t.replace("大盘/", "").replace("大盘", "") or "大盘"
+            longs = sorted({_nm(t) for t in mkt.loc[mkt["direction"] == "long", "theme"]})
+            reds = sorted({_nm(t) for t in mkt.loc[mkt["direction"] == "reduce", "theme"]})
+            parts = []
+            if longs:
+                parts.append(f"托底 long×{len(longs)}（{'、'.join(longs)}）")
+            if reds:
+                parts.append(f"收紧 reduce×{len(reds)}（{'、'.join(reds)}）")
+            if parts:
+                mtxt = "；【大盘】" + " vs ".join(parts)
+        line = f"共{len(th)}主题 {seg}{mtxt}"
         stance = "reduce" if (n_red >= 2 and n_red > n_long) else \
                  ("long" if (n_long >= 2 and n_long > n_red) else "neutral")
         return stance, line, n_red

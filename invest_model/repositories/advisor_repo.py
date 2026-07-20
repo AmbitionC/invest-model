@@ -40,8 +40,8 @@ class AdvisorRepo(BaseRepository):
     # 主题有效期时间窗（自然日）：盘中主题短效、研报/周末主题长效。
     # 主题录入不像个股信号那样自动补 valid_until，此前空 valid_until=永不过期，
     # 令投顾风向行无限累计历史主题。改为查询时按 source_type 兜底时间窗（2026-07-20）。
-    THEME_INTRADAY_DAYS = 7      # 盘中主题：rec_date + 7 自然日（≈5 交易日）
-    THEME_RESEARCH_DAYS = 30     # 研报/周末主题：rec_date + 30 自然日
+    THEME_INTRADAY_DAYS = 5      # 盘中主题：rec_date + 5 自然日（≈3 交易日，板块轮动短命）
+    THEME_RESEARCH_DAYS = 14     # 研报/周末主题：rec_date + 14 自然日（≈10 交易日，仍相关会被重提刷新）
 
     def get_active_theme(self, dt: str) -> pd.DataFrame:
         """当期有效主题。有效期两层：
