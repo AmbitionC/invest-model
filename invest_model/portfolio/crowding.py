@@ -102,9 +102,8 @@ def crowding_hints(held_weights: dict[str, float], industry_map: dict[str, str],
             info = concentration(ser)
             if info["crowded"]:
                 hints.append(
-                    f"⚠️ 持仓行业拥挤：HHI {info['hhi']:.2f}、Top-3 合计 {info['top3_share']*100:.0f}%"
-                    f"（{_detail_str(info['top3_detail'])}）超阈值(Top3>60% 或 HHI>0.20)，"
-                    f"同题材易踩踏，建议分散或限单行业仓位")
+                    f"仓位太集中：钱主要压在 {_detail_str(info['top3_detail'])}"
+                    f"（前3行业占 {info['top3_share']*100:.0f}%），同题材容易一起跌，建议分散")
 
     # 2) 投顾 long 信号池主题拥挤（按条数）——你实测的「投顾扎堆半导体+算力」正是此项
     if advisor_catalysts:
@@ -115,9 +114,8 @@ def crowding_hints(held_weights: dict[str, float], industry_map: dict[str, str],
             info = concentration(counts)
             if info["crowded"]:
                 hints.append(
-                    f"⚠️ 投顾信号扎堆：{int(counts.sum())} 条 long 推荐集中于 "
-                    f"Top-3 主题 {info['top3_share']*100:.0f}%"
-                    f"（{_detail_str(info['top3_detail'])}）、HHI {info['hhi']:.2f}，"
-                    f"非独立样本、同涨同跌，控制单题材总仓位")
+                    f"投顾推荐扎堆：{int(counts.sum())} 条看多集中在 "
+                    f"{_detail_str(info['top3_detail'])}（前3主题占 {info['top3_share']*100:.0f}%），"
+                    f"这些会同涨同跌，别把仓位都押一个题材")
 
     return hints

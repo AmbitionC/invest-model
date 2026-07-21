@@ -82,14 +82,14 @@ def _advisor_stance(loop: ClosedLoop, dt: str) -> tuple[str, str, int]:
         th["theme"] = th["theme"].astype(str)
         th["direction"] = th["direction"].astype(str)
         # 汇总行（不逐主题 firehose）：按方向计数 + 大盘主题单列（宏观关键读数+驱动 P20）。
-        cn = {"long": "看多", "reduce": "减", "avoid": "避", "short": "看空",
+        cn = {"long": "看多", "reduce": "减仓", "avoid": "回避", "short": "看空",
               "watch": "观望", "exit": "退出"}
         dc = th["direction"].value_counts().to_dict()
         order = ["long", "reduce", "avoid", "short", "watch", "exit"]
-        seg = "｜".join(f"{cn.get(d, d)}×{dc[d]}" for d in order if d in dc)
+        seg = "、".join(f"{cn.get(d, d)}{dc[d]}个" for d in order if d in dc)
         for d, n in dc.items():
             if d not in order:
-                seg += f"｜{d}×{n}"
+                seg += f"、{d}{n}个"
         mkt = th[th["theme"].str.contains("大盘")]
         n_red = int((mkt["direction"] == "reduce").sum())
         n_long = int((mkt["direction"] == "long").sum())
@@ -101,12 +101,12 @@ def _advisor_stance(loop: ClosedLoop, dt: str) -> tuple[str, str, int]:
             reds = sorted({_nm(t) for t in mkt.loc[mkt["direction"] == "reduce", "theme"]})
             parts = []
             if longs:
-                parts.append(f"托底 long×{len(longs)}（{'、'.join(longs)}）")
+                parts.append(f"看多{len(longs)}个（{'、'.join(longs)}）")
             if reds:
-                parts.append(f"收紧 reduce×{len(reds)}（{'、'.join(reds)}）")
+                parts.append(f"看空{len(reds)}个（{'、'.join(reds)}）")
             if parts:
-                mtxt = "；【大盘】" + " vs ".join(parts)
-        line = f"共{len(th)}主题 {seg}{mtxt}"
+                mtxt = "。对大盘：" + "、".join(parts)
+        line = f"{len(th)}个主题，{seg}{mtxt}"
         stance = "reduce" if (n_red >= 2 and n_red > n_long) else \
                  ("long" if (n_long >= 2 and n_long > n_red) else "neutral")
         return stance, line, n_red
@@ -670,18 +670,18 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         gate_note = ""
         if (adv_stance == "reduce"
                 and os.getenv("ADVISOR_STANCE_GATE", "1").lower() not in ("0", "false")):
-            gate_note = f"（大盘 reduce×{adv_mkt_reduce} 共振 → 新仓环境闸收紧 gross≥0.8·P20）"
-        hints.append(f"投顾风向：{adv_stance_line}{gate_note}")
+            gate_note = "。大盘看空占多，新买入更谨慎（要仓位更低才开新仓）"
+        hints.append(f"投顾观点：{adv_stance_line}{gate_note}")
     # 参谋异议（提示层）：持仓中模型排位后 20%（rank_pct≤0.2）者单列——风控未触发不强制卖，供人工复核
     try:
         dissent = []
         for hc in held_codes:
             v = rank_map.get(hc)
             if v is not None and pd.notna(v) and float(v) <= 0.20:
-                dissent.append(f"{names.get(hc, hc)}(前{(1 - float(v)) * 100:.0f}%)")
+                dissent.append(f"{names.get(hc, hc)}(评分排后{float(v) * 100:.0f}%)")
         if dissent:
-            hints.append("参谋异议：持仓 " + "、".join(dissent)
-                         + " 模型排位后20%——风控未触发不强制卖出，供人工复核")
+            hints.append("模型不看好持仓：" + "、".join(dissent)
+                         + "——模型评分排全市场后段，但没到风控卖点，先不强制卖、供你复核")
     except Exception:  # noqa: BLE001
         pass
     try:
@@ -692,7 +692,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         stale = [str(r["name"] or r["code"]) for _, r in prev_plan.iterrows()
                  if r["code"] in held_codes]
         if stale:
-            hints.append(f"上一交易日计划清仓未执行：{'、'.join(stale)}（纪律高于观点，优先处理）")
+            hints.append(f"待办·还没卖：上次计划让清仓的 {'、'.join(stale)} 还在持仓里，先按纪律卖掉")
     except Exception:  # noqa: BLE001 - 首日无历史计划等情况不阻断
         pass
     try:
@@ -702,10 +702,10 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             ind_w[ind_map.get(c) or "未知"] = ind_w.get(ind_map.get(c) or "未知", 0.0) + cur_w.get(c, 0.0)
         for ind, w in sorted(ind_w.items(), key=lambda kv: -kv[1]):
             if ind != "未知" and w > 0.35:
-                hints.append(f"行业集中度：{ind} 合计 {w:.0%} 超 35% 上限，回避同涨同跌")
+                hints.append(f"仓位太集中：{ind}行业占 {w:.0%}（超35%），一个行业跌就整体跟跌，建议分散")
         heavy = [(names.get(c, c), w) for c, w in cur_w.items() if w > 0.20]
         for nm, w in sorted(heavy, key=lambda kv: -kv[1]):
-            hints.append(f"单票集中度：{nm} {w:.0%} 超 20% 上限，建议分批降至上限内")
+            hints.append(f"单只太重：{nm} 占 {w:.0%}（超20%），建议分批减到 20% 以内")
         # E7 拥挤度（HHI+Top-3 聚合口径）：持仓行业按权重 + 投顾 long 信号池按主题，
         # 补单行业阈值盲区（多个中等行业同题材共振 / 投顾扎堆少数题材同涨同跌）。
         from invest_model.portfolio.crowding import crowding_hints
@@ -721,7 +721,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         pass
     invested = sum(mv.values()) / equity
     if invested - gross > 0.10:
-        hints.append(f"实际仓位 {invested:.0%} 高于目标 {gross:.0%}，无现金缓冲，补足前不开新仓")
+        hints.append(f"仓位偏高：实际 {invested:.0%} 高于目标 {gross:.0%}，先留点现金缓冲、补足前不开新仓")
 
     # 排雷影子提示（提案 P7）：持仓/目标命中 ≥2 面红旗 → 建议深挖财报（不自动动仓）
     try:
@@ -730,8 +730,8 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         for c, (nfl, fls) in sorted(qf.items(), key=lambda kv: -kv[1][0]):
             head = fls[0].split("（")[0] if fls else ""
             hints.append(
-                f"排雷影子: {names.get(c, c)} 命中 {nfl} 面红旗（{head} 等）——"
-                f"触发深挖非确认造假，建议核对财报（影子观察，不自动动仓）")
+                f"财务预警：{names.get(c, c)} 有 {nfl} 项异常（{head} 等），可能财报有水分，"
+                f"建议自己核对财报——只是提醒、不自动因此卖出")
     except Exception:  # noqa: BLE001 — 影子提示失败不阻断计划
         pass
 

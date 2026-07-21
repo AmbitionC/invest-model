@@ -132,6 +132,27 @@ def _build_and_post_plan() -> dict:
     import re as _re
     m = _re.search(r"操作计划 — (\d{8})", body)
     plan_date = m.group(1) if m else bj.strftime("%Y%m%d")
+    # 数据到位守卫：只在「今日收盘数据已入库」时才推盘后计划。今天是交易日但计划数据日≠今天
+    # （＝今日 EOD 还没到、_latest_data_date 回退到昨日）时**不推**——避免把昨天的数据挂成
+    # 今天盘后计划误导用户。数据到位后由哨兵/次轮重跑自然出决策日=今天的计划。
+    today_ymd = bj.strftime("%Y%m%d")
+    if plan_date != today_ymd:
+        try:
+            import pandas as _pd
+
+            from invest_model.data import make_engine as _mk
+            from invest_model.repositories.base import BaseRepository as _Repo
+            _repo = _Repo(_mk())
+            _cal = _repo.read_sql(
+                "SELECT is_open FROM trade_calendar WHERE cal_date=:t", {"t": today_ymd})
+            _today_open = (not _cal.empty
+                           and int(_pd.to_numeric(_cal["is_open"].iloc[0]) or 0) == 1)
+        except Exception:  # noqa: BLE001 — 查不到日历时保守当交易日、宁可不推陈旧计划
+            _today_open = True
+        if _today_open:
+            print(f"今日({today_ymd})收盘数据未入库（计划数据日={plan_date}），"
+                  f"暂不推当日计划，数据到位后重跑自出。")
+            return {"plan": f"skipped-stale:data={plan_date}"}
     header = f"## {today} 盘后操作计划（决策日 {plan_date}）"
     res = gh_notify.post_issue_comment(
         "📈 每日操作计划",
