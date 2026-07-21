@@ -567,6 +567,7 @@ def _fear_alerts(engine) -> list[tuple[str, str, str]]:
     from invest_model.signals.buypoint import BuyPointConfig
 
     thr = BuyPointConfig.fear_buy
+    mid = 80.0                                 # 恐慌加深关键点位（抄底窗口深化）
     deep = 85.0                                # 深度恐慌关键点位（E17：85+ 与 75-80 均强，不叠加仓位）
     day = _now_cst().strftime("%Y%m%d")
     df = BaseRepository(engine).read_sql(
@@ -590,6 +591,10 @@ def _fear_alerts(engine) -> list[tuple[str, str, str]]:
                     f"今晚计划环境闸将放松(0.6→0.4，仅限基本面未走坏标的)；盘中重点盯"
                     f"观察池回踩/突破触发（技术闸/量化闸不放松）。分批小仓试探、不一次性满上、"
                     f"仓位不随恐慌深浅加码（E17 样本不足未证）", "crit"))
+    if score >= mid:
+        out.append((f"F:{day}:恐慌加深",
+                    f"🟠 恐慌加深 {score:.0f}（盘中 {ts}）≥{mid:.0f}：抄底窗口深化、卖压未歇 — "
+                    f"仍分批、留子弹补跌，别因更恐慌加大单笔", "crit"))
     if score >= deep:
         out.append((f"F:{day}:深度恐慌",
                     f"🔴 深度恐慌 {score:.0f}（盘中 {ts}）≥{deep:.0f}：极端踩踏区、历史多为系统性调整中段 — "
