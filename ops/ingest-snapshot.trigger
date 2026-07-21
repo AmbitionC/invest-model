@@ -1,1 +1,2 @@
-ETF写入current_holding后重录快照 2026-07-01T12:59:59Z
+ingest-snapshot trigger
+2026-07-20 重录0720快照(修ingest含现金行→令现金durable、修Bug②)

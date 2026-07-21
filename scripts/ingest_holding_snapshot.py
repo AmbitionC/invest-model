@@ -61,10 +61,18 @@ def main() -> None:
     snap_date = str(df["snapshot_date"].iloc[0])
     cols = ["snapshot_date", "code", "name", "asset_type", "shares", "available",
             "cost_price", "last_price", "market_value", "pnl", "pnl_pct"]
+    # holding_snapshot 存全部行（含现金行）——令现金 durable：account_snapshot 被 redo/
+    # 哨兵删当日行后，_persist_account_snapshot_daily 仍能从这里取回权威现金（修 2026-07-20：
+    # 此前现金行被剔除、只进 account_snapshot，被删后现金退回前一日旧值）。mv/current_holding 仍用非现金 df。
+    hs = raw.copy()
+    for c in ["shares", "available", "cost_price", "last_price", "market_value", "pnl", "pnl_pct"]:
+        if c in hs.columns:
+            hs[c] = pd.to_numeric(hs[c], errors="coerce")
+    hs = hs[[c for c in cols if c in hs.columns]]
     df = df[[c for c in cols if c in df.columns]]
     # 当天先删后插：让单日快照成为权威（修代码/删持仓都能干净覆盖）
     repo.execute_sql("DELETE FROM holding_snapshot WHERE snapshot_date=:d", {"d": snap_date})
-    n = repo.upsert("holding_snapshot", df, ["snapshot_date", "code"])
+    n = repo.upsert("holding_snapshot", hs, ["snapshot_date", "code"])
 
     # 同步刷新 current_holding（实盘持仓表，供 build_action_plan/盯盘）：
     # 取 stock + etf（ETF 前复权日线已由 ingest_etf_daily 灌进 stock_daily，可同套风控）；
