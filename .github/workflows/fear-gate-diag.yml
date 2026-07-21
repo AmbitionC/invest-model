@@ -1,0 +1,56 @@
+name: fear-gate-diag
+
+# 恐慌放宽下"为何无标的进入"诊断（用户命题·一次性只读）。
+# 对最近 N 天回放生产 detect_buypoints，逐票列 MA60 站位与命中闸，并用 gross=1.0 证明环境闸非约束。
+# 不落库、不改生产。报告打印到日志 + artifact。触发：手动 / 改 ops/fear-gate-diag.trigger 后 push（仅 master）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "回放最近多少个交易日"
+        default: "3"
+  push:
+    branches: [master]
+    paths:
+      - 'ops/fear-gate-diag.trigger'
+
+concurrency:
+  group: fear-gate-diag
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 诊断（恐慌放宽下无标的进入）
+        run: |
+          python scripts/analysis/fear_gate_diag.py \
+            --days "${{ github.event.inputs.days || '3' }}" \
+            --out results/fear_gate_diag.md
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: fear-gate-diag
+          path: results/fear_gate_diag.md
+          if-no-files-found: warn
