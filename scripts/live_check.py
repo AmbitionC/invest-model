@@ -479,12 +479,18 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
             continue
         ma20, hi20 = lv.get("ma20"), lv.get("hi20")
         dev = (px / ma20 - 1) if ma20 else 0
+        akey = ""
         if not lv.get("ma60_up") or (lv.get("ma60") and px < lv["ma60"]):
             st, hit = "趋势未上（不看）", False
         elif ma20 and abs(dev) <= args.pullback_pct:
-            st, hit = "⚠️ 到回踩位，企稳放量则买点", True
-        elif px >= hi20 and dev <= 0.06:
-            st, hit = "⚠️ 突破平台，放量则买点", True
+            st, hit, akey = "到回踩MA20位，企稳放量则买点", True, f"W:{c}:pullback"
+        elif px >= hi20:
+            # 盘中突破平台新高：**首次触发即提示**，哪怕已追高——不再因 dev>6% 静默毙掉。
+            # 此前涨停(≈必偏离MA20>6%)被归入"勿追高·不提示"，用户盘中收不到、只能次日追高；
+            # 改为照提示 + 追高/涨停封板风险标注，把是否介入的判断权交回用户。
+            hit, akey = True, f"W:{c}:break"
+            st = ("突破平台买点位（贴合MA20、未追高）" if dev <= 0.06 else
+                  f"盘中突破新高·已涨离MA20 {dev:+.0%}（追高风险；若涨停封板则买不进，供你判断）")
         elif dev > 0.06:
             st, hit = f"偏离MA20 {dev:+.0%}，勿追高，等回踩", False
         else:
@@ -494,9 +500,9 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
             _track(px, ma20, hi20)
         if hit:
             # 挂单信号：回踩位挂 MA20、突破位挂 20日高，按目标占比定量（股数/金额/占比）
-            lvl = ma20 if "回踩" in st else hi20
+            lvl = hi20 if "突破" in st else ma20
             ticket = " → " + _buy_ticket(lvl, cash, equity, buy_w, code=c)
-            alerts.append((f"W:{c}:{st}",
+            alerts.append((akey,
                            f"🟢 观察 {q.get('name', c)}({g_of.get(c, '')}) {px:.2f} — {st}{ticket}",
                            "batch"))
     # ETF 持仓风控：无移动止盈白名单概念，一律按 硬止损 + 破MA20 管
