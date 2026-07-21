@@ -209,8 +209,14 @@ def _in_trading_hours(bj) -> bool:
     return (9 * 60 + 30) <= hm <= (11 * 60 + 30) or (13 * 60) <= hm <= (15 * 60)
 
 
-def job_fear_intraday() -> dict:
-    """盘中恐慌（近似）：交易时段每小时用腾讯全市场快照重算，落 fear_intraday。
+# 恐慌密控滞回带：当日盘中恐慌曾冲到 ENTER(≥75，与买点闸 fear_buy 同源)才进入密控，
+# 之后只要最新 ≥ HOLD(70) 就维持 5 分钟加密（跟到恐慌回落），与 _fear_alerts 的 <70 回落带一致。
+FEAR_DENSIFY_ENTER = 75.0
+FEAR_DENSIFY_HOLD = 70.0
+
+
+def _run_fear_intraday(job_name: str) -> dict:
+    """共享：交易时段用腾讯全市场快照重算盘中恐慌并落 fear_intraday（job_name 仅作回执标识）。
 
     与日频 fear_daily 完全独立、同一套分量公式；非交易日/非交易时段毫秒级退出；
     腾讯拉取不足（源故障/受限）→ 降级不写（前端自动退回日频）。绝不动 fear_daily。
@@ -218,7 +224,7 @@ def job_fear_intraday() -> dict:
     bj = gh_notify.bj_now()
     day = bj.strftime("%Y%m%d")
     if not _is_trade_day(day) or not _in_trading_hours(bj):
-        return {"job": "fear_intraday", "skipped": "off-hours", "ts": bj.strftime("%H:%M")}
+        return {"job": job_name, "skipped": "off-hours", "ts": bj.strftime("%H:%M")}
     try:
         from invest_model.data import make_engine
         from invest_model.repositories.base import BaseRepository
@@ -233,21 +239,62 @@ def job_fear_intraday() -> dict:
             "SELECT DISTINCT code FROM stock_daily WHERE trade_date="
             "(SELECT MAX(trade_date) FROM stock_daily)")["code"].tolist()
         if len(codes) < 2000:
-            return {"job": "fear_intraday", "skipped": f"universe-small:{len(codes)}"}
+            return {"job": job_name, "skipped": f"universe-small:{len(codes)}"}
         price_map = get_realtime_market(codes)
         idx_q = get_realtime_etf(["000300.SH"]).get("000300.SH") or {}
         idx_price = idx_q.get("price")
         g = fear_intraday(engine, price_map, idx_price, day)
         if g is None:
-            return {"job": "fear_intraday", "skipped": "fetch-degraded",
+            return {"job": job_name, "skipped": "fetch-degraded",
                     "got": len(price_map)}
         snap = bj.strftime("%Y-%m-%d %H:%M:%S")
         persist_fear_intraday(engine, g, snap)
-        return {"job": "fear_intraday", "ok": g["score"], "level": g["level"],
+        return {"job": job_name, "ok": g["score"], "level": g["level"],
                 "got": len(price_map), "ts": snap}
     except Exception as e:  # noqa: BLE001 — 盘中辅助指标失败绝不影响其它任务
-        print(f"WARN fear_intraday 失败：{e}")
-        return {"job": "fear_intraday", "error": str(e)}
+        print(f"WARN {job_name} 失败：{e}")
+        return {"job": job_name, "error": str(e)}
+
+
+def job_fear_intraday() -> dict:
+    """盘中恐慌（近似）：交易时段每小时用腾讯全市场快照重算，落 fear_intraday。"""
+    return _run_fear_intraday("fear_intraday")
+
+
+def job_fear_panic_watch() -> dict:
+    """恐慌密控（5 分钟级）：**只在密控态干活**——当日盘中恐慌曾 ≥75 且最新 ≥70 时，
+    加密重算 fear_intraday（把小时级抬到 5 分钟级，抢恐慌极值窗口的分辨率）；否则常态
+    只做一次轻量 SELECT 即毫秒退出、几乎零成本（同 plan_watchdog 哨兵范式）。
+
+    纯监测/提示层：加密后的 5 分钟 fear_intraday 自动喂给 live_check 的恐慌抄底窗口提醒，
+    **不改任何买卖闸门、不自动下单**（自动化仓位阶梯待 P22/E17 验证过再议）。
+    """
+    bj = gh_notify.bj_now()
+    day = bj.strftime("%Y%m%d")
+    if not _is_trade_day(day) or not _in_trading_hours(bj):
+        return {"job": "fear_panic_watch", "skipped": "off-hours", "ts": bj.strftime("%H:%M")}
+    try:
+        import pandas as pd
+
+        from invest_model.data import make_engine
+        from invest_model.repositories.base import BaseRepository
+
+        repo = BaseRepository(make_engine())
+        fi = repo.read_sql("SELECT score FROM fear_intraday WHERE trade_date=:d", {"d": day})
+        sc = (pd.to_numeric(fi["score"], errors="coerce").dropna()
+              if not fi.empty else pd.Series(dtype=float))
+        day_max = float(sc.max()) if len(sc) else 0.0
+        latest = float(sc.iloc[-1]) if len(sc) else 0.0
+        if not (day_max >= FEAR_DENSIFY_ENTER and latest >= FEAR_DENSIFY_HOLD):
+            return {"job": "fear_panic_watch", "skipped": "not-panic",
+                    "day_max": round(day_max, 1), "latest": round(latest, 1),
+                    "ts": bj.strftime("%H:%M")}
+    except Exception as e:  # noqa: BLE001 — 门控查询失败不写脏数据、静默退
+        return {"job": "fear_panic_watch", "error": f"gate:{e}"}
+    # 密控态 → 走同一套全市场重算，落一条 5 分钟粒度 fear_intraday 行
+    r = _run_fear_intraday("fear_panic_watch")
+    r["densify"] = True
+    return r
 
 
 def _ingest_and_build_arb() -> str:
@@ -711,4 +758,5 @@ JOBS = {
     "ingest_advisor": job_ingest_advisor,
     "ingest_snapshot": job_ingest_snapshot,
     "fear_intraday": job_fear_intraday,
+    "fear_panic_watch": job_fear_panic_watch,
 }
