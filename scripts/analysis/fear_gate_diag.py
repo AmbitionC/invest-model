@@ -108,12 +108,24 @@ def run(engine, days: int) -> str:
     L.append(f"- 观察池=投顾 A/B 级 long；ETF=watch_etf.txt（{len(etf_codes)} 只）；"
              f"持仓 {len(held_codes)} 只。买点闸链①MA60→②买点→③量化→④环境（恐慌只松④）。")
 
+    # ── 预载：一次性拉市场数据，避免逐日全市场 fear 查询 / 逐票 MA N+1（远程 DB 慢）──
+    d_lo = trade_days[0]
+    mkt_start = (pd.to_datetime(d_lo) - pd.Timedelta(days=210)).strftime("%Y%m%d")
+    idx_start = (pd.to_datetime(d_lo) - pd.Timedelta(days=430)).strftime("%Y%m%d")
+    mkt = repo.read_sql(
+        "SELECT code, trade_date, close, pct_chg FROM stock_daily "
+        "WHERE trade_date>=:s AND trade_date<=:d", {"s": mkt_start, "d": dt0})
+    mkt["trade_date"] = mkt["trade_date"].astype(str)
+    idx = repo.read_sql(
+        "SELECT code, trade_date, close FROM index_daily "
+        "WHERE code='000300.SH' AND trade_date>=:s AND trade_date<=:d",
+        {"s": idx_start, "d": dt0})
+    idx["trade_date"] = idx["trade_date"].astype(str)
+
+    # per-day 元数据先算（pool/gross/rank），收集 universe 并集做 MA 批量预载
+    meta: dict[str, tuple] = {}
+    uni_all: set[str] = set()
     for dt in trade_days:
-        fear = None
-        try:
-            fear = float(fear_gauge(engine, dt)["score"])
-        except Exception:  # noqa: BLE001
-            pass
         pred_date = _latest_pred_date(loop, dt)
         preds = loop.pred_repo.get_predictions(pred_date, loop.cfg.version) if pred_date else pd.DataFrame()
         u = set(loop.uni_repo.get_universe(pred_date, loop.cfg.universe.method)) if pred_date else set()
@@ -125,9 +137,45 @@ def run(engine, days: int) -> str:
             gross = float(loop.mt.gross_exposure(dt, list(u) if u else None))
         except Exception:  # noqa: BLE001
             gross = float("nan")
-
         pool = _pool(loop, dt)
         universe_codes = list(dict.fromkeys(pool + etf_codes + held_codes))
+        meta[dt] = (rank_map, gross, pool, universe_codes)
+        uni_all.update(universe_codes)
+
+    # MA 站位批量预载（并集所有候选，一个查询）
+    ma_px: dict[str, pd.DataFrame] = {}
+    if uni_all:
+        ma_start = (pd.to_datetime(d_lo) - pd.Timedelta(days=140)).strftime("%Y%m%d")
+        codes_l = list(uni_all)
+        ph = ",".join(f":c{i}" for i in range(len(codes_l)))
+        params = {f"c{i}": c for i, c in enumerate(codes_l)}
+        params.update(s=ma_start, d=dt0)
+        mp = repo.read_sql(
+            f"SELECT code, trade_date, close FROM stock_daily "
+            f"WHERE trade_date>=:s AND trade_date<=:d AND code IN ({ph})", params)
+        if not mp.empty:
+            mp["trade_date"] = mp["trade_date"].astype(str)
+            mp["close"] = pd.to_numeric(mp["close"], errors="coerce")
+            for c, g in mp.groupby("code"):
+                ma_px[str(c)] = g.sort_values("trade_date")[["trade_date", "close"]]
+
+    def _ma_stats(code: str, dt: str):
+        s = ma_px.get(code)
+        if s is None:
+            return float("nan"), float("nan"), "?", "?"
+        cl = s[s["trade_date"] <= dt]["close"].dropna().reset_index(drop=True)
+        if len(cl) < 60:
+            return float("nan"), float("nan"), "?", "?"
+        ma20 = float(cl.tail(20).mean()); ma60 = float(cl.tail(60).mean())
+        ma60_prev = float(cl.tail(65).head(60).mean()) if len(cl) >= 65 else ma60
+        return ma20, ma60, ("是" if float(cl.iloc[-1]) >= ma60 else "否"), ("是" if ma60 > ma60_prev else "否")
+
+    for dt in trade_days:
+        rank_map, gross, pool, universe_codes = meta[dt]
+        try:
+            fear = float(fear_gauge(engine, dt, stock_df=mkt, idx_df=idx)["score"])
+        except Exception:  # noqa: BLE001
+            fear = None
         cfg = BuyPointConfig()
         panic = fear is not None and fear >= cfg.fear_buy
 
@@ -164,18 +212,8 @@ def run(engine, days: int) -> str:
             if b is None:
                 continue
             cat = "ETF" if c in etf_codes else ("持仓" if c in held_codes else "池")
-            # 从 stock_daily 取 MA 站位（与买点闸同源）
-            s = repo.read_sql(
-                "SELECT close FROM stock_daily WHERE code=:c AND trade_date<=:d "
-                "ORDER BY trade_date DESC LIMIT 65", {"c": c, "d": dt})
-            above = up = "?"
-            ma60 = ma20 = float("nan")
-            if len(s) >= 60:
-                cl = pd.to_numeric(s["close"], errors="coerce")[::-1].reset_index(drop=True)
-                ma20 = float(cl.tail(20).mean()); ma60 = float(cl.tail(60).mean())
-                ma60_prev = float(cl.tail(65).head(60).mean()) if len(cl) >= 65 else ma60
-                above = "是" if float(cl.iloc[-1]) >= ma60 else "否"
-                up = "是" if ma60 > ma60_prev else "否"
+            # MA 站位（预载批量，与买点闸同源）
+            ma20, ma60, above, up = _ma_stats(c, dt)
             # 只详列 ETF + 持仓 + 池前 15 只，避免过长
             if cat == "池" and shown >= 15:
                 continue
