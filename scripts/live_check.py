@@ -567,6 +567,7 @@ def _fear_alerts(engine) -> list[tuple[str, str, str]]:
     from invest_model.signals.buypoint import BuyPointConfig
 
     thr = BuyPointConfig.fear_buy
+    deep = 85.0                                # 深度恐慌关键点位（E17：85+ 与 75-80 均强，不叠加仓位）
     day = _now_cst().strftime("%Y%m%d")
     df = BaseRepository(engine).read_sql(
         "SELECT snapshot_ts, score FROM fear_intraday WHERE trade_date=:d "
@@ -580,18 +581,24 @@ def _fear_alerts(engine) -> list[tuple[str, str, str]]:
     score = float(scores[last])
     ts = str(df["snapshot_ts"][last])[11:16]
     day_max = float(scores.max())
+    # 两个关键点位各一条（按日按状态去重、一日各至多一条）：75 抄底窗口 / 85 深度恐慌。
+    # 仓位口径按 E17（首跑 2/4·2026-07-21）：≥85 前瞻并不优于 75-80、样本不足，不随恐慌加码。
+    out: list[tuple[str, str, str]] = []
     if score >= thr:
-        return [(f"F:{day}:抄底窗口",
-                 f"🟣 恐慌抄底窗口开启：恐慌 {score:.0f}（盘中 {ts}）≥{thr:.0f}，已转 5 分钟密控 — "
-                 f"今晚计划环境闸将放松(0.6→0.4，仅限基本面未走坏标的)；盘中重点盯"
-                 f"观察池回踩/突破触发（技术闸/量化闸不放松）。分批小仓试探、不一次性满上；"
-                 f"越极端越分散（≥80 常是系统性踩踏中途、更谨慎），仓位阶梯待 E17 验证",
-                 "crit")]
-    if day_max >= thr and score < thr - 5:
-        return [(f"F:{day}:窗口回落",
-                 f"🟣 恐慌回落：{score:.0f}（盘中 {ts}，日内峰值 {day_max:.0f}）"
-                 f"— 抄底窗口提示解除，5 分钟密控退回小时级，回到常规闸门", "batch")]
-    return []
+        out.append((f"F:{day}:抄底窗口",
+                    f"🟣 恐慌抄底窗口开启：恐慌 {score:.0f}（盘中 {ts}）≥{thr:.0f}，已转 5 分钟密控 — "
+                    f"今晚计划环境闸将放松(0.6→0.4，仅限基本面未走坏标的)；盘中重点盯"
+                    f"观察池回踩/突破触发（技术闸/量化闸不放松）。分批小仓试探、不一次性满上、"
+                    f"仓位不随恐慌深浅加码（E17 样本不足未证）", "crit"))
+    if score >= deep:
+        out.append((f"F:{day}:深度恐慌",
+                    f"🔴 深度恐慌 {score:.0f}（盘中 {ts}）≥{deep:.0f}：极端踩踏区、历史多为系统性调整中段 — "
+                    f"更谨慎、留子弹补跌，勿因更恐慌就加大单笔（E17：≥85 前瞻不优于 75-80）", "crit"))
+    if not out and day_max >= thr and score < thr - 5:
+        out.append((f"F:{day}:窗口回落",
+                    f"🟣 恐慌回落：{score:.0f}（盘中 {ts}，日内峰值 {day_max:.0f}）"
+                    f"— 抄底窗口提示解除，5 分钟密控退回小时级，回到常规闸门", "batch"))
+    return out
 
 
 def _arb_alerts(engine) -> list[tuple[str, str, str]]:
