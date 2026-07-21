@@ -594,13 +594,22 @@ def _fear_alerts(engine) -> list[tuple[str, str, str]]:
 
 
 def _arb_alerts(engine) -> list[tuple[str, str, str]]:
-    """套利盯盘预警：WATER 水表反转(crit) / ALPHA α证伪(crit) / CARRY 逆回购窗口(batch)。"""
+    """套利盯盘预警：WATER 水表反转 / ALPHA α证伪 / CARRY 逆回购窗口。
+
+    WATER/ALPHA 是套利 sleeve 的持仓级止损信号——只有 ARB_ENABLED=1（套利账本注入
+    生产计划）时用户才真有对应 sleeve 仓位，这两条才可执行。套利默认关（观察态，0713
+    事故后回退，影子攒 E14 判据）时**不推**这两条，否则用户收到无仓可动的"crit 预警"
+    误以为要操作（修 2026-07-21：此前无条件发 WATER→水表影子误报被当紧急预警推送）。
+    CARRY（逆回购利差）不依赖任何 sleeve、是通用闲钱停靠提示，与套利开关无关，恒发。
+    """
     if engine is None:
         return []
+    from invest_model.arb.config import ArbConfig
+    arb_on = ArbConfig.from_env().enabled
     out: list[tuple[str, str, str]] = []
     repo = BaseRepository(engine)
-    # WATER：flow_score 最近两期 composite 由正转负 → 水表反转
-    if repo.table_exists("flow_score"):
+    # WATER：flow_score 最近两期 composite 由正转负 → 水表反转（仅套利启用时可执行）
+    if arb_on and repo.table_exists("flow_score"):
         fs = repo.read_sql(
             "SELECT trade_date, `key`, composite FROM flow_score "
             "WHERE trade_date>=(SELECT MIN(td) FROM (SELECT DISTINCT trade_date td FROM "
@@ -615,8 +624,8 @@ def _arb_alerts(engine) -> list[tuple[str, str, str]]:
                     out.append((f"WATER:{k}:reversed",
                                 f"💧 水表反转：{k} 资金流由 {r[prev]:+.0f}→{r[cur]:+.0f} 转负，"
                                 "相关 sleeve 逻辑止损（跟水不跟价）", "crit"))
-    # ALPHA：alpha_candidate 已标 falsified=1
-    if repo.table_exists("alpha_candidate"):
+    # ALPHA：alpha_candidate 已标 falsified=1（仅套利启用时可执行）
+    if arb_on and repo.table_exists("alpha_candidate"):
         af = repo.read_sql(
             "SELECT code, theme FROM alpha_candidate WHERE falsified=1 "
             "AND as_of_date=(SELECT MAX(as_of_date) FROM alpha_candidate)")
