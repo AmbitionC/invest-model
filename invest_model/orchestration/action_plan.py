@@ -383,6 +383,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     watch_rows: list[dict] = []
     buy_codes: set[str] = set()
     fresh_fast: set[str] = set()
+    bps: dict = {}
     if buypoint:
         reco = loop.adv_repo.get_active_reco(dt)
         # 观察池收敛：A 级全留 + B 级取最近的，总量封顶（避免历史 B 级堆积把观察池撑爆）。
@@ -609,6 +610,15 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             shares_delta = _round_lot((tw - cw) * equity / px) if px and px > 0 else 0.0
 
         trigger = (f"挂单≈{round(px, 2)}" if action in ("buy", "add") and px else "—")
+        # 信号日涨停的买点触发：按信号日收盘挂单＝次日追涨停（0721 长川科技实例——
+        # 计划给"挂单≈涨停价"误导执行，用户自行改挂回踩位才对）。改为挂回踩 MA20 位
+        # + 警示，聊天纪律"涨停别追、等回踩"落进计划本身。
+        _bp = bps.get(c)
+        if action == "buy" and _bp is not None and getattr(_bp, "limit_up", False):
+            _m20 = getattr(_bp, "ma20", float("nan"))
+            trigger = (f"勿追价·回踩挂单≈{round(float(_m20), 2)}" if np.isfinite(_m20)
+                       else "勿追价·等回踩再挂单")
+            reason = f"⚠️信号日涨停、次日按收盘追=追涨停：{reason}——仅小仓、挂回踩位、不追价"
         if action == "buy" and c in fresh_fast and c not in buy_codes and px:
             # 研报速通：不追高开（次日平均跳空+3.2%后日内回落），尾盘建半仓
             reason = f"研报速通·半仓直入：{reason}"
