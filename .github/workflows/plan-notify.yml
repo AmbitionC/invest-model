@@ -99,22 +99,35 @@ jobs:
               issue = created.data;
             }
 
-            // 防重：**一决策日只发一份计划**——按决策日(planDate)去重，不按墙钟日。
-            // 修复：盘中 bump plan-notify 会用旧数据(planDate=昨收)重算，若按墙钟标题去重
-            // 就会贴出一条"今日盘后计划（决策日=昨日）"——盘中却写"盘后"、且不含当日盘中新信号，
-            // 造成 issue 刷屏+误导。改为决策日去重后：该决策日已有计划即跳过（盘中重算落在旧决策日→静默跳过），
-            // 今晚 17:00 收盘数据入库后 planDate 前进到今日→正常发当日正式计划，互不影响。
+            // 防重（2026-07-22 修订·owner 定：当天的信息当天 bump 要当天可见）：
+            // ① 决策日 < 今天（盘中 bump 用昨收重算）→ 仍静默跳过——那份不含当日新信号、
+            //    且被"盘后"字样误导，是原防重要拦的误导案例；
+            // ② 决策日 = 今天 且该决策日已发过 → 不再一刀切跳过：内容有变化（如收盘笔记
+            //    在当日计划发出后入库、重算出新提示/新观察池）→ 以「·修订N」追加；
+            //    内容与已发一致 → 跳过（防纯重复刷屏，兼防哨兵并发双贴）。
             const existing = await github.rest.issues.listComments({
               owner, repo, issue_number: issue.number, per_page: 50,
               sort: 'created', direction: 'desc',
             });
-            const decisionTag = `（决策日 ${planDate}）`;
-            if (existing.data.some(c => c.body.includes(decisionTag))) {
-              core.info(`决策日 ${planDate} 的计划已发过，跳过（一决策日一计划）。`);
-              return;
+            const decisionTag = `（决策日 ${planDate}`;   // 不闭括号：兼容「）」与「·修订N）」
+            const prior = existing.data.filter(c => (c.body || '').includes(decisionTag));
+            let header2 = header;
+            if (prior.length) {
+              const todayYmd = today.replace(/-/g, '');
+              if (planDate !== todayYmd) {
+                core.info(`决策日 ${planDate} 的计划已发过且非当日（盘中旧数据重算），跳过。`);
+                return;
+              }
+              const stripHead = s => (s || '').split('\n').slice(1).join('\n').trim();
+              const fresh = stripHead(`${header}\n\n${body}`);
+              if (prior.some(c => stripHead(c.body) === fresh)) {
+                core.info(`决策日 ${planDate} 内容无变化，跳过（防重复）。`);
+                return;
+              }
+              header2 = `## ${today} 盘后操作计划（决策日 ${planDate}·修订${prior.length + 1}）`;
             }
             await github.rest.issues.createComment({
               owner, repo, issue_number: issue.number,
-              body: `${header}\n\n${body}`,
+              body: `${header2}\n\n${body}`,
             });
-            core.info(`已在 issue #${issue.number} 追加 ${today} 计划评论。`);
+            core.info(`已在 issue #${issue.number} 追加 ${today} 计划评论${prior.length ? '（修订版）' : ''}。`);
