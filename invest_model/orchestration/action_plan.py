@@ -608,6 +608,22 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                 reason = f"买点有效但不可执行：{lot_txt} 远超目标增量——账户规模不足，跳过"
         else:
             shares_delta = _round_lot((tw - cw) * equity / px) if px and px > 0 else 0.0
+            # 减仓的可执行口径（0722 长川科技实例：持1手却给"减半-100股"＝嘴上减半、
+            # 股数清仓）。A股卖出委托同样整手：① 仅1手 → 减半不可拆，如实给二选一，
+            # 不硬拆也不静默升级成清仓；② 多手 → 减仓股数夹在[1手, 持仓-1手]，
+            # 防四舍五入把减半凑成清仓/凑成0。
+            if action == "trim" and px and px > 0:
+                held_sh = float(shares_map.get(c, 0) or 0)
+                lot = min_lot(c)
+                if 0 < held_sh <= lot:
+                    shares_delta, tw = 0.0, cw
+                    stop_txt = f"{stop_price:.2f}" if np.isfinite(stop_price) else "硬止损"
+                    reason = (f"{reason}——⚠️仅持{int(held_sh)}股(最小一手)减半不可拆："
+                              f"二选一 ①按纪律全清 ②持有以止损{stop_txt}兜底")
+                elif held_sh > lot:
+                    want = abs((tw - cw) * equity / px)
+                    sd = min(max(lot, _round_lot(want)), _round_lot(held_sh) - lot)
+                    shares_delta = -float(sd)
 
         trigger = (f"挂单≈{round(px, 2)}" if action in ("buy", "add") and px else "—")
         # 信号日涨停的买点触发：按信号日收盘挂单＝次日追涨停（0721 长川科技实例——
