@@ -1,0 +1,51 @@
+name: candidate-screen
+
+# 直播点名个股·模型体检（用户命题·一次性只读）。
+# 对投顾直播点名的个股逐个过买点闸+模型质量分+均线站位，判可买入/观察/别碰。
+# 只读 stock_daily/预测表；不落库、不改生产。报告进日志 + artifact。
+# 触发：手动 / 改 ops/candidate-screen.trigger 后 push（仅 master）。
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/candidate-screen.trigger'
+
+concurrency:
+  group: candidate-screen
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 体检（直播点名个股·模型验证）
+        run: |
+          python scripts/analysis/candidate_screen.py --out results/candidate_screen.md
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-screen
+          path: results/candidate_screen.md
+          if-no-files-found: warn
