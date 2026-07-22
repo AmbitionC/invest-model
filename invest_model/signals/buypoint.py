@@ -51,6 +51,7 @@ class BuyPoint:
     last: float = float("nan")        # 最新收盘
     ma20: float = float("nan")        # 回踩买点参考位
     breakout: float = float("nan")    # 突破买点参考位（近 N 日最高收盘）
+    limit_up: bool = False            # 信号日涨停收盘：次日按收盘价追=追涨停，计划须改挂回踩位
 
 
 def _ma(s: pd.Series, n: int) -> float:
@@ -118,8 +119,16 @@ def detect_buypoints(engine, dt: str, codes: list[str], gross: float,
         c0, o0, v0 = float(cl.iloc[-1]), float(o.iloc[-1]), float(vol.iloc[-1])
         vma20 = float(vol.tail(20).mean())
         platform_high = float(cl.iloc[-(cfg.breakout_lookback + 1):-1].max())
+        # 信号日是否涨停收盘（按板块阈值近似：主板10%/创业板科创板20%/北交所30%）。
+        # 涨停触发的突破，次日按信号日收盘挂单＝追涨停（0721 长川科技实例：计划给
+        # "挂单≈涨停价"、用户自行改挂回踩位才对）——标记后由计划层改挂回踩位并警示。
+        prev_c = float(cl.iloc[-2]) if len(cl) >= 2 else float("nan")
+        lim_thr = (29.5 if c.endswith(".BJ")
+                   else 19.6 if c.startswith(("688", "689", "300", "301", "302")) else 9.8)
+        is_limit_up = (np.isfinite(prev_c) and prev_c > 0
+                       and (c0 / prev_c - 1) * 100 >= lim_thr)
         px = dict(last=round(c0, 2), ma20=round(ma20, 2) if np.isfinite(ma20) else float("nan"),
-                  breakout=round(platform_high, 2))
+                  breakout=round(platform_high, 2), limit_up=is_limit_up)
 
         # 前置过滤：左侧下降趋势一律不看
         trend_up = np.isfinite(ma60) and c0 >= ma60 and _slope_up(cl, 60)
