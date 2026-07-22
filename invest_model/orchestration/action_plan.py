@@ -710,6 +710,26 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                          + "——模型评分排全市场后段，但没到风控卖点，先不强制卖、供你复核")
     except Exception:  # noqa: BLE001
         pass
+    # 弱股提示（手册第3步·owner 2026-07-22 定·提示-only）：买入后 3 个交易日内未创
+    # 买入日收盘价新高＝弱势股。只提示新仓（3~10 个交易日窗口，老仓由均线/止损体系管），
+    # 不自动卖——手册原文"主动减仓一半或直接离场"留给人工决策。
+    try:
+        for hc in held_codes:
+            ed = str(entry_map.get(hc) or "").strip()
+            if len(ed) != 8 or ed >= dt:
+                continue
+            h = _close_hist(loop, hc, ed, dt).dropna()
+            if len(h) < 4:                       # 买入日 + 至少3个交易日
+                continue
+            after = h.iloc[1:]
+            days = len(after)
+            base = float(h.iloc[0])              # 买入日收盘
+            if 3 <= days <= 10 and float(after.max()) <= base:
+                hints.append(
+                    f"弱股提示：{names.get(hc, hc)} 买入后{days}个交易日未创买入日收盘新高"
+                    f"（手册口径＝弱势股，宜主动减半或离场——仅提示，不自动卖）")
+    except Exception:  # noqa: BLE001 — 提示层失败不阻断计划
+        pass
     try:
         prev_plan = loop.repo.read_sql(
             "SELECT code, name, reason FROM action_plan "

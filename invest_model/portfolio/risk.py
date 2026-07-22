@@ -24,7 +24,7 @@ PER_STEP_KEEP: dict[int, float] = {1: 0.5, 2: 0.5, 3: 0.0}
 class RiskConfig:
     enabled: bool = True
     hard_stop_pct: float = 0.08          # 单票较成本浮亏达此值清仓
-    account_dd_stop: float = 0.15        # 账户较峰值回撤达此值清仓转现金（0=关闭）
+    account_dd_stop: float = 0.10        # 账户较峰值回撤达此值清仓转现金（0=关闭）。手册7%/旧默认15%，owner 2026-07-22 定10%
     ma_trailing: bool = True             # 均线移动止盈
     trail_full: bool = False             # False=仅破MA20清仓（放宽，月度书默认）；True=破5减半/破10再减半/破20清仓
     ma20_unprofit_trim: bool = True      # P10：未盈利新仓破MA20→减半(不清)、盈利后才清；硬止损兜底。修“回踩买点=破位止损”自打架（关=逐字恢复原行为）
