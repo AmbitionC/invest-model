@@ -873,6 +873,12 @@ def _once(args: argparse.Namespace) -> dict:
     issue: list = [None]
     seen = _seed_seen(issue) if args.notify else set()
     rt = _fetch_rt(ctx)
+    # 诊断行（0723：盘中零预警零报错——判"行情源取不到价"还是"持仓/观察池为空"，
+    # 静默型故障必须自曝数据面）：持仓/观察池行数 + 实时价命中率。
+    _n_rt = sum(1 for c in ctx.get("codes", []) if rt.get(c, {}).get("price"))
+    print(f"诊断: holds={len(ctx['holds'])} watch={len(ctx.get('watch', []))} "
+          f"etf_holds={len(ctx.get('etf_holds', []))} "
+          f"rt命中={_n_rt}/{len(ctx.get('codes', []))}")
     _, _, _, alerts, _ = _scan(ctx, rt, args)
     new = [(k, line, sev) for k, line, sev in alerts if k not in seen]
     _persist_alerts(ctx["engine"], now, new)
