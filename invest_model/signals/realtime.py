@@ -44,8 +44,68 @@ def _query_rt(codes: list[str], endpoint: str) -> dict[str, dict]:
 
 
 def get_realtime(codes: list[str]) -> dict[str, dict]:
-    """股票实时价（Tushare rt_k）。"""
-    return _query_rt(codes, "rt_k")
+    """股票实时价：Tushare rt_k 为主，缺失部分依次用 腾讯 qt.gtimg → 东财 push2 补齐。
+
+    背景（2026-07-23 盯盘失明事故）：rt_k 代理自 0721 午后对 FC 出口近乎全挂
+    （诊断 rt命中=1/70），盯盘取不到价逐只静默跳过 → 两个交易日零预警零报错。
+    单源不可靠，改三级回退；任一源部分成功都按 code 粒度合并。
+    """
+    codes = list(dict.fromkeys(codes))
+    out = _query_rt(codes, "rt_k")
+    missing = [c for c in codes if c not in out]
+    if missing:
+        out.update(get_realtime_market(missing))          # 腾讯（fear_intraday 同源）
+    missing = [c for c in codes if c not in out]
+    if missing:
+        out.update(_eastmoney_rt(missing))                # 东财兜底
+    return out
+
+
+def _eastmoney_rt(codes: list[str]) -> dict[str, dict]:
+    """东方财富 push2 批量现价（无鉴权 JSON）。fltt=2 → 价格为小数。
+
+    secid：沪=1.代码 / 深=0.代码；字段 f2现价 f5总量 f12代码 f14名称
+    f15高 f16低 f17开 f18昨收。失败/字段缺整体返回已得部分（fail-open）。
+    """
+    codes = list(dict.fromkeys(codes))
+    if not codes:
+        return {}
+    import requests
+
+    out: dict[str, dict] = {}
+    for i in range(0, len(codes), 80):
+        batch = codes[i:i + 80]
+        secids = ",".join(("1." if c.endswith(".SH") else "0.") + c.split(".")[0]
+                          for c in batch)
+        rev = {("1." if c.endswith(".SH") else "0.") + c.split(".")[0]: c for c in batch}
+        try:
+            r = requests.get(
+                "https://push2.eastmoney.com/api/qt/ulist.np/get",
+                params={"fltt": 2, "secids": secids,
+                        "fields": "f2,f5,f12,f13,f14,f15,f16,f17,f18"},
+                timeout=15)
+            rows = ((r.json() or {}).get("data") or {}).get("diff") or []
+        except Exception:  # noqa: BLE001
+            continue
+        for d in rows:
+            try:
+                key = f"{int(d.get('f13'))}.{d.get('f12')}"
+                ts = rev.get(key)
+                px = float(d.get("f2"))
+                if not ts or not px or px != px:
+                    continue
+                out[ts] = {
+                    "price": px,
+                    "pre_close": float(d.get("f18") or float("nan")),
+                    "open": float(d.get("f17") or float("nan")),
+                    "high": float(d.get("f15") or float("nan")),
+                    "low": float(d.get("f16") or float("nan")),
+                    "vol": float(d.get("f5") or float("nan")),
+                    "name": d.get("f14"),
+                }
+            except (TypeError, ValueError):
+                continue
+    return out
 
 
 def _to_qt_code(ts_code: str) -> str:
@@ -104,10 +164,13 @@ def get_realtime_etf(codes: list[str]) -> dict[str, dict]:
     try:
         resp = requests.get("https://qt.gtimg.cn/q=" + ",".join(qt), timeout=15)
         resp.encoding = "gbk"                 # 腾讯返回 GBK（中文名）
-        text = resp.text
+        out = _parse_qt(resp.text, rev)
     except Exception:  # noqa: BLE001
-        return {}
-    return _parse_qt(text, rev)
+        out = {}
+    missing = [c for c in codes if c not in out]
+    if missing:                               # 0723 事故同批加固：ETF 也给东财兜底
+        out.update(_eastmoney_rt(missing))
+    return out
 
 
 def get_realtime_market(codes: list[str], chunk: int = 60) -> dict[str, dict]:
