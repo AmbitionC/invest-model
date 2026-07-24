@@ -13,6 +13,7 @@ name: ingest-advisor
 on:
   workflow_dispatch: {}
   push:
+    branches: [master]   # 分支 push 不触发：分支+merge 双 run 串行排队、坏 run 挂死会拖住正事(0724 两次30分钟)
     paths:
       - 'config/advisor_*.csv'
       # 本 workflow 变更时也跑一次全量（changed 里无 csv → 回退全量，自愈通道）
@@ -61,6 +62,7 @@ jobs:
           done > /tmp/targets.ok
           echo "== 待录文件（$(wc -l < /tmp/targets.ok) 个）：" && cat /tmp/targets.ok
       - name: 录入 reco/theme（容错跳过失败项）
+        timeout-minutes: 8   # 增量录入秒级完成；引擎已加超时，这里兜底防其它类型挂死
         run: |
           while read -r f; do
             case "$f" in

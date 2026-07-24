@@ -15,6 +15,7 @@ on:
         description: "历史起始日 YYYYMMDD"
         default: "20190101"
   push:
+    branches: [master]   # 分支 push 不触发：分支+merge 双 run 串行排队、坏 run 挂死会拖住正事(0724 两次30分钟)
     paths:
       - 'ops/backfill.trigger'
 
