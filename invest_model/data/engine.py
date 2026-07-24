@@ -73,6 +73,13 @@ def make_engine(db_url: str | None = None) -> Engine:
         echo=db_cfg.get("echo", False),
         pool_recycle=3600,
         pool_pre_ping=True,
+        # 无超时的半开连接会无限挂起（0724 两次 Actions 挂满 30 分钟 job 超时才死）。
+        # read/write 取 300s：留足全量因子/回测大查询余量，同时把挂死上限压到 5 分钟。
+        connect_args={
+            "connect_timeout": int(db_cfg.get("connect_timeout", 10)),
+            "read_timeout": int(db_cfg.get("read_timeout", 300)),
+            "write_timeout": int(db_cfg.get("write_timeout", 300)),
+        },
         future=True,
     )
     logger.info("使用 MySQL 后端")

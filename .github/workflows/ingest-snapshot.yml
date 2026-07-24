@@ -6,6 +6,7 @@ name: ingest-snapshot
 on:
   workflow_dispatch: {}
   push:
+    branches: [master]   # 分支 push 不触发：分支+merge 双 run 串行排队、坏 run 挂死会拖住正事(0724 两次30分钟)
     paths:
       - 'config/holding_snapshot_*.csv'
       - 'ops/ingest-snapshot.trigger'
@@ -33,6 +34,7 @@ jobs:
       - name: Install package
         run: pip install -e .
       - name: 录入最新持仓快照（现金读自 CSV 内 cash 行）
+        timeout-minutes: 5   # 增量录入秒级完成；引擎已加超时，这里兜底防其它类型挂死
         run: |
           shopt -s nullglob
           latest=$(ls -1 config/holding_snapshot_*.csv | sort | tail -1)
