@@ -109,7 +109,7 @@ def _advisor_rows(reco: pd.DataFrame, entry_win: pd.DataFrame) -> pd.DataFrame:
         c = r["code"]
         g = ew[(ew["code"] == c) & (ew["trade_date"] > r["rec_date"])].sort_values("trade_date")
         g = g[g["close"].notna()]
-        if g.empty or c not in cur:
+        if len(g) < 2 or c not in cur:   # 单根K线→入场价==现价、收益恒0（交叉审查 C2 同款），不计
             continue
         entry = float(g["close"].iloc[0])
         if entry <= 0:
@@ -138,7 +138,8 @@ def review_advisor(repo: BaseRepository, asof: str, horizon: int) -> list[str]:
     if entry_win.empty:
         return lines + ["（推荐标的无行情，无法对账）"]
     # 前复权（修 2026-07-25：原用未复权价，分红除权季系统性压低战绩、送转假腰斩）
-    entry_win = apply_qfq_frame(repo, entry_win)
+    entry_win["close"] = pd.to_numeric(entry_win["close"], errors="coerce")  # 交叉审查 C4：
+    entry_win = apply_qfq_frame(repo, entry_win)  # Decimal×float 在 pandas2.x 会炸段，先转数值
     df = _advisor_rows(reco, entry_win)
     if df.empty:
         return lines + ["（推荐标的暂无可对账收益）"]
@@ -349,14 +350,15 @@ def review_discipline(repo: BaseRepository, asof: str) -> list[str]:
                          (bwin["trade_date"].astype(str) > str(r["plan_date"]))] \
                     .sort_values("trade_date")
                 cur = bwin[bwin["code"] == r["code"]].sort_values("trade_date")
-                if g.empty or cur.empty:
+                if len(g) < 2 or cur.empty:   # 单根K线→ret恒0（交叉审查 C2），不计
                     continue
                 entry, e_d = float(g["close"].iloc[0]), str(g["trade_date"].iloc[0])
                 if entry <= 0:
                     continue
+                l_d = str(cur["trade_date"].iloc[-1])
                 ret = float(cur["close"].iloc[-1]) / entry - 1.0
                 rets.append(ret)
-                b = _bench_ret(bench, e_d, asof)
+                b = _bench_ret(bench, e_d, l_d)   # 超额窗口=个股自身末日（交叉审查 C3：停牌股窗口对齐）
                 if np.isfinite(b):
                     exs.append(ret - b)
             if rets:

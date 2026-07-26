@@ -106,6 +106,8 @@ def main() -> None:
         if not nxt:
             continue
         i0 = nxt[0]
+        if i0 == len(dts) - 1:
+            continue                      # 单根K线→entry==last、收益恒0，不计（交叉审查 C2 同款）
         entry, entdate = cls[i0], dts[i0]
         last, lastdate = cls[-1], dts[-1]
         if not (entry and last and entry > 0):
