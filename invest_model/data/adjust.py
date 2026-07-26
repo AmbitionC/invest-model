@@ -89,6 +89,11 @@ def apply_qfq_frame(repo, df: pd.DataFrame, code_col: str = "code",
     piv = (adj.pivot_table(index="code", columns="trade_date", values="adj_factor",
                            aggfunc="last")
            .reindex(columns=dates).ffill(axis=1).bfill(axis=1))
+    # 脏因子（≤0）按 code 整段放弃复权（交叉审查 C1：逐行 fail-open 会造成同票混合
+    # 刻度——0 因子日保持 raw、前后日 ×factor，表观收益灾难级失真且静默）
+    bad = (piv <= 0).any(axis=1)
+    if bad.any():
+        piv = piv[~bad]
     fac = piv.stack().rename("adj_factor").reset_index() \
         .rename(columns={"code": code_col, "trade_date": date_col})
     out = df.copy()
