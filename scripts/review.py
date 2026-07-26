@@ -91,21 +91,25 @@ def _bench_ret(bench: pd.Series, d0: str, d1: str) -> float:
     return float(s1.iloc[-1]) / float(s0.iloc[-1]) - 1.0
 
 
-def _advisor_rows(reco: pd.DataFrame, entry_win: pd.DataFrame) -> pd.DataFrame:
-    """按 code 首评去重 + 严格次日收盘入场，返回 [code, grade, first, ret]。
+def _advisor_rows(reco: pd.DataFrame, entry_win: pd.DataFrame,
+                  horizon: int = 10) -> pd.DataFrame:
+    """按 (code,分级) 首评分桶 + 严格次日收盘入场，返回逐信号明细。
 
-    口径与 build_signal_scorecard 对齐：
-    - 同票多次推荐只记首评（原 GROUP BY code,grade 会让同票跨级重复进多个分级桶）；
-    - 入场价=首推日**之后**首个收盘（原用 >= 含当日收盘——盘中/收盘后录入的信号
-      用当日收盘是不可成交价，系统性高估战绩；刚推荐、尚无次日行情的票不计入）。
+    口径（A1/A2 修订 2026-07-27）：
+    - 分桶=每 (code,grade) 的首评各自入桶（此前按 code 首评：同票 C 升 B 后表现
+      仍记旧桶、31/223 只失真）；ALL 聚合仍按 code 首评唯一防重复计数（first_overall）。
+    - 入场价=首推日**之后**首个收盘；ret=至今；ret_h=入场后第 horizon 个交易日收盘
+      （固定窗口，匹配信号有效期语义——盘中 3-5 天/研报 14 天；不足 horizon 根K线为 NaN
+      不计入 h 桶）。单根K线（入场==现价）恒0样本剔除。
     """
-    reco = reco.sort_values("rec_date").drop_duplicates("code", keep="first")
+    reco = reco.sort_values("rec_date").drop_duplicates(["code", "grade"], keep="first")
+    first_code = set(reco.drop_duplicates("code", keep="first").index)
     ew = entry_win.copy()
     ew["close"] = pd.to_numeric(ew["close"], errors="coerce")
     cur = {c: g.sort_values("trade_date")["close"].dropna().iloc[-1]
            for c, g in ew.groupby("code") if g["close"].notna().any()}
     rows = []
-    for _, r in reco.iterrows():
+    for idx, r in reco.iterrows():
         c = r["code"]
         g = ew[(ew["code"] == c) & (ew["trade_date"] > r["rec_date"])].sort_values("trade_date")
         g = g[g["close"].notna()]
@@ -114,9 +118,12 @@ def _advisor_rows(reco: pd.DataFrame, entry_win: pd.DataFrame) -> pd.DataFrame:
         entry = float(g["close"].iloc[0])
         if entry <= 0:
             continue
+        ret_h = (float(g["close"].iloc[horizon]) / entry - 1.0
+                 if len(g) > horizon else float("nan"))
         rows.append({"code": c, "grade": r["grade"] or "?", "first": r["rec_date"],
                      "entry_date": str(g["trade_date"].iloc[0]),
-                     "ret": cur[c] / entry - 1.0})
+                     "ret": cur[c] / entry - 1.0, "ret_h": ret_h,
+                     "first_overall": idx in first_code})
     return pd.DataFrame(rows)
 
 
@@ -140,21 +147,25 @@ def review_advisor(repo: BaseRepository, asof: str, horizon: int) -> list[str]:
     # 前复权（修 2026-07-25：原用未复权价，分红除权季系统性压低战绩、送转假腰斩）
     entry_win["close"] = pd.to_numeric(entry_win["close"], errors="coerce")  # 交叉审查 C4：
     entry_win = apply_qfq_frame(repo, entry_win)  # Decimal×float 在 pandas2.x 会炸段，先转数值
-    df = _advisor_rows(reco, entry_win)
+    df = _advisor_rows(reco, entry_win, horizon)
     if df.empty:
         return lines + ["（推荐标的暂无可对账收益）"]
     bench = _bench_series(repo, str(df["entry_date"].min()), asof)
     df["excess"] = [r["ret"] - _bench_ret(bench, r["entry_date"], asof)
                     for _, r in df.iterrows()]
     has_ex = df["excess"].notna().any()
-    lines.append(f"- 基准：自各标的首次推荐日**次一交易日**收盘 → {asof} 收盘的实际涨跌"
-                 f"（{len(df)} 个标的；同票多次推荐只记首评）")
+    lines.append(f"- 基准：自各 (标的,分级) 首评**次一交易日**收盘 → {asof} 收盘的实际涨跌"
+                 f"（{len(df)} 条；同票跨级分别入各自分级桶、全部行按 code 首评唯一——A2 修订）")
+    lines.append(f"- **{horizon}日窗口列**=入场后第 {horizon} 个交易日收盘（固定窗口，匹配信号有效期"
+                 f"语义；不足 {horizon} 根K线的新信号不计入）——校准分级权重优先看此列，"
+                 "「至今」列混杂持有窗口长短仅作参考。")
     if has_ex:
         lines.append("- **超额=同窗口相对沪深300**：绝对涨跌含市场贝塔（普跌期整体为负不代表信号差），"
                      "校准决策看超额列。")
     lines.append("")
-    lines.append("| 分级 | 标的数 | 平均涨跌 | 平均超额 | 胜率 | 超额胜率 | 最好 | 最差 |")
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append(f"| 分级 | 条数 | 至今均值 | 平均超额 | 至今胜率 | 超额胜率 "
+                 f"| {horizon}日均值 | {horizon}日胜率 | 最好 | 最差 |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
 
     def _ex_cols(sub):
         ex = sub["excess"].dropna()
@@ -162,21 +173,32 @@ def review_advisor(repo: BaseRepository, asof: str, horizon: int) -> list[str]:
             return "—", "—"
         return f"{ex.mean():+.1%}", f"{(ex > 0).mean():.0%}"
 
+    def _h_cols(sub):
+        h = sub["ret_h"].dropna()
+        if h.empty:
+            return "—", "—"
+        return f"{h.mean():+.1%}", f"{(h > 0).mean():.0%}"
+
     for g in ["A", "B", "C", "?"]:
         sub = df[df["grade"] == g]
         if sub.empty:
             continue
         exm, exw = _ex_cols(sub)
+        hm, hw = _h_cols(sub)
         lines.append(f"| {g} | {len(sub)} | {sub['ret'].mean():+.1%} | {exm} | "
-                     f"{(sub['ret'] > 0).mean():.0%} | {exw} | {sub['ret'].max():+.1%} | {sub['ret'].min():+.1%} |")
-    allr = df["ret"]
-    exm, exw = _ex_cols(df)
-    lines.append(f"| 全部 | {len(df)} | {allr.mean():+.1%} | {exm} | {(allr > 0).mean():.0%} | {exw} | "
-                 f"{allr.max():+.1%} | {allr.min():+.1%} |")
+                     f"{(sub['ret'] > 0).mean():.0%} | {exw} | {hm} | {hw} "
+                     f"| {sub['ret'].max():+.1%} | {sub['ret'].min():+.1%} |")
+    alldf = df[df["first_overall"]]
+    allr = alldf["ret"]
+    exm, exw = _ex_cols(alldf)
+    hm, hw = _h_cols(alldf)
+    lines.append(f"| 全部(按票) | {len(alldf)} | {allr.mean():+.1%} | {exm} | {(allr > 0).mean():.0%} "
+                 f"| {exw} | {hm} | {hw} | {allr.max():+.1%} | {allr.min():+.1%} |")
     # 最强/最弱个股
     nm = _names(repo, list(df["code"]))
-    top = df.sort_values("ret", ascending=False).head(3)
-    bot = df.sort_values("ret").head(3)
+    uniq = df.sort_values("ret", ascending=False).drop_duplicates("code", keep="first")
+    top = uniq.head(3)
+    bot = uniq.sort_values("ret").head(3)
     lines.append("")
     lines.append("- 🏆 表现最好：" + "，".join(
         f"{nm.get(r['code'], r['code'])}({r['grade']}) {r['ret']:+.0%}" for _, r in top.iterrows()))
@@ -204,7 +226,7 @@ def review_model(repo: BaseRepository) -> list[str]:
         return lines + ["（调仓日无行情）"]
     closes = apply_qfq_frame(repo, closes)   # 前复权（修 2026-07-25，除权污染分档收益）
     piv = closes.pivot_table(index="code", columns="trade_date", values="close", aggfunc="last")
-    top_rets, bot_rets, spreads = [], [], []
+    top_rets, bot_rets, spreads, seg = [], [], [], []
     for d, nxt in zip(dates[:-1], dates[1:]):
         if d not in piv.columns or nxt not in piv.columns:
             continue
@@ -219,10 +241,15 @@ def review_model(repo: BaseRepository) -> list[str]:
             continue
         top_rets.append(top.mean()); bot_rets.append(bot.mean())
         spreads.append(top.mean() - bot.mean())
+        seg.append((str(d), str(nxt)))
     if not spreads:
         return lines + ["（暂无足够样本算分档收益）"]
     sp = np.array(spreads)
-    lines.append(f"- 跨 {len(spreads)} 个调仓区间，按调仓日模型分位分档，持有至下个调仓日的平均收益：")
+    from datetime import datetime as _dt
+    days = [( _dt.strptime(b, "%Y%m%d") - _dt.strptime(a, "%Y%m%d")).days for a, b in seg]
+    lines.append(f"- 跨 {len(spreads)} 个调仓区间，按调仓日模型分位分档，持有至下个调仓日的平均收益"
+                 f"（**口径：区间=模型月度重建点**，日历天数 {min(days)}~{max(days)} 天，"
+                 "非日频调仓——A3 标注）：")
     lines.append("")
     lines.append("| 档位 | 平均区间收益 |")
     lines.append("|---|---|")
@@ -231,6 +258,13 @@ def review_model(repo: BaseRepository) -> list[str]:
     lines.append(f"| **多空价差 (高-低)** | **{sp.mean():+.2%}** |")
     lines.append("")
     lines.append(f"- 多空价差为正的区间占比：{(sp > 0).mean():.0%}（越高说明分位越稳地区分强弱）")
+    if len(sp) >= 3:
+        rec = "，".join(f"{a[4:6]}/{a[6:]}→{b[4:6]}/{b[6:]} {v:+.1%}"
+                        for (a, b), v in zip(seg[-3:], sp[-3:]))
+        lines.append(f"- 近 3 区间价差：{rec}")
+        if sp[-3:].mean() < sp.mean() - 0.02:
+            lines.append("- ⚠️ 近期价差显著低于整体均值＝反弹/轮动行情中高分档跑输（防御型画像的镜像）："
+                         "反弹窗口勿用排位选股，参谋异议行参考降权（详见 P24 提案）。")
     verdict = ("模型分位在收益上有正向区分力，可作参谋" if sp.mean() > 0
                else "进攻端（选涨幅）区分力弱——与防御端验证结论并读：大跌日高低分组差 "
                     "+1.10pp/日、87% 为正（run 29682743077，判据预登记全过），模型定位为防御参谋："
