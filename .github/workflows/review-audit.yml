@@ -1,0 +1,49 @@
+name: review-audit
+
+# 复盘取数审计（owner 命题 2026-07-25）：量化未复权价对复盘三段收益结论的污染。
+# 只读 DB；结果（审计报告+逐信号/逐区间明细 CSV）提交回 master 供多 Agent 交叉验证。
+# 触发：手动 / 改 ops/review-audit.trigger 后 push（仅 master）。
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/review-audit.trigger'
+
+concurrency:
+  group: review-audit
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 审计
+        timeout-minutes: 12
+        run: python scripts/analysis/review_audit.py
+      - name: 提交审计产物回 master
+        run: |
+          git config user.name Claude
+          git config user.email noreply@anthropic.com
+          git add -f results/review_audit.md results/review_audit_signals.csv results/review_audit_model.csv || true
+          git commit -m "审计产物：复盘取数 raw vs 前复权 对照 [skip ci]" || echo "无变化"
+          git push
