@@ -81,6 +81,9 @@ def main() -> None:
         f"SELECT code, trade_date, close FROM stock_daily WHERE code IN ({ph}) "
         f"ORDER BY code, trade_date", params)
     px["close"] = pd.to_numeric(px["close"], errors="coerce")
+    # 前复权（修 2026-07-25：原未复权，除权污染战绩——与 review.py 同批修复）
+    from invest_model.data.adjust import apply_qfq_frame
+    px = apply_qfq_frame(repo, px)
     bench = repo.read_sql(
         "SELECT trade_date, close FROM index_daily WHERE code=:c ORDER BY trade_date",
         {"c": BENCH})

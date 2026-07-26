@@ -58,3 +58,42 @@ def apply_qfq(repo, code: str, s: pd.Series, start: str, dt: str) -> pd.Series:
     if not pd.notna(last) or float(last) <= 0 or f.isna().any():
         return s
     return s * f.astype(float) / float(last)
+
+
+def apply_qfq_frame(repo, df: pd.DataFrame, code_col: str = "code",
+                    date_col: str = "trade_date", close_col: str = "close") -> pd.DataFrame:
+    """长表 [code, trade_date, close] 批量前复权：close ← close × adj_factor。
+
+    因子在涉及日期集合上按 code ffill/bfill（与 apply_qfq 同假设：缺口段视为无除权）。
+    产物只用于**跨日收益比值**（不 rebase 到最新价，别拿去当现价显示）。
+    fail-open：无表 / 查询失败 / 某 code 完全无因子（ETF 等，其行情本身已复权）→ 该部分原样。
+    复盘链路修复（2026-07-25）：review/scorecard 此前用未复权价算收益，分红除权季系统性
+    压低战绩、送转直接假腰斩——与风控链路（qfq_close_hist）同源对齐。
+    """
+    if df is None or df.empty:
+        return df
+    try:
+        if not repo.table_exists("stock_adj"):
+            return df
+        dates = sorted(df[date_col].astype(str).unique())
+        dph = ",".join(f":d{i}" for i in range(len(dates)))
+        adj = repo.read_sql(
+            f"SELECT code, trade_date, adj_factor FROM stock_adj WHERE trade_date IN ({dph})",
+            {f"d{i}": d for i, d in enumerate(dates)})
+    except Exception:  # noqa: BLE001 — 复权失败不阻断复盘，退回未复权
+        return df
+    if adj is None or adj.empty:
+        return df
+    adj["adj_factor"] = pd.to_numeric(adj["adj_factor"], errors="coerce")
+    adj["trade_date"] = adj["trade_date"].astype(str)
+    piv = (adj.pivot_table(index="code", columns="trade_date", values="adj_factor",
+                           aggfunc="last")
+           .reindex(columns=dates).ffill(axis=1).bfill(axis=1))
+    fac = piv.stack().rename("adj_factor").reset_index() \
+        .rename(columns={"code": code_col, "trade_date": date_col})
+    out = df.copy()
+    out[date_col] = out[date_col].astype(str)
+    out = out.merge(fac, on=[code_col, date_col], how="left")
+    ok = out["adj_factor"].notna() & (out["adj_factor"] > 0)
+    out.loc[ok, close_col] = out.loc[ok, close_col] * out.loc[ok, "adj_factor"]
+    return out.drop(columns=["adj_factor"])

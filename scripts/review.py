@@ -25,6 +25,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from invest_model.data import make_engine  # noqa: E402
+from invest_model.data.adjust import apply_qfq_frame  # noqa: E402
 from invest_model.repositories.base import BaseRepository  # noqa: E402
 
 VERSION = "ic_v1"
@@ -136,6 +137,8 @@ def review_advisor(repo: BaseRepository, asof: str, horizon: int) -> list[str]:
          "e": asof})
     if entry_win.empty:
         return lines + ["（推荐标的无行情，无法对账）"]
+    # 前复权（修 2026-07-25：原用未复权价，分红除权季系统性压低战绩、送转假腰斩）
+    entry_win = apply_qfq_frame(repo, entry_win)
     df = _advisor_rows(reco, entry_win)
     if df.empty:
         return lines + ["（推荐标的暂无可对账收益）"]
@@ -198,6 +201,7 @@ def review_model(repo: BaseRepository) -> list[str]:
     closes = _closes_on(repo, dates)
     if closes.empty:
         return lines + ["（调仓日无行情）"]
+    closes = apply_qfq_frame(repo, closes)   # 前复权（修 2026-07-25，除权污染分档收益）
     piv = closes.pivot_table(index="code", columns="trade_date", values="close", aggfunc="last")
     top_rets, bot_rets, spreads = [], [], []
     for d, nxt in zip(dates[:-1], dates[1:]):
@@ -316,8 +320,16 @@ def review_discipline(repo: BaseRepository, asof: str) -> list[str]:
     buys = ap[(ap["action"].isin(["buy", "add"])) & (ap["plan_date"] < asof)].copy()
     if not buys.empty:
         codes = sorted(set(buys["code"]))
-        cur_px = _closes_on(repo, [asof], codes)
-        cur_map = dict(zip(cur_px["code"], cur_px["close"])) if not cur_px.empty else {}
+        cph = ",".join(f":c{i}" for i in range(len(codes)))
+        # 入场=计划日**次一交易日**收盘·前复权（修 2026-07-25：原用 ref_price=信号日
+        # 参考价——计划盘后才发布、当日价不可成交=前视，且未复权；与第一段口径对齐）
+        bwin = repo.read_sql(
+            f"SELECT code, trade_date, close FROM stock_daily WHERE code IN ({cph}) "
+            f"AND trade_date>=:s AND trade_date<=:e",
+            {**{f"c{i}": c for i, c in enumerate(codes)},
+             "s": str(buys["plan_date"].min()), "e": asof})
+        bwin["close"] = pd.to_numeric(bwin["close"], errors="coerce")
+        bwin = apply_qfq_frame(repo, bwin.dropna(subset=["close"]))
         bench = _bench_series(repo, str(buys["plan_date"].min()), asof)
 
         def _chan(reason: str) -> str:
@@ -333,20 +345,28 @@ def review_discipline(repo: BaseRepository, asof: str) -> list[str]:
         for ch, sub in buys.groupby("chan"):
             rets, exs = [], []
             for _, r in sub.iterrows():
-                entry = _f(r["ref_price"])
-                if entry and entry > 0 and r["code"] in cur_map:
-                    ret = cur_map[r["code"]] / entry - 1.0
-                    rets.append(ret)
-                    b = _bench_ret(bench, str(r["plan_date"]), asof)
-                    if np.isfinite(b):
-                        exs.append(ret - b)
+                g = bwin[(bwin["code"] == r["code"]) &
+                         (bwin["trade_date"].astype(str) > str(r["plan_date"]))] \
+                    .sort_values("trade_date")
+                cur = bwin[bwin["code"] == r["code"]].sort_values("trade_date")
+                if g.empty or cur.empty:
+                    continue
+                entry, e_d = float(g["close"].iloc[0]), str(g["trade_date"].iloc[0])
+                if entry <= 0:
+                    continue
+                ret = float(cur["close"].iloc[-1]) / entry - 1.0
+                rets.append(ret)
+                b = _bench_ret(bench, e_d, asof)
+                if np.isfinite(b):
+                    exs.append(ret - b)
             if rets:
                 rr = np.array(rets)
                 ex_s = (f"，超额 {np.mean(exs):+.1%}" if exs else "")
                 parts.append(f"{ch} {len(rr)} 次（均 {rr.mean():+.1%}{ex_s}，胜率 {(rr > 0).mean():.0%}）")
         if parts:
             lines.append("- 历史买点信号按通道：" + "；".join(parts))
-            lines.append("- 📌 通道口径：研报速通=A/B级研报免闸直入；严格买点闸=回踩/突破三闸全过。"
+            lines.append("- 📌 通道口径：研报速通=A/B级研报免闸直入；严格买点闸=回踩/突破三闸全过；"
+                         "入场=计划日次一交易日收盘·前复权（2026-07-25 起，此前 ref_price 口径前视偏乐观）。"
                          "评估收紧对象须分通道看，勿混判。")
     else:
         lines.append("- 买点时效：历史买点信号累积中（当前无触发或前瞻样本不足）。")
@@ -440,7 +460,9 @@ def review_arb(repo: BaseRepository, asof: str) -> list[str]:
 def build_review(repo: BaseRepository, asof: str, horizon: int = 10) -> str:
     """构建五段复盘 Markdown（单段出错跳过不阻断）。"""
     lines = [f"# 复盘报告 — 截至 {asof}", "",
-             "> 闭环校准：投顾说得准不准、模型分位有没有区分力、持仓靠什么赚钱、套利账本守没守住零杠杆。"]
+             "> 闭环校准：投顾说得准不准、模型分位有没有区分力、持仓靠什么赚钱、套利账本守没守住零杠杆。",
+             "> 口径：收益均按 stock_adj **前复权**（2026-07-25 修复——此前未复权，分红/送转污染战绩；"
+             "与本日期前的历史报告数字不可直接对比）。"]
     for fn in (lambda: review_advisor(repo, asof, horizon),
                lambda: review_model(repo),
                lambda: review_holdings(repo),
