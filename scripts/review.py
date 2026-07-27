@@ -486,7 +486,10 @@ def review_execution(repo: BaseRepository, asof: str, facts: dict | None = None)
                      f"| {o['planned_shares']:+,.0f} | {act} | {er} | {dl} "
                      f"| {_ST_CN.get(o['status'], o['status'])} |")
     alerts = [o for o in n_show if o["strong_risk"] and o["status"] == "not_executed"
-              and o.get("condition_still_valid")]
+              and o.get("condition_still_valid") and o.get("still_held")]
+    seen: set = set()   # 同票多日重复计划只提示最新一条（滚动重申≠N次失败）
+    alerts = [o for o in sorted(alerts, key=lambda x: x["plan_date"], reverse=True)
+              if not (o["code"] in seen or seen.add(o["code"]))]
     if alerts:
         lines.append("")
         lines.append("### 纪律事实（如实呈现，不评判）")
@@ -694,8 +697,12 @@ def _write_json(asof: str, period: str, facts: dict, json_dir: str) -> None:
                                  "summary": "P24 已登记：反弹窗口参谋异议行降权附注",
                                  "requires_owner": False},
             "status": "recurring"})
-    for o in facts.get("execution", {}).get("orders", []):
-        if o.get("strong_risk") and o.get("status") == "not_executed"                 and o.get("condition_still_valid"):
+    _seen_a: set = set()
+    for o in sorted(facts.get("execution", {}).get("orders", []),
+                    key=lambda x: x.get("plan_date", ""), reverse=True):
+        if o.get("strong_risk") and o.get("status") == "not_executed" \
+                and o.get("condition_still_valid") and o.get("still_held") \
+                and o["code"] not in _seen_a and not _seen_a.add(o["code"]):
             conclusions.append({
                 "id": f"c-exec-{o['plan_date']}-{o['code']}", "kind": "discipline_fact",
                 "claim": f"{o['name']} {o['plan_date']} 强风控 {o['action']} 未执行且条件仍成立"

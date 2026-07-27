@@ -201,6 +201,12 @@ def reconcile(repo, asof: str) -> dict:
                 off_plan.append({"date": d_cur, "code": c, "shares_delta": dl,
                                  "note": "近10交易日无对应指令"})
 
+    # 当前仍持仓集合：告警只保留可操作的（已清仓的历史未执行单是"迟到执行"，不再滚动提示）
+    last_snap = snap_dates[-1]
+    held_now = set(snaps[(snaps["snapshot_date"] == last_snap) &
+                         (snaps["shares"] >= LOT)]["code"].astype(str))
+    for o in orders:
+        o["still_held"] = o["code"] in held_now
     applicable = [o for o in orders if o["status"] in
                   ("executed", "partial", "not_executed", "reversed")]
     sells = [o for o in applicable if o["action"] in ("sell", "trim")]
