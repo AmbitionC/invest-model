@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write   # 提交 results/review/*.json 机器可读复盘回 master（仿 review-audit.yml）
   issues: write
 
 jobs:
@@ -47,6 +47,14 @@ jobs:
           python scripts/review.py --out results/review.md
           echo "================ REVIEW MARKDOWN ================"
           cat results/review.md
+      - name: 提交机器可读复盘 JSON 回 master
+        run: |
+          git config user.name Claude
+          git config user.email noreply@anthropic.com
+          git add -f results/review/*.json || true
+          git commit -m "复盘产物：机器可读 JSON（results/review） [skip ci]" || echo "无变化"
+          git pull --rebase origin master || true
+          git push || echo "WARN push 失败不阻断 issue 发布"
       - name: Post review to tracking issue
         if: ${{ always() && hashFiles('results/review.md') != '' }}
         uses: actions/github-script@v7
