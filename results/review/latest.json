@@ -3,10 +3,10 @@
  "schema_doc": "docs/review_schema.md",
  "report_date": "20260724",
  "period": "weekly",
- "generated_at": "2026-07-27T00:23:01.754123+00:00",
+ "generated_at": "2026-07-27T00:32:36.339892+00:00",
  "engine": {
   "script": "scripts/review.py",
-  "git_sha": "2316e8043e3074c43e731f2bc3299b3a3fa9ab2e",
+  "git_sha": "6faed55f65383d19f249516055c4f8b8b7454cdc",
   "model_version": "ic_v1"
  },
  "calibers": {
@@ -148,7 +148,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -12325.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260630",
@@ -164,7 +165,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -5360.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": true
     },
     {
      "plan_date": "20260630",
@@ -180,7 +182,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -83.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260701",
@@ -196,7 +199,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -11550.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260701",
@@ -212,7 +216,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -4940.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260701",
@@ -228,7 +233,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": 66.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260702",
@@ -244,7 +250,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -5070.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260702",
@@ -260,7 +267,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": 301.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260703",
@@ -276,7 +284,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260703",
@@ -292,7 +301,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -3953.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": true
     },
     {
      "plan_date": "20260703",
@@ -308,7 +318,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -5864.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260703",
@@ -324,7 +335,8 @@
      "delay_uncertain": false,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": true
     },
     {
      "plan_date": "20260703",
@@ -340,7 +352,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": 850.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260703",
@@ -356,7 +369,8 @@
      "delay_uncertain": false,
      "status": "reversed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260703",
@@ -372,7 +386,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -6489.0,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260703",
@@ -388,7 +403,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -3356.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260706",
@@ -404,7 +420,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260706",
@@ -420,7 +437,8 @@
      "delay_uncertain": false,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260706",
@@ -436,7 +454,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -1750.0,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260706",
@@ -452,7 +471,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -2728.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260706",
@@ -468,7 +488,8 @@
      "delay_uncertain": false,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260706",
@@ -484,7 +505,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": 1052.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260706",
@@ -500,7 +522,8 @@
      "delay_uncertain": false,
      "status": "reversed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260706",
@@ -516,7 +539,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -3514.8,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260706",
@@ -532,7 +556,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -9520.0,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260706",
@@ -548,7 +573,8 @@
      "delay_uncertain": false,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260707",
@@ -564,7 +590,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260707",
@@ -580,7 +607,8 @@
      "delay_uncertain": false,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260707",
@@ -596,7 +624,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": 7973.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": true
     },
     {
      "plan_date": "20260707",
@@ -612,7 +641,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -4562.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260707",
@@ -628,7 +658,8 @@
      "delay_uncertain": false,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260707",
@@ -644,7 +675,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": 2201.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260707",
@@ -660,7 +692,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -4488.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260707",
@@ -676,7 +709,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -8316.0,
-     "condition_still_valid": false
+     "condition_still_valid": false,
+     "still_held": false
     },
     {
      "plan_date": "20260707",
@@ -692,7 +726,8 @@
      "delay_uncertain": false,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260708",
@@ -708,7 +743,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260708",
@@ -724,7 +760,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": 9179.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": true
     },
     {
      "plan_date": "20260708",
@@ -740,7 +777,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -7464.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260708",
@@ -756,7 +794,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": 751.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260708",
@@ -772,7 +811,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -9624.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260708",
@@ -788,7 +828,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -8708.0,
-     "condition_still_valid": false
+     "condition_still_valid": false,
+     "still_held": false
     },
     {
      "plan_date": "20260709",
@@ -804,7 +845,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260709",
@@ -820,7 +862,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": 3425.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260709",
@@ -836,7 +879,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -5096.0,
-     "condition_still_valid": false
+     "condition_still_valid": false,
+     "still_held": false
     },
     {
      "plan_date": "20260710",
@@ -852,7 +896,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260710",
@@ -868,7 +913,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260710",
@@ -884,7 +930,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260713",
@@ -900,7 +947,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260713",
@@ -916,7 +964,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260713",
@@ -932,7 +981,8 @@
      "delay_uncertain": true,
      "status": "partial",
      "nonexec_cost": -1992.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": false
     },
     {
      "plan_date": "20260713",
@@ -948,7 +998,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260714",
@@ -964,7 +1015,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260714",
@@ -980,7 +1032,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260714",
@@ -996,7 +1049,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260714",
@@ -1012,7 +1066,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260714",
@@ -1028,7 +1083,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260714",
@@ -1044,7 +1100,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260715",
@@ -1060,7 +1117,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260715",
@@ -1076,7 +1134,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260715",
@@ -1092,7 +1151,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260715",
@@ -1108,7 +1168,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260715",
@@ -1124,7 +1185,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260715",
@@ -1140,7 +1202,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260716",
@@ -1156,7 +1219,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260716",
@@ -1172,7 +1236,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260716",
@@ -1188,7 +1253,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260716",
@@ -1204,7 +1270,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260716",
@@ -1220,7 +1287,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260716",
@@ -1236,7 +1304,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260717",
@@ -1252,7 +1321,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -1809.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": true
     },
     {
      "plan_date": "20260717",
@@ -1268,7 +1338,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260717",
@@ -1284,7 +1355,8 @@
      "delay_uncertain": false,
      "status": "pre_executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260717",
@@ -1300,7 +1372,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260717",
@@ -1316,7 +1389,8 @@
      "delay_uncertain": false,
      "status": "pre_executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260717",
@@ -1332,7 +1406,8 @@
      "delay_uncertain": false,
      "status": "pre_executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260717",
@@ -1348,7 +1423,8 @@
      "delay_uncertain": false,
      "status": "pre_executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260717",
@@ -1364,7 +1440,8 @@
      "delay_uncertain": false,
      "status": "pre_executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260717",
@@ -1380,7 +1457,8 @@
      "delay_uncertain": false,
      "status": "pre_executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260720",
@@ -1396,7 +1474,8 @@
      "delay_uncertain": true,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260721",
@@ -1412,7 +1491,8 @@
      "delay_uncertain": false,
      "status": "not_executed",
      "nonexec_cost": -2479.0,
-     "condition_still_valid": true
+     "condition_still_valid": true,
+     "still_held": true
     },
     {
      "plan_date": "20260721",
@@ -1428,7 +1508,8 @@
      "delay_uncertain": false,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": false
     },
     {
      "plan_date": "20260721",
@@ -1444,7 +1525,8 @@
      "delay_uncertain": false,
      "status": "executed",
      "nonexec_cost": null,
-     "condition_still_valid": null
+     "condition_still_valid": null,
+     "still_held": true
     }
    ],
    "off_plan": [
@@ -1511,356 +1593,6 @@
     "requires_owner": false
    },
    "status": "recurring"
-  },
-  {
-   "id": "c-exec-20260630-000833.SZ",
-   "kind": "discipline_fact",
-   "claim": "粤桂股份 20260630 强风控 sell 未执行且条件仍成立，未执行成本 -12,325 元",
-   "based_on": [
-    "facts.execution.orders[20260630/000833.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260630-002648.SZ",
-   "kind": "discipline_fact",
-   "claim": "卫星化学 20260630 强风控 sell 未执行且条件仍成立，未执行成本 -5,360 元",
-   "based_on": [
-    "facts.execution.orders[20260630/002648.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260630-300750.SZ",
-   "kind": "discipline_fact",
-   "claim": "宁德时代 20260630 强风控 sell 未执行且条件仍成立，未执行成本 -83 元",
-   "based_on": [
-    "facts.execution.orders[20260630/300750.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260701-000833.SZ",
-   "kind": "discipline_fact",
-   "claim": "粤桂股份 20260701 强风控 sell 未执行且条件仍成立，未执行成本 -11,550 元",
-   "based_on": [
-    "facts.execution.orders[20260701/000833.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260701-002851.SZ",
-   "kind": "discipline_fact",
-   "claim": "麦格米特 20260701 强风控 sell 未执行且条件仍成立，未执行成本 -4,940 元",
-   "based_on": [
-    "facts.execution.orders[20260701/002851.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260701-300750.SZ",
-   "kind": "discipline_fact",
-   "claim": "宁德时代 20260701 强风控 sell 未执行且条件仍成立，未执行成本 +66 元",
-   "based_on": [
-    "facts.execution.orders[20260701/300750.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260702-002851.SZ",
-   "kind": "discipline_fact",
-   "claim": "麦格米特 20260702 强风控 sell 未执行且条件仍成立，未执行成本 -5,070 元",
-   "based_on": [
-    "facts.execution.orders[20260702/002851.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260702-300750.SZ",
-   "kind": "discipline_fact",
-   "claim": "宁德时代 20260702 强风控 sell 未执行且条件仍成立，未执行成本 +301 元",
-   "based_on": [
-    "facts.execution.orders[20260702/300750.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260703-002648.SZ",
-   "kind": "discipline_fact",
-   "claim": "卫星化学 20260703 强风控 sell 未执行且条件仍成立，未执行成本 -3,953 元",
-   "based_on": [
-    "facts.execution.orders[20260703/002648.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260703-002851.SZ",
-   "kind": "discipline_fact",
-   "claim": "麦格米特 20260703 强风控 sell 未执行且条件仍成立，未执行成本 -5,864 元",
-   "based_on": [
-    "facts.execution.orders[20260703/002851.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260703-300750.SZ",
-   "kind": "discipline_fact",
-   "claim": "宁德时代 20260703 强风控 sell 未执行且条件仍成立，未执行成本 +850 元",
-   "based_on": [
-    "facts.execution.orders[20260703/300750.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260703-688733.SH",
-   "kind": "discipline_fact",
-   "claim": "壹石通 20260703 强风控 sell 未执行且条件仍成立，未执行成本 -3,356 元",
-   "based_on": [
-    "facts.execution.orders[20260703/688733.SH]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260706-002851.SZ",
-   "kind": "discipline_fact",
-   "claim": "麦格米特 20260706 强风控 trim 未执行且条件仍成立，未执行成本 -2,728 元",
-   "based_on": [
-    "facts.execution.orders[20260706/002851.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260706-300750.SZ",
-   "kind": "discipline_fact",
-   "claim": "宁德时代 20260706 强风控 sell 未执行且条件仍成立，未执行成本 +1,052 元",
-   "based_on": [
-    "facts.execution.orders[20260706/300750.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260706-588010.SH",
-   "kind": "discipline_fact",
-   "claim": "科创新材料ETF博时 20260706 强风控 trim 未执行且条件仍成立，未执行成本 -3,515 元",
-   "based_on": [
-    "facts.execution.orders[20260706/588010.SH]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260707-002648.SZ",
-   "kind": "discipline_fact",
-   "claim": "卫星化学 20260707 强风控 sell 未执行且条件仍成立，未执行成本 +7,973 元",
-   "based_on": [
-    "facts.execution.orders[20260707/002648.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260707-002851.SZ",
-   "kind": "discipline_fact",
-   "claim": "麦格米特 20260707 强风控 sell 未执行且条件仍成立，未执行成本 -4,562 元",
-   "based_on": [
-    "facts.execution.orders[20260707/002851.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260707-300750.SZ",
-   "kind": "discipline_fact",
-   "claim": "宁德时代 20260707 强风控 sell 未执行且条件仍成立，未执行成本 +2,201 元",
-   "based_on": [
-    "facts.execution.orders[20260707/300750.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260707-516120.SH",
-   "kind": "discipline_fact",
-   "claim": "化工ETF富国 20260707 强风控 trim 未执行且条件仍成立，未执行成本 -4,488 元",
-   "based_on": [
-    "facts.execution.orders[20260707/516120.SH]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260708-002648.SZ",
-   "kind": "discipline_fact",
-   "claim": "卫星化学 20260708 强风控 sell 未执行且条件仍成立，未执行成本 +9,179 元",
-   "based_on": [
-    "facts.execution.orders[20260708/002648.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260708-002851.SZ",
-   "kind": "discipline_fact",
-   "claim": "麦格米特 20260708 强风控 sell 未执行且条件仍成立，未执行成本 -7,464 元",
-   "based_on": [
-    "facts.execution.orders[20260708/002851.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260708-300750.SZ",
-   "kind": "discipline_fact",
-   "claim": "宁德时代 20260708 强风控 sell 未执行且条件仍成立，未执行成本 +751 元",
-   "based_on": [
-    "facts.execution.orders[20260708/300750.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260708-600118.SH",
-   "kind": "discipline_fact",
-   "claim": "中国卫星 20260708 强风控 sell 未执行且条件仍成立，未执行成本 -9,624 元",
-   "based_on": [
-    "facts.execution.orders[20260708/600118.SH]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260709-300750.SZ",
-   "kind": "discipline_fact",
-   "claim": "宁德时代 20260709 强风控 sell 未执行且条件仍成立，未执行成本 +3,425 元",
-   "based_on": [
-    "facts.execution.orders[20260709/300750.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
-  },
-  {
-   "id": "c-exec-20260717-002648.SZ",
-   "kind": "discipline_fact",
-   "claim": "卫星化学 20260717 强风控 sell 未执行且条件仍成立，未执行成本 -1,809 元",
-   "based_on": [
-    "facts.execution.orders[20260717/002648.SZ]"
-   ],
-   "confidence": "high",
-   "suggested_action": {
-    "type": "owner_ack_or_execute",
-    "requires_owner": true
-   },
-   "status": "pending_owner"
   },
   {
    "id": "c-exec-20260721-002648.SZ",
