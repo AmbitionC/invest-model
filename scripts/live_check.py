@@ -880,6 +880,15 @@ def _once(args: argparse.Namespace) -> dict:
           f"etf_holds={len(ctx.get('etf_holds', []))} "
           f"rt命中={_n_rt}/{len(ctx.get('codes', []))}")
     _, _, _, alerts, _ = _scan(ctx, rt, args)
+    # 盯盘心跳（0728 二次失明后补·fail-loud）：交易时段内有标的却一只都取不到价
+    # ＝三级行情源全挂，盯盘等于失明——此前静默跳过让破止损无预警，现在必须自曝。
+    # 按日去重一条 crit；rt 部分命中/非交易时段不触发。
+    if ctx.get("codes") and _n_rt == 0:
+        _hb_day = _now_cst().strftime("%Y%m%d")
+        alerts.append((f"HEARTBEAT:{_hb_day}:blind",
+                       f"🚨 盯盘失明告警：{len(ctx['codes'])} 只标的实时行情三源全部取不到价"
+                       f"（rt_k/腾讯/东财），持仓破位将无法盘中预警——请立即人工盯券商行情，"
+                       f"并排查 FC 出网/行情源。", "crit"))
     new = [(k, line, sev) for k, line, sev in alerts if k not in seen]
     _persist_alerts(ctx["engine"], now, new)
     crit = [(k, line) for k, line, sev in new if sev == "crit"]
