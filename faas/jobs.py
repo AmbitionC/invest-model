@@ -294,6 +294,42 @@ def job_fear_panic_watch() -> dict:
     day = bj.strftime("%Y%m%d")
     if not _is_trade_day(day) or not _in_trading_hours(bj):
         return {"job": "fear_panic_watch", "skipped": "off-hours", "ts": bj.strftime("%H:%M")}
+    # ── 盯盘互援哨兵（0728 二次失明·根治层）──────────────────────────
+    # live_watch timer 每 3 分钟写 job_heartbeat；此处每 5 分钟顺手核查：交易时段内
+    # 心跳陈旧 >20 分钟＝timer 静默丢失（0714-0716 daily 三连丢失同类），**当场代跑
+    # 一次盯盘**（同代码同数据，source=sentinel 不写心跳→timer 未复活则每 5 分钟持续
+    # 代跑，盲区上限从整个下午压缩到 ~20 分钟）+ #11 告警（按日去重不刷屏）。
+    # best-effort：互援任何异常不阻断恐慌密控本体。
+    lw_relay = None
+    try:
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+        from datetime import timezone as _tz
+
+        from invest_model.data import make_engine as _me
+        from invest_model.repositories.base import BaseRepository as _BR
+
+        _repo = _BR(_me())
+        hb = _repo.read_sql("SELECT last_run_at FROM job_heartbeat WHERE job='live_watch'")             if _repo.table_exists("job_heartbeat") else None
+        stale = True
+        if hb is not None and not hb.empty:
+            last = _dt.strptime(str(hb["last_run_at"].iloc[0]), "%Y-%m-%dT%H:%M:%SZ")                 .replace(tzinfo=_tz.utc)
+            stale = (_dt.now(_tz.utc) - last) > _td(minutes=20)
+        # 开盘启动窗护栏：09:50 前心跳必然还是昨日的（timer 09:25 起跑），不判丢失
+        if stale and bj.strftime("%H:%M") >= "09:50":
+            from scripts.live_check import run_once as _lw_once
+            lw_relay = _lw_once(source="sentinel")
+            gh_notify.post_issue_comment(
+                "⚠️ FaaS 定时任务告警",
+                seed_body="本 issue 由 FC 定时函数在任务失败时追加告警评论。",
+                comment_body=(f"## {day} 盯盘互援哨兵告警\n\n"
+                              f"live_watch 定时器心跳陈旧（>20 分钟未更新，{bj.strftime('%H:%M')} 检出）"
+                              f"＝疑似 timer 静默丢失。恐慌哨兵已代跑盯盘并将每 5 分钟持续接管，"
+                              f"直至 timer 心跳恢复。请排查 FC invest-live-watch 定时器。\n\ncc @AmbitionC"),
+                dedupe_prefix=f"## {day} 盯盘互援哨兵告警",
+            )
+    except Exception as e:  # noqa: BLE001 — 互援失败不影响恐慌密控
+        lw_relay = {"relay_error": repr(e)[:120]}
     try:
         import pandas as pd
 
@@ -309,7 +345,8 @@ def job_fear_panic_watch() -> dict:
         if not (day_max >= FEAR_DENSIFY_ENTER and latest >= FEAR_DENSIFY_HOLD):
             return {"job": "fear_panic_watch", "skipped": "not-panic",
                     "day_max": round(day_max, 1), "latest": round(latest, 1),
-                    "ts": bj.strftime("%H:%M")}
+                    "ts": bj.strftime("%H:%M"),
+                    **({"lw_relay": lw_relay} if lw_relay else {})}
     except Exception as e:  # noqa: BLE001 — 门控查询失败不写脏数据、静默退
         return {"job": "fear_panic_watch", "error": f"gate:{e}"}
     # 密控态 → 走同一套全市场重算，落一条 5 分钟粒度 fear_intraday 行
