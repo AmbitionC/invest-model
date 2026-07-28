@@ -499,12 +499,20 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         if not hit and "趋势未上" not in st:
             _track(px, ma20, hi20)
         if hit:
-            # 挂单信号：回踩位挂 MA20、突破位挂 20日高，按目标占比定量（股数/金额/占比）
-            lvl = hi20 if "突破" in st else ma20
-            ticket = " → " + _buy_ticket(lvl, cash, equity, buy_w, code=c)
-            alerts.append((akey,
-                           f"🟢 观察 {q.get('name', c)}({g_of.get(c, '')}) {px:.2f} — {st}{ticket}",
-                           "batch"))
+            # 挂单信号：回踩位挂 MA20 照旧给量（与主闸买点语义一致）；
+            # **突破提示不再给「挂买×股」可执行话术**（0728 锐捷教训：突破提示未过
+            # rank 闸却递到用户面前一张带股数金额的单子、次日 -9%。盯盘是观察通道
+            # 不是下单通道——突破只报事实+风险，是否买以当晚计划闸门结论为准）。
+            if "突破" in st:
+                alerts.append((akey,
+                               f"🟢 观察 {q.get('name', c)}({g_of.get(c, '')}) {px:.2f} — {st}"
+                               "｜⚠️仅供观察，非买入建议：是否纳入以今晚计划三闸结论为准",
+                               "batch"))
+            else:
+                ticket = " → " + _buy_ticket(ma20, cash, equity, buy_w, code=c)
+                alerts.append((akey,
+                               f"🟢 观察 {q.get('name', c)}({g_of.get(c, '')}) {px:.2f} — {st}{ticket}",
+                               "batch"))
     # ETF 持仓风控：无移动止盈白名单概念，一律按 硬止损 + 破MA20 管
     for e in ctx.get("etf_holds", []):
         c = e["code"]; q = rt.get(c, {}); lv = ctx["etf_levels"].get(c, {})
