@@ -926,6 +926,27 @@ def _once(args: argparse.Namespace) -> dict:
     return {"new": len(new), "pushed": len(items), "held_for_digest": 0 if flush else len(batch)}
 
 
+def _write_heartbeat_lw() -> None:
+    """盯盘定时器心跳（0728 互援哨兵）：timer 每次触发即写（含 off-hours skip 前），
+    fear-panic-watch 哨兵每 5 分钟检查——交易时段内心跳陈旧＝timer 丢失，由哨兵代跑。
+    best-effort：任何异常吞掉，绝不阻断扫描本体。"""
+    try:
+        from datetime import datetime, timezone
+
+        from invest_model.data import make_engine
+        from invest_model.repositories.base import BaseRepository
+
+        repo = BaseRepository(make_engine())
+        repo.execute_sql("CREATE TABLE IF NOT EXISTS job_heartbeat ("
+                         "job VARCHAR(32) PRIMARY KEY, last_run_at VARCHAR(32))")
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        repo.execute_sql("DELETE FROM job_heartbeat WHERE job='live_watch'")
+        repo.execute_sql("INSERT INTO job_heartbeat(job, last_run_at) "
+                         "VALUES('live_watch', :t)", {"t": ts})
+    except Exception as e:  # noqa: BLE001
+        print(f"  ⚠️ 心跳写入失败（不阻断）：{repr(e)[:80]}")
+
+
 def run_once(**overrides) -> dict:
     """FaaS handler 入口：全部参数走环境变量（可用 overrides 覆盖），执行一次扫描。
 
@@ -933,6 +954,8 @@ def run_once(**overrides) -> dict:
     GITHUB_TOKEN / GITHUB_REPOSITORY（推 issue 评论 → 邮件），可选
     LIVE_HARD_STOP / LIVE_PULLBACK / LIVE_BUY_WEIGHT / DIGEST_WINDOW / ONCE_STEP。
     """
+    if overrides.pop("source", "timer") == "timer":
+        _write_heartbeat_lw()          # 哨兵代跑不写心跳，否则会误判 timer 已复活
     args = argparse.Namespace(
         db=None,
         hard_stop=float(os.getenv("LIVE_HARD_STOP", "0.08")),
