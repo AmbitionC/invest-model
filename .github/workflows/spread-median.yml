@@ -1,0 +1,59 @@
+name: spread-median
+
+# 点差中位数窗口敏感性 + 生产库对账（用户质疑命题·一次性分析）。
+# tushare 全历史拉 000001.SH/399006.SZ，与库 index_daily 逐日对账，
+# 并按多窗口算 D=上证−创业板 中位数；结果 git 回吐 master。
+# 触发：手动 / 改 ops/spread-median.trigger 后 push（仅 master）。
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/spread-median.trigger'
+
+concurrency:
+  group: spread-median
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 中位数窗口分析 + 对账
+        timeout-minutes: 10
+        run: python scripts/analysis/spread_window_median.py --out-dir results
+      - name: 提交结果回 master
+        run: |
+          git config user.name Claude
+          git config user.email noreply@anthropic.com
+          git add -f results/spread_window_median.txt results/spread_full_history.csv
+          git commit -m "分析产物：点差中位数窗口敏感性+库对账 [skip ci]" || echo "无变化"
+          git push
+      - name: Upload artifact（兜底）
+        uses: actions/upload-artifact@v4
+        with:
+          name: spread-median
+          path: |
+            results/spread_window_median.txt
+            results/spread_full_history.csv
+          if-no-files-found: warn
