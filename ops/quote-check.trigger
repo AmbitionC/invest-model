@@ -1,2 +1,2 @@
-20260716-holdings-quote-check-2
-current_holding 只取code+补stock_info名，重跑
+159570.SZ
+# 1785257320 点名体检：创新药ETF 入池首日
