@@ -1,0 +1,50 @@
+name: five-layer-data
+
+# 五层能力圈落地取数：恐慌全历史(DB) + 国家队宽基ETF份额/收盘(tushare) → git 回吐 master。
+# 触发：手动 / 改 ops/five-layer-data.trigger 后 push（仅 master）。
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/five-layer-data.trigger'
+
+concurrency:
+  group: five-layer-data
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 取数
+        timeout-minutes: 10
+        run: python scripts/analysis/five_layer_data_dump.py --out-dir results
+      - name: 提交结果回 master
+        run: |
+          git config user.name Claude
+          git config user.email noreply@anthropic.com
+          git add -f results/fear_daily_dump.csv results/fund_share_dump.csv results/fund_close_dump.csv
+          git commit -m "分析产物：五层落地取数（恐慌+国家队ETF份额） [skip ci]" || echo "无变化"
+          git push
