@@ -42,4 +42,9 @@ jobs:
       - name: Install package
         run: pip install -e .
       - name: 回填恐慌指数历史
-        run: python scripts/backfill_fear.py --days "${{ github.event.inputs.days || '90' }}"
+        run: |
+          DAYS="${{ github.event.inputs.days }}"
+          if [ -z "$DAYS" ]; then
+            DAYS=$(grep -oE '^[0-9]{2,4}' ops/fear-backfill.trigger | head -1)
+          fi
+          python scripts/backfill_fear.py --days "${DAYS:-90}"
