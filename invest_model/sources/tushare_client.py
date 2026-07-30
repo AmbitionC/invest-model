@@ -491,6 +491,17 @@ class TushareClient(BaseSource):
 
     @_retry
     @_rate_limit
+    def get_fund_share(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """场内基金份额（fund_share，P21 国家队宽基净申购信号源；fd_share 单位万份）"""
+        df = self.pro.fund_share(
+            ts_code=code, start_date=start_date, end_date=end_date
+        )
+        if df is not None and not df.empty:
+            df = df.rename(columns={"ts_code": "code"})
+        return df if df is not None else pd.DataFrame()
+
+    @_retry
+    @_rate_limit
     def get_etf_holding(self, code: str, report_date: str) -> pd.DataFrame:
         """ETF 重仓股（fund_portfolio）"""
         df = self.pro.fund_portfolio(
