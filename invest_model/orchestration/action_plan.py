@@ -251,6 +251,85 @@ def _hs300_median_hint(loop: ClosedLoop, dt: str) -> str | None:
             f"（{dev:+.1%}）＝{act}；口径 E21（下方日未来3年年化+13.8% vs 上方-1.1%）{streak}")
 
 
+_BASE_SLEEVE_CODES = ("510300.SH",)   # P27 指数底仓标的：沪深300ETF
+
+
+def _hs300_hist(loop: ClosedLoop, dt: str) -> pd.DataFrame | None:
+    """P26/P27/P28 共用：沪深300 全历史收盘（静态基底 CSV + index_daily 增量），截至 dt。"""
+    from pathlib import Path
+    base = Path(__file__).resolve().parents[2] / "results" / "index_dump_000300_SH.csv"
+    if not base.exists():
+        return None
+    hist = pd.read_csv(base, dtype={"trade_date": str})[["trade_date", "close"]]
+    hist["close"] = pd.to_numeric(hist["close"], errors="coerce")
+    hist = hist.dropna()
+    tail = loop.repo.read_sql(
+        "SELECT trade_date, close FROM index_daily WHERE code='000300.SH' AND trade_date>:s "
+        "ORDER BY trade_date", {"s": str(hist["trade_date"].max())})
+    if not tail.empty:
+        tail["close"] = pd.to_numeric(tail["close"], errors="coerce")
+        hist = pd.concat([hist, tail.dropna()], ignore_index=True)
+    hist = hist[hist["trade_date"] <= str(dt)].reset_index(drop=True)
+    return hist if len(hist) >= 500 else None
+
+
+def _fear_score(loop: ClosedLoop, dt: str) -> float | None:
+    df = loop.repo.read_sql(
+        "SELECT score FROM fear_daily WHERE trade_date<=:d ORDER BY trade_date DESC LIMIT 1",
+        {"d": str(dt)})
+    if df.empty or pd.isna(df["score"].iloc[0]):
+        return None
+    return float(df["score"].iloc[0])
+
+
+def _base_sleeve_hint(loop: ClosedLoop, dt: str, mv: dict, equity: float) -> str | None:
+    """P27：指数底仓状态与建仓窗口（提示-only，执行由 owner 手动）。"""
+    hist = _hs300_hist(loop, dt)
+    if hist is None or equity <= 0:
+        return None
+    target = float(os.getenv("BASE_SLEEVE_TARGET", "0.25"))
+    base_mv = sum(float(mv.get(c, 0.0)) for c in _BASE_SLEEVE_CODES)
+    ratio = base_mv / equity
+    last = float(hist["close"].iloc[-1])
+    med = float(hist["close"].median())
+    fear = _fear_score(loop, dt)
+    open_reasons = []
+    if last < med:
+        open_reasons.append(f"P26 中位线下方（{last / med - 1:+.1%}）")
+    if fear is not None and fear >= 75:
+        open_reasons.append(f"E17 恐慌窗口（{fear:.0f}≥75）")
+    if open_reasons:
+        win = "**开**（" + "、".join(open_reasons) + "）＝可分批买入底仓至目标"
+    else:
+        fear_txt = f"{fear:.0f}" if fear is not None else "—"
+        win = (f"关（沪深300 处中位线上方 {last / med - 1:+.1%}、恐慌 {fear_txt}<75）"
+               f"＝只等不追、不建仓")
+    return (f"指数底仓（P27）：当前底仓占比 {ratio:.0%}（目标 {target:.0%}，标的 510300 沪深300ETF）"
+            f"｜建仓窗口：{win}")
+
+
+def _leverage_window_hint(loop: ClosedLoop, dt: str) -> str | None:
+    """P28：杠杆窗口识别（三信号取二共振才输出，平时静默；提示-only、L≤30% 硬顶）。"""
+    hist = _hs300_hist(loop, dt)
+    if hist is None:
+        return None
+    c = hist["close"].to_numpy(dtype=float)
+    last, med, peak = float(c[-1]), float(pd.Series(c).median()), float(c.max())
+    fear = _fear_score(loop, dt)
+    sigs = []
+    if last < med * 0.90:
+        sigs.append(f"①中位线下方≥10%（{last / med - 1:+.1%}）")
+    if last / peak - 1 <= -0.40:
+        sigs.append(f"②距历史峰回撤≥40%（{last / peak - 1:+.1%}）")
+    if fear is not None and fear >= 85:
+        sigs.append(f"③深度恐慌（{fear:.0f}≥85）")
+    if len(sigs) < 2:
+        return None
+    return (f"🚨 杠杆窗口（P28·提示-only）：{len(sigs)}/3 信号共振——" + "、".join(sigs)
+            + "＝极高确定性底部窗口开启。规则：仅宽基指数、债务比例 L≤30% 硬顶"
+              "（E23：50% 历史爆仓证伪）、owner 手动执行、系统不自动交易")
+
+
 def _round_lot(shares: float) -> float:
     """A 股按 100 股取整（卖出允许零股，这里统一向最接近的手取整）。"""
     return float(round(shares / 100.0) * 100)
@@ -752,6 +831,23 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         _p26 = _hs300_median_hint(loop, dt)
         if _p26:
             hints.append(_p26)
+    except Exception:  # noqa: BLE001
+        pass
+    # P27 指数底仓提示行（owner 2026-07-30 拍板：五层能力圈一二层直接进系统）：
+    # 底仓＝沪深300ETF，目标占比 BASE_SLEEVE_TARGET（默认25%）；建仓窗口只认两个已验证信号
+    # （P26 中位线下方 / E17 恐慌≥75），上方不追——执行始终由 owner 手动。
+    try:
+        _p27 = _base_sleeve_hint(loop, dt, mv, equity)
+        if _p27:
+            hints.append(_p27)
+    except Exception:  # noqa: BLE001
+        pass
+    # P28 杠杆窗口提示行（提示-only·平时静默）：三信号取二共振才出现——
+    # ①中位线下方≥10% ②距历史峰回撤≥40% ③恐慌≥85；L≤30% 硬顶（E23：50% 已证伪爆仓）。
+    try:
+        _p28 = _leverage_window_hint(loop, dt)
+        if _p28:
+            hints.append(_p28)
     except Exception:  # noqa: BLE001
         pass
     # 参谋异议（提示层）：持仓中模型排位后 20%（rank_pct≤0.2）者单列——风控未触发不强制卖，供人工复核
