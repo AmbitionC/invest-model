@@ -226,12 +226,29 @@ def _hs300_median_hint(loop: ClosedLoop, dt: str) -> str | None:
     if len(hist) < 500:  # E21 预热口径
         return None
     last = float(hist["close"].iloc[-1])
-    med = float(hist["close"].median())
+    closes = hist["close"].to_numpy(dtype=float)
+    med = float(pd.Series(closes).median())
     dev = last / med - 1
     side = "下方" if last < med else "上方"
     act = "宽基低吸窗口（下方只买不卖）" if last < med else "只减不加（上方只卖不买）"
+    # 状态语境（E21 稳健性复核建议）：expanding 口径下最近一次处中位线下方的月末距今几个月，
+    # 防止"上方"被误读为即期卖出指令——它是持续多月的慢变量防御态。
+    streak = ""
+    try:
+        ym = hist["trade_date"].str[:6]
+        me_idx = hist.index[(ym != ym.shift(-1))].tolist()
+        last_below = None
+        for i in me_idx:
+            j = hist.index.get_loc(i) + 1
+            if closes[j - 1] < float(pd.Series(closes[:j]).median()):
+                last_below = str(hist.loc[i, "trade_date"])
+        if last_below and side == "上方":
+            months = (int(str(dt)[:4]) - int(last_below[:4])) * 12 + int(str(dt)[4:6]) - int(last_below[4:6])
+            streak = f"；该口径自 {last_below[:6]} 起连续约 {months} 个月处上方＝慢变量防御态、非即期卖出指令"
+    except Exception:  # noqa: BLE001
+        streak = ""
     return (f"指数贵贱（P26·提示）：沪深300 {last:.0f} 处全历史中位线 {med:.0f} **{side}**"
-            f"（{dev:+.1%}）＝{act}；口径 E21（下方日未来3年年化+13.8% vs 上方-1.1%）")
+            f"（{dev:+.1%}）＝{act}；口径 E21（下方日未来3年年化+13.8% vs 上方-1.1%）{streak}")
 
 
 def _round_lot(shares: float) -> float:
