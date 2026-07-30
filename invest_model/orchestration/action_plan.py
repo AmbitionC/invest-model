@@ -203,6 +203,37 @@ def _etf_watch_rows(loop: ClosedLoop, dt: str, held: set[str]) -> list[dict]:
     return out
 
 
+def _hs300_median_hint(loop: ClosedLoop, dt: str) -> str | None:
+    """P26：沪深300 收盘相对全历史 expanding 中位线的位置（提示-only）。
+
+    基底 results/index_dump_000300_SH.csv（tushare 2005 起全历史，E21 同源数据），
+    基底末日之后的收盘从 index_daily 增量补齐；任何一步失败返回 None 不影响计划。
+    """
+    from pathlib import Path
+    base = Path(__file__).resolve().parents[2] / "results" / "index_dump_000300_SH.csv"
+    if not base.exists():
+        return None
+    hist = pd.read_csv(base, dtype={"trade_date": str})[["trade_date", "close"]]
+    hist["close"] = pd.to_numeric(hist["close"], errors="coerce")
+    hist = hist.dropna()
+    tail = loop.repo.read_sql(
+        "SELECT trade_date, close FROM index_daily WHERE code='000300.SH' AND trade_date>:s "
+        "ORDER BY trade_date", {"s": str(hist["trade_date"].max())})
+    if not tail.empty:
+        tail["close"] = pd.to_numeric(tail["close"], errors="coerce")
+        hist = pd.concat([hist, tail.dropna()], ignore_index=True)
+    hist = hist[hist["trade_date"] <= str(dt)]
+    if len(hist) < 500:  # E21 预热口径
+        return None
+    last = float(hist["close"].iloc[-1])
+    med = float(hist["close"].median())
+    dev = last / med - 1
+    side = "下方" if last < med else "上方"
+    act = "宽基低吸窗口（下方只买不卖）" if last < med else "只减不加（上方只卖不买）"
+    return (f"指数贵贱（P26·提示）：沪深300 {last:.0f} 处全历史中位线 {med:.0f} **{side}**"
+            f"（{dev:+.1%}）＝{act}；口径 E21（下方日未来3年年化+13.8% vs 上方-1.1%）")
+
+
 def _round_lot(shares: float) -> float:
     """A 股按 100 股取整（卖出允许零股，这里统一向最接近的手取整）。"""
     return float(round(shares / 100.0) * 100)
@@ -698,6 +729,14 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                 and os.getenv("ADVISOR_STANCE_GATE", "1").lower() not in ("0", "false")):
             gate_note = "。大盘看空占多，新买入更谨慎（要仓位更低才开新仓）"
         hints.append(f"投顾观点：{adv_stance_line}{gate_note}")
+    # P26 指数贵贱提示行（提示-only，E21 4/4 过判据上线）：沪深300 相对全历史 expanding 中位线位置。
+    # 全历史基底用仓内静态 CSV（2005 起），决策日后缺口从 index_daily 补——库内只有 2015 起故必须带基底。
+    try:
+        _p26 = _hs300_median_hint(loop, dt)
+        if _p26:
+            hints.append(_p26)
+    except Exception:  # noqa: BLE001
+        pass
     # 参谋异议（提示层）：持仓中模型排位后 20%（rank_pct≤0.2）者单列——风控未触发不强制卖，供人工复核
     try:
         dissent = []
