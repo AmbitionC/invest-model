@@ -34,7 +34,7 @@ Python 模型/回测/风控/FaaS 定时任务代码。投资系统三仓之一�
 | 投顾信号入库 | push `config/advisor_*.csv`（自动） |
 | 重出当日计划 | bump `ops/plan-notify.trigger` |
 | 复盘 | `ops/review.trigger` ｜ 记分卡 `ops/signal-scorecard.trigger` |
-| 模型重建 | `ops/build-model.trigger` ｜ 恐慌回填 `ops/fear-backfill.trigger` |
+| 模型重建 | `ops/build-model.trigger` ｜ 恐慌回填 `ops/fear-backfill.trigger`（查库版·2023-08 后）｜ 深度回填 `ops/fear-deep-backfill.trigger`（tushare 流式·更早历史，首行 YYYYMMDD-YYYYMMDD） |
 | 指数回填 | `ops/index-backfill.trigger` ｜ 验证 harness `ops/validation.trigger` |
 | FC 手动调用（daily_update_plan 等） | fe-journey-faas `ops/invoke.trigger` |
 | invest-model 改动生效到线上 FC | bump fe-journey-faas `.deploy-nudge`（PR merge master 触发 deploy.yml 按 ref=master 打包本仓 faas/） |
