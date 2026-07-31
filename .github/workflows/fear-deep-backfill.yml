@@ -1,0 +1,54 @@
+name: fear-deep-backfill
+
+# 恐慌指数深度回填（tushare 流式）：生产库 stock_daily 只有 ~2023 起，
+# 更早的全市场行情从 tushare 逐日拉、内存中喂 fear_gauge、只写 fear_daily。
+# 触发：改 ops/fear-deep-backfill.trigger 首行为 YYYYMMDD-YYYYMMDD 后 push master。
+
+on:
+  workflow_dispatch:
+    inputs:
+      range:
+        description: "回填区间 YYYYMMDD-YYYYMMDD"
+        default: "20150101-20231231"
+  push:
+    branches: [master]
+    paths:
+      - 'ops/fear-deep-backfill.trigger'
+
+concurrency:
+  group: fear-deep-backfill
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 深度回填恐慌指数
+        run: |
+          RANGE="${{ github.event.inputs.range }}"
+          if [ -z "$RANGE" ]; then
+            RANGE=$(grep -oE '^[0-9]{8}-[0-9]{8}' ops/fear-deep-backfill.trigger | head -1)
+          fi
+          RANGE="${RANGE:-20150101-20231231}"
+          python scripts/backfill_fear_deep.py \
+            --start "${RANGE%-*}" --end "${RANGE#*-}"
