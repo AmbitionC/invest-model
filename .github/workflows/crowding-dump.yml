@@ -34,8 +34,8 @@ jobs:
           cache: pip
       - name: Install package
         run: pip install -e .
-      - name: 取数
-        run: python scripts/analysis/crowding_dump.py --start 20150101
+      - name: 取数（软超时保进度：被 timeout 杀掉也能走到提交步骤，断点续跑）
+        run: timeout 150m python scripts/analysis/crowding_dump.py --start 20150101 || echo "软超时，提交已取部分"
       - name: 提交结果回 master
         run: |
           git config user.name Claude
