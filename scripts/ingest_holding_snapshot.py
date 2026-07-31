@@ -99,6 +99,12 @@ def main() -> None:
             if pd.notna(r["entry_date"]) and str(r["entry_date"]).strip()
             else (prev_entry.get(str(r["code"])) or snap_date), axis=1)
         ch = pos[["code", "shares", "cost_price", "entry_date"]].copy()
+        # 行数断言：现存持仓远多于本次载荷（>3倍+5）判定为残缺快照，中止而非清表。
+        # 全量替换语义只在载荷完整时才安全（与 FaaS saveSnapshot 同一守护）。
+        n_exist = int(repo.read_sql("SELECT COUNT(*) n FROM current_holding")["n"].iloc[0])
+        if n_exist > len(ch) * 3 + 5:
+            raise SystemExit(
+                f"快照持仓行数异常：现存 {n_exist} 行 vs 本次 {len(ch)} 行，疑似残缺载荷，中止全量替换")
         repo.execute_sql("DELETE FROM current_holding")
         m = repo.upsert("current_holding", ch, ["code"])
         print(f"current_holding 刷新 {m} 只（stock+etf）")
