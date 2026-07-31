@@ -43,6 +43,22 @@ def _shift(dt: str, days: int) -> str:
     return (pd.Timestamp(dt) - pd.Timedelta(days=days)).strftime("%Y%m%d")
 
 
+def _fetch_day(ts: TushareClient, d: str, attempts: int = 5, cooldown: int = 60):
+    """单日全市场拉取（镜像级韧性）：客户端内置重试耗尽后再加长冷却重试。
+
+    镜像偶发分钟级不可用（ReadTimeout 连发）会击穿内置短重试；这里每次失败
+    冷却 60s 再试，共 5 轮（约 5 分钟窗口）。仍失败则抛 RuntimeError，由调用方
+    优雅收尾——已算天数都已落库，bump 触发器续跑即可。"""
+    for k in range(attempts):
+        try:
+            return ts.get_daily_bulk(d)
+        except Exception as e:  # noqa: BLE001
+            print(f"  拉取 {d} 失败({k+1}/{attempts}): {repr(e)[:80]}，{cooldown}s 后再试",
+                  flush=True)
+            time.sleep(cooldown)
+    raise RuntimeError(f"拉取 {d} 连续 {attempts} 轮失败（镜像不可用），中断续跑")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="恐慌指数深度回填（tushare 流式）")
     ap.add_argument("--db", default=None)
@@ -89,15 +105,20 @@ def main() -> None:
         win_lo = _shift(dt, STOCK_LOOKBACK_DAYS)
         for stale in [d for d in frames if d < win_lo]:
             del frames[stale]
-        for d in open_days:
-            if win_lo <= d <= dt and d not in frames:
-                raw = ts.get_daily_bulk(d)
-                if raw is None or raw.empty:
-                    frames[d] = pd.DataFrame(columns=["code", "trade_date", "close", "pct_chg"])
-                else:
-                    f = raw[["code", "trade_date", "close", "pct_chg"]].copy()
-                    f["trade_date"] = f["trade_date"].astype(str)
-                    frames[d] = f
+        try:
+            for d in open_days:
+                if win_lo <= d <= dt and d not in frames:
+                    raw = _fetch_day(ts, d)
+                    if raw is None or raw.empty:
+                        frames[d] = pd.DataFrame(columns=["code", "trade_date", "close", "pct_chg"])
+                    else:
+                        f = raw[["code", "trade_date", "close", "pct_chg"]].copy()
+                        f["trade_date"] = f["trade_date"].astype(str)
+                        frames[d] = f
+        except RuntimeError as e:
+            # 镜像持续不可用：优雅收尾而非崩溃——进度已逐日落库，续跑自动接续。
+            print(f"⚠️ {e}；本轮到 {dt} 前中断（已落库 {ok} 天），bump 触发器续跑剩余段。")
+            break
         stock_df = pd.concat(frames.values(), ignore_index=True)
         try:
             g = fear_gauge(engine, dt, benchmark=args.benchmark,
