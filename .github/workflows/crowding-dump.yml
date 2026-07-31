@@ -1,0 +1,46 @@
+name: crowding-dump
+
+# 交易拥挤度/量能/两融 10 年日频取数（E24 v2 候选信号原料）：tushare 流式，
+# 只写 results/crowding_daily.csv 回吐 master，不落库。断点续跑（已有日期跳过）。
+# 触发：手动 / 改 ops/crowding-dump.trigger 后 push（仅 master）。
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - 'ops/crowding-dump.trigger'
+
+concurrency:
+  group: crowding-dump
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 取数
+        run: python scripts/analysis/crowding_dump.py --start 20150101
+      - name: 提交结果回 master
+        run: |
+          git config user.name Claude
+          git config user.email noreply@anthropic.com
+          git add -f results/crowding_daily.csv
+          git commit -m "分析产物：拥挤度/量能/两融 10 年日频取数 [skip ci]" || echo "无变化"
+          git pull --rebase origin master || true
+          git push
