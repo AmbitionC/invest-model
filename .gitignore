@@ -45,6 +45,8 @@ data/*.db
 # Generated pipeline outputs (synthetic/real run artifacts)
 # results/*.json  # 回测结果需要跟踪
 
-# 个人实盘持仓/操作计划（仓库已转 private，按用户要求入库留档）
-# results/action_plan_real*.md
-# config/holdings_*.csv
+# 个人实盘持仓/操作计划：不入版本库（安全修复 2026-07-31——private 只挡当下，
+# 历史无法回收；快照经 FaaS API 或本地跑 ingest 脚本入 DB，git 不留档）
+results/action_plan_real*.md
+config/holdings_*.csv
+config/holding_snapshot_*.csv

@@ -37,6 +37,12 @@ jobs:
         timeout-minutes: 5   # 增量录入秒级完成；引擎已加超时，这里兜底防其它类型挂死
         run: |
           shopt -s nullglob
-          latest=$(ls -1 config/holding_snapshot_*.csv | sort | tail -1)
+          latest=$(ls -1 config/holding_snapshot_*.csv 2>/dev/null | sort | tail -1)
+          if [ -z "$latest" ]; then
+            # 安全修复 2026-07-31：持仓 CSV 不再入库（.gitignore），git 路径自然停用。
+            # 快照改走 FaaS API（POST /invest/holdings/snapshot·admin）或本地跑本脚本。
+            echo "仓库无 holding_snapshot CSV（已移出版本控制），跳过。"
+            exit 0
+          fi
           echo "ingest $latest"
           python scripts/ingest_holding_snapshot.py --csv "$latest"
