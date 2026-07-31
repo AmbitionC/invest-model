@@ -229,6 +229,11 @@ def _hs300_median_hint(loop: ClosedLoop, dt: str) -> str | None:
     closes = hist["close"].to_numpy(dtype=float)
     med = float(pd.Series(closes).median())
     dev = last / med - 1
+    # 双锚显示（owner 2026-07-31 命题）：全量 expanding=深值位（策略锚，E21 全历史最优——
+    # 2007 型泡沫会提前清仓、回撤 -24% vs 混合锚 -57%）；滚动5年=时代位（修正早年低点位拖低、
+    # 仅作参考读数）。两锚分歧大（如 2024-09：-5.3% vs -21.4%）本身就是"时代性便宜"信号。
+    roll = float(pd.Series(closes[-1250:]).median()) if len(closes) >= 1250 else None
+    roll_txt = f"｜滚动5年锚 {roll:.0f}（{last / roll - 1:+.1%}·参考）" if roll else ""
     side = "下方" if last < med else "上方"
     act = "宽基低吸窗口（下方只买不卖）" if last < med else "只减不加（上方只卖不买）"
     # 状态语境（E21 稳健性复核建议）：expanding 口径下最近一次处中位线下方的月末距今几个月，
@@ -248,7 +253,7 @@ def _hs300_median_hint(loop: ClosedLoop, dt: str) -> str | None:
     except Exception:  # noqa: BLE001
         streak = ""
     return (f"指数贵贱（P26·提示）：沪深300 {last:.0f} 处全历史中位线 {med:.0f} **{side}**"
-            f"（{dev:+.1%}）＝{act}；口径 E21（下方日未来3年年化+13.8% vs 上方-1.1%）{streak}")
+            f"（{dev:+.1%}）＝{act}{roll_txt}；口径 E21（下方日未来3年年化+13.8% vs 上方-1.1%）{streak}")
 
 
 _BASE_SLEEVE_CODES = ("510300.SH",)   # P27 指数底仓标的：沪深300ETF
