@@ -335,6 +335,59 @@ def _leverage_window_hint(loop: ClosedLoop, dt: str) -> str | None:
               "（E23：50% 历史爆仓证伪）、owner 手动执行、系统不自动交易")
 
 
+def _and_leverage_state(loop: ClosedLoop, dt: str) -> dict | None:
+    """P30（AND 共振·低价×恐慌加杠杆信号）状态：owner 2026-08-01 拍板上线。
+
+    定义（写死）：沪深300 收盘 < 全历史 expanding 中位线 且 恐慌 EOD ≥75。
+    十一年半仅 2024-01/02 微盘崩一段共 5 天（其后 250 日 +21%~+25%）＝极稀有强信号。
+    输出为常驻状态行（未触发也显示、强透出），触发时🚨并反复提醒；硬约束继承 P28：
+    L≤30%、仅宽基、owner 手动、系统零自动交易。同时计算 P28 三信号数供落库/前端。
+    """
+    hist = _hs300_hist(loop, dt)
+    if hist is None:
+        return None
+    c = hist["close"].to_numpy(dtype=float)
+    last, med, peak = float(c[-1]), float(pd.Series(c).median()), float(c.max())
+    fear = _fear_score(loop, dt)
+    low = last < med
+    panic = fear is not None and fear >= 75
+    p28 = sum([last < med * 0.90, last / peak - 1 <= -0.40,
+               fear is not None and fear >= 85])
+    return {"active": bool(low and panic), "low": low, "panic": panic,
+            "close": last, "median": med, "gap": last / med - 1,
+            "fear": fear, "p28_count": int(p28)}
+
+
+def _and_leverage_hint(st: dict | None) -> str | None:
+    if st is None:
+        return None
+    fear_txt = f"{st['fear']:.0f}" if st["fear"] is not None else "—"
+    if st["active"]:
+        return (f"🚨🚨 加杠杆信号（P30·AND 共振）触发：沪深300 {st['close']:.0f} 低于全历史中位线"
+                f"（{st['gap']:+.1%}）且恐慌 {fear_txt}≥75——十一年半仅在 2024-02 微盘崩出现过一段"
+                f"（其后一年 +21%~+25%）＝极高确定性窗口。规则：仅宽基指数、债务 L≤30% 硬顶、"
+                f"融资成本≤6%/年、owner 手动执行、系统不自动交易。本提醒在信号存续期每日重复")
+    lo = "✓低价" if st["low"] else f"✗价格（中位线上方 {st['gap']:+.1%}）"
+    pa = "✓恐慌" if st["panic"] else f"✗恐慌（{fear_txt}<75）"
+    return (f"杠杆信号（P30·AND 共振）：未触发——{lo} × {pa}"
+            f"｜P28 深危机窗 {st['p28_count']}/3。两者任一触发将强提醒")
+
+
+def _persist_leverage_signal(loop: ClosedLoop, dt: str, st: dict,
+                             snapshot_ts: str = "EOD") -> None:
+    """杠杆信号状态落库（FaaS API/前端强透出数据源）。best-effort。"""
+    import json as _json
+    loop.repo.upsert("leverage_signal", pd.DataFrame([{
+        "trade_date": str(dt), "snapshot_ts": snapshot_ts,
+        "and_active": int(st["active"]), "p28_count": st["p28_count"],
+        "close": round(st["close"], 2), "median": round(st["median"], 2),
+        "fear": st["fear"], "detail": _json.dumps({
+            "low": st["low"], "panic": st["panic"], "gap": round(st["gap"], 4),
+            "rules": "L≤30%硬顶·仅宽基·融资成本≤6%·owner手动·零自动交易",
+        }, ensure_ascii=False),
+    }]), ["trade_date", "snapshot_ts"])
+
+
 def _round_lot(shares: float) -> float:
     """A 股按 100 股取整（卖出允许零股，这里统一向最接近的手取整）。"""
     return float(round(shares / 100.0) * 100)
@@ -853,6 +906,17 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         _p28 = _leverage_window_hint(loop, dt)
         if _p28:
             hints.append(_p28)
+    except Exception:  # noqa: BLE001
+        pass
+    # P30 加杠杆信号（AND 共振·低价×恐慌，owner 2026-08-01 拍板上线）：常驻状态行，
+    # 触发时🚨🚨每日重复提醒；状态同步落库 leverage_signal 供前端强透出。
+    try:
+        _p30_st = _and_leverage_state(loop, dt)
+        if _p30_st:
+            _p30 = _and_leverage_hint(_p30_st)
+            if _p30:
+                hints.append(_p30)
+            _persist_leverage_signal(loop, dt, _p30_st)
     except Exception:  # noqa: BLE001
         pass
     # 参谋异议（提示层）：持仓中模型排位后 20%（rank_pct≤0.2）者单列——风控未触发不强制卖，供人工复核

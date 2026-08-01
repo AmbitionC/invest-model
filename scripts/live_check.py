@@ -617,7 +617,72 @@ def _fear_alerts(engine) -> list[tuple[str, str, str]]:
         out.append((f"F:{day}:窗口回落",
                     f"🟣 恐慌回落：{score:.0f}（盘中 {ts}，日内峰值 {day_max:.0f}）"
                     f"— 抄底窗口提示解除，5 分钟密控退回小时级，回到常规闸门", "batch"))
+    # P30 加杠杆信号（AND 共振·低价×恐慌，owner 2026-08-01 上线）：恐慌 ≥75 时进一步
+    # 判沪深300 盘中价是否低于全历史中位线；共振即 🚨🚨 强提醒，**存续期每 30 分钟重复**
+    # （owner 明确要求反复提醒——去重键带 30 分钟桶）。失败静默，绝不影响既有恐慌提醒。
+    if score >= thr:
+        try:
+            out += _p30_and_alert(engine, score, ts, day, _now_cst().strftime("%H%M"))
+        except Exception:  # noqa: BLE001
+            pass
     return out
+
+
+def _p30_and_alert(engine, score: float, ts: str, day: str, hhmm: str) -> list[tuple[str, str, str]]:
+    """P30 AND 共振盘中判定：全历史中位线（静态基底 CSV + index_daily 增量）vs 盘中现价。
+
+    盘中现价用 fear_intraday.raw.idx_chg（同快照的基准盘中涨跌）× 前收近似，零新增拉取。
+    """
+    import json as _json
+    from pathlib import Path
+
+    base = Path(__file__).resolve().parents[1] / "results" / "index_dump_000300_SH.csv"
+    if not base.exists():
+        return []
+    hist = pd.read_csv(base, dtype={"trade_date": str})[["trade_date", "close"]]
+    hist["close"] = pd.to_numeric(hist["close"], errors="coerce")
+    hist = hist.dropna()
+    repo = BaseRepository(engine)
+    tail = repo.read_sql(
+        "SELECT trade_date, close FROM index_daily WHERE code='000300.SH' AND trade_date>:s "
+        "AND trade_date<:d ORDER BY trade_date", {"s": str(hist["trade_date"].max()), "d": day})
+    if not tail.empty:
+        tail["close"] = pd.to_numeric(tail["close"], errors="coerce")
+        hist = pd.concat([hist, tail.dropna()], ignore_index=True)
+    if len(hist) < 500:
+        return []
+    med = float(hist["close"].median())
+    prev_close = float(hist["close"].iloc[-1])
+    fi = repo.read_sql(
+        "SELECT raw FROM fear_intraday WHERE trade_date=:d ORDER BY snapshot_ts DESC LIMIT 1",
+        {"d": day})
+    idx_chg = 0.0
+    if not fi.empty:
+        try:
+            idx_chg = float(_json.loads(str(fi["raw"].iloc[0])).get("idx_chg", 0.0))
+        except Exception:  # noqa: BLE001
+            idx_chg = 0.0
+    px = prev_close * (1 + idx_chg)
+    if px >= med:
+        return []
+    bucket = f"{hhmm[:2]}{'00' if hhmm[2:] < '30' else '30'}"   # 30 分钟桶 → 存续期重复提醒
+    # 状态落库（前端强透出数据源；best-effort）
+    try:
+        repo.upsert("leverage_signal", pd.DataFrame([{
+            "trade_date": day, "snapshot_ts": f"{day[:4]}-{day[4:6]}-{day[6:]} {ts}:00",
+            "and_active": 1, "p28_count": int(score >= 85) + int(px < med * 0.90),
+            "close": round(px, 2), "median": round(med, 2), "fear": score,
+            "detail": _json.dumps({"intraday": True, "gap": round(px / med - 1, 4)},
+                                  ensure_ascii=False),
+        }]), ["trade_date", "snapshot_ts"])
+    except Exception:  # noqa: BLE001
+        pass
+    return [(f"F:{day}:{bucket}:P30杠杆",
+             f"🚨🚨 加杠杆信号（P30·AND 共振）触发：沪深300 盘中 {px:.0f} 低于全历史中位线 "
+             f"{med:.0f}（{px / med - 1:+.1%}）且恐慌 {score:.0f}≥75 —— 十一年半仅 2024-02 "
+             f"出现过一段（其后一年 +21%~+25%）＝极高确定性窗口。规则：仅宽基指数、"
+             f"债务 L≤30% 硬顶、融资成本≤6%/年、owner 手动执行、系统不自动交易。"
+             f"信号存续期每 30 分钟重复提醒", "crit")]
 
 
 def _arb_alerts(engine) -> list[tuple[str, str, str]]:
