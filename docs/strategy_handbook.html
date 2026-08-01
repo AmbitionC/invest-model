@@ -1,0 +1,634 @@
+<title>宽基账户策略手册 v1.0</title>
+
+<style>
+  :root {
+    --paper: #F6F7F8;
+    --surface: #FFFFFF;
+    --ink: #14181D;
+    --body: #2B3138;
+    --muted: #6B7480;
+    --hair: #DDE1E6;
+    --accent: #1E4D8C;
+    --accent-soft: #E8EFF8;
+    --pass: #1F7A5C;
+    --pass-soft: #E4F1EC;
+    --fail: #B3352B;
+    --fail-soft: #FAEAE8;
+    --pend: #A6762B;
+    --pend-soft: #F7EFDF;
+
+    --serif: "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", "SimSun", Georgia, serif;
+    --sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0F1317;
+      --surface: #171C22;
+      --ink: #E8EBEE;
+      --body: #C3C9D0;
+      --muted: #8A939E;
+      --hair: #262D35;
+      --accent: #7FA8DC;
+      --accent-soft: #17222F;
+      --pass: #57BF9A;
+      --pass-soft: #12241E;
+      --fail: #E37A6B;
+      --fail-soft: #2A1917;
+      --pend: #D2A55C;
+      --pend-soft: #241D12;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper: #0F1317;
+    --surface: #171C22;
+    --ink: #E8EBEE;
+    --body: #C3C9D0;
+    --muted: #8A939E;
+    --hair: #262D35;
+    --accent: #7FA8DC;
+    --accent-soft: #17222F;
+    --pass: #57BF9A;
+    --pass-soft: #12241E;
+    --fail: #E37A6B;
+    --fail-soft: #2A1917;
+    --pend: #D2A55C;
+    --pend-soft: #241D12;
+  }
+
+  :root[data-theme="light"] {
+    --paper: #F6F7F8;
+    --surface: #FFFFFF;
+    --ink: #14181D;
+    --body: #2B3138;
+    --muted: #6B7480;
+    --hair: #DDE1E6;
+    --accent: #1E4D8C;
+    --accent-soft: #E8EFF8;
+    --pass: #1F7A5C;
+    --pass-soft: #E4F1EC;
+    --fail: #B3352B;
+    --fail-soft: #FAEAE8;
+    --pend: #A6762B;
+    --pend-soft: #F7EFDF;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--body);
+    font-family: var(--sans);
+    font-size: 15.5px;
+    line-height: 1.78;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 0 22px 96px;
+  }
+
+  /* ── 报头 ── */
+  .masthead {
+    padding: 56px 0 28px;
+    border-bottom: 2px solid var(--ink);
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  h1 {
+    font-family: var(--serif);
+    font-size: clamp(30px, 5.2vw, 44px);
+    line-height: 1.24;
+    font-weight: 700;
+    color: var(--ink);
+    text-wrap: balance;
+    margin: 10px 0 12px;
+    letter-spacing: .01em;
+  }
+  .standfirst {
+    font-size: 16px;
+    color: var(--muted);
+    max-width: 60ch;
+  }
+  .meta-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    margin-top: 18px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  /* ── 关键指标带 ── */
+  .kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1px;
+    background: var(--hair);
+    border: 1px solid var(--hair);
+    margin: 28px 0 0;
+  }
+  .kpi {
+    background: var(--surface);
+    padding: 16px 18px;
+  }
+  .kpi-label {
+    font-size: 11.5px;
+    letter-spacing: .08em;
+    color: var(--muted);
+  }
+  .kpi-value {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--ink);
+    line-height: 1.3;
+    margin-top: 4px;
+  }
+  .kpi-note {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  /* ── 跳转条 ── */
+  .jump {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: color-mix(in srgb, var(--paper) 92%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--hair);
+    margin: 0 -22px 0;
+    padding: 10px 22px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    font-size: 13px;
+  }
+  .jump a {
+    color: var(--muted);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    padding-bottom: 1px;
+  }
+  .jump a:hover, .jump a:focus-visible {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  /* ── 章节 ── */
+  section { padding-top: 46px; }
+  h2 {
+    font-family: var(--serif);
+    font-size: 25px;
+    font-weight: 700;
+    color: var(--ink);
+    line-height: 1.35;
+    margin: 0 0 6px;
+    text-wrap: balance;
+  }
+  h2 .num {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+    margin-right: 10px;
+    letter-spacing: .05em;
+  }
+  h3 {
+    font-family: var(--sans);
+    font-size: 15.5px;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 30px 0 10px;
+    letter-spacing: .01em;
+  }
+  .sec-note {
+    color: var(--muted);
+    font-size: 14px;
+    margin-bottom: 18px;
+    max-width: 62ch;
+  }
+  p { margin: 0 0 14px; max-width: 68ch; }
+  strong { color: var(--ink); font-weight: 600; }
+  a { color: var(--accent); }
+
+  /* ── 表格 ── */
+  .scroll { overflow-x: auto; margin: 14px 0 4px; border: 1px solid var(--hair); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 520px; }
+  th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 11.5px;
+    letter-spacing: .07em;
+    color: var(--muted);
+    background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--hair);
+    white-space: nowrap;
+  }
+  td {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--hair);
+    vertical-align: top;
+    line-height: 1.65;
+  }
+  tr:last-child td { border-bottom: none; }
+  td.num, th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.name { color: var(--ink); font-weight: 600; white-space: nowrap; }
+
+  /* ── 状态标签 ── */
+  .chip {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .04em;
+    padding: 2px 8px;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .chip-pass { background: var(--pass-soft); color: var(--pass); border: 1px solid color-mix(in srgb, var(--pass) 32%, transparent); }
+  .chip-fail { background: var(--fail-soft); color: var(--fail); border: 1px solid color-mix(in srgb, var(--fail) 32%, transparent); }
+  .chip-pend { background: var(--pend-soft); color: var(--pend); border: 1px solid color-mix(in srgb, var(--pend) 32%, transparent); }
+  .chip-none { background: transparent; color: var(--muted); border: 1px solid var(--hair); }
+
+  /* ── 动作卡（按节奏分） ── */
+  .cadence {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 14px;
+    margin: 18px 0 8px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    border-top: 3px solid var(--accent);
+    padding: 16px 18px 18px;
+  }
+  .card.buy { border-top-color: var(--pass); }
+  .card.sell { border-top-color: var(--fail); }
+  .card-when {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .12em;
+    color: var(--muted);
+  }
+  .card-title {
+    font-family: var(--serif);
+    font-size: 19px;
+    font-weight: 700;
+    color: var(--ink);
+    margin: 3px 0 8px;
+  }
+  .card p { font-size: 13.5px; line-height: 1.7; margin: 0 0 8px; }
+  .card p:last-child { margin-bottom: 0; }
+
+  /* ── 当前状态面板 ── */
+  .status {
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    border-left: 3px solid var(--accent);
+    padding: 18px 20px;
+    margin: 22px 0;
+  }
+  .status-head {
+    font-size: 12px;
+    font-family: var(--mono);
+    letter-spacing: .1em;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+  .legs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+  }
+  .leg-name { font-size: 13px; color: var(--ink); font-weight: 600; }
+  .leg-val {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 17px;
+    color: var(--fail);
+    margin: 2px 0 3px;
+  }
+  .leg-sub { font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
+  .status-foot {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--hair);
+    font-size: 13.5px;
+    color: var(--body);
+  }
+
+  /* ── 引文/结论块 ── */
+  .callout {
+    border-left: 2px solid var(--hair);
+    padding: 2px 0 2px 18px;
+    margin: 18px 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .callout strong { color: var(--ink); }
+
+  ul { margin: 0 0 14px; padding-left: 20px; max-width: 68ch; }
+  li { margin-bottom: 7px; }
+
+  .foot {
+    margin-top: 60px;
+    padding-top: 20px;
+    border-top: 1px solid var(--hair);
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  @media (max-width: 620px) {
+    body { font-size: 15px; }
+    .masthead { padding-top: 36px; }
+    .jump { gap: 5px 14px; font-size: 12.5px; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">INVEST-MODEL · 策略手册 v1.0</div>
+    <h1>宽基账户策略手册</h1>
+    <p class="standfirst">
+      源自陈老师（重远投资观）《五层能力圈》一文及全库 41 篇归档的系统性吸收，最终落地为一个独立宽基账户的完整买卖体系、两个杠杆信号、一套卖出节奏调节器。全部提示层、零自动交易；所有判据跑数前预登记；证伪项全部入库。
+    </p>
+    <div class="meta-line">
+      <span>2026-08-01</span>
+      <span>验证窗口 2015-06 → 2026-07</span>
+      <span>恐慌数据 2813 天 · 零缺口</span>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi">
+        <div class="kpi-label">账户级预期年化</div>
+        <div class="kpi-value">10–12%</div>
+        <div class="kpi-note">价格 8–9.5% ＋股息 ~2.5pp ＋货基 ~1pp</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">回撤预算</div>
+        <div class="kpi-value">−5% ~ −15%</div>
+        <div class="kpi-note">同期定投基线 −24%</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">年均操作</div>
+        <div class="kpi-value">20–30 次</div>
+        <div class="kpi-note">多数周无动作</div>
+      </div>
+    </div>
+  </header>
+
+  <nav class="jump">
+    <a href="#map">一 · 文章映射</a>
+    <a href="#play">二 · 策略本体</a>
+    <a href="#yield">三 · 预期收益</a>
+    <a href="#ledger">四 · 验证总账</a>
+    <a href="#notify">五 · 通知端面</a>
+    <a href="#misc">六 · 备忘</a>
+  </nav>
+
+  <main>
+
+    <section id="map">
+      <h2><span class="num">一</span>文章 → 系统的映射</h2>
+      <p class="sec-note">升级从哪来：陈老师的每一条主张对应到系统的哪个提案、验证结果如何。</p>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>陈老师内容</th><th>系统落地</th><th>结果</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>五层第一层：沪深300 指数长持＝最高确定性基石</td><td>P27 指数底仓 → P27 v2 独立宽基账户</td><td><span class="chip chip-pass">上线</span></td></tr>
+            <tr><td>五层第二层：中位线上方只卖不买、下方只买不卖</td><td>P26 中位线纪律 + E21</td><td><span class="chip chip-pass">4/4 过</span></td></tr>
+            <tr><td>五层第三层：底部测算极限、适度杠杆</td><td>P28 杠杆窗口 + E23，后衍生 P30</td><td><span class="chip chip-pass">上线 L≤30%</span></td></tr>
+            <tr><td>五层第四层：板块博弈（高低切）</td><td>P19 / E15</td><td><span class="chip chip-fail">1/4 未过</span></td></tr>
+            <tr><td>五层第五层：个股（财报／预期）</td><td>归投顾主导个股账户，不进宽基</td><td><span class="chip chip-none">不适用</span></td></tr>
+            <tr><td>60 日线趋势卖点（韩国 200% 止盈案例）</td><td>E9 无条件版 → E9 v2 条件化</td><td><span class="chip chip-pend">研究中</span></td></tr>
+            <tr><td>0728 文「均衡中位数 500–550」</td><td>P25 点差锚 + E20</td><td><span class="chip chip-fail">证伪</span></td></tr>
+            <tr><td>顶底识别散见观点（机构减仓／拥挤度／量能／两融）</td><td>E24 顶部合成 + E24 v2 三候选</td><td><span class="chip chip-fail">全证伪</span></td></tr>
+            <tr><td>2022-05《指数估值数据是危险的》</td><td>系统不用 PE 分位做信号依据</td><td><span class="chip chip-pass">采纳为原则</span></td></tr>
+            <tr><td>四大行 PB&lt;1／股息识别（银行红利）</td><td>P32 / E26 红利估值锚</td><td><span class="chip chip-pend">等材料</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        顶部机械信号三连败（P16／P19／E24）指向同一结论：<strong>底部有恐慌极值这个锚，顶部没有对称锚</strong>。逃顶的超额留在人的判断里——这也与陈老师 43% 年化的解构一致，其约四分之三来自不可机械化的板块博弈与个股层。
+      </div>
+    </section>
+
+    <section id="play">
+      <h2><span class="num">二</span>策略本体</h2>
+      <p class="sec-note">独立宽基账户，与投顾主导个股账户完全分开决策。资金怎么来、来多少由你定，策略只管一件事：手里有现金时怎么买、有持仓时怎么卖。</p>
+
+      <h3>四条腿</h3>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>腿</th><th class="num">ETF</th><th>买入线（当前值）</th><th>卖出</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="name">沪深300</td><td class="num">510300</td><td>收盘 &lt; 全历史中位线 <span class="num">3436</span></td><td>P31 分层</td></tr>
+            <tr><td class="name">创业板</td><td class="num">159915</td><td>收盘 &lt; 中位线 −10%，即 <span class="num">1684</span></td><td>中位线 +10% 上方，P31 分层</td></tr>
+            <tr><td class="name">科创50</td><td class="num">588000</td><td>不设线：<strong>按月定投</strong>（锚策略六年实测跑输定投 5–9pp）</td><td>长持不卖</td></tr>
+            <tr><td class="name">红利</td><td class="num">515080</td><td>收盘 &lt; 全历史中位线 <span class="num">3997</span>（临时价格锚）</td><td>P31 分层</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="sec-note" style="margin-top:10px">中证500／中证1000 的配置已记档保留，随时可恢复。红利腿的价格锚是临时口径——分红拖低价格会让锚系统性偏保守，待 E26 换成 PB／股息率锚。</p>
+
+      <h3>三个动作，三种节奏</h3>
+      <p>买是快枪、卖是慢刀，这个不对称是故意设计的。</p>
+      <div class="cadence">
+        <div class="card buy">
+          <div class="card-when">当天 · 主力</div>
+          <div class="card-title">恐慌买</div>
+          <p>恐慌指数 ≥75 的当天，任何腿立即用<strong>剩余现金的 50%</strong> 买入。</p>
+          <p>11 年回测的出手几乎全部来自这里：2015 股灾、2016 熔断、2018 底、2020 疫情、2022、2024-02、2025 关税战。盘中有 5 分钟级监控与 30 分钟级提醒。</p>
+        </div>
+        <div class="card buy">
+          <div class="card-when">每周五 · 兜底</div>
+          <div class="card-title">常规买</div>
+          <p>价格在买入线下方，就用<strong>剩余现金的 20%</strong> 买一笔；不在就散会。</p>
+          <p>作用是接住「恐慌不响的底」——2024-09 阴跌大底当天恐慌只有 50，没有这条腿一股接不到。</p>
+        </div>
+        <div class="card sell">
+          <div class="card-when">每月 1 号 · 唯一卖点</div>
+          <div class="card-title">强度分层卖</div>
+          <p>价格在卖出线上方时，数六个市场过热迹象：离 60 日均线太远、创业板对大盘比值过热、成交量天量、两融占比过高、价格超近 5 年中枢 15%、情绪极度贪婪。</p>
+          <p>命中 <strong>≥4 项</strong>＝市场疯了，卖持仓 10%；<strong>2–3 项</strong>卖 5%；<strong>≤1 项</strong>一股不卖。</p>
+        </div>
+      </div>
+      <div class="callout">
+        分层卖是对「中位线太低、上方机械卖造成卖飞」的修复：卖出次数从 125 降到 56、2019–2021 长牛多保留 14% 持仓、总收益不降。卖出之所以是月频——测过日频与周频，频率越高长牛里的仓位被剃得越快。
+      </div>
+
+      <h3>杠杆：两个信号</h3>
+      <p>都只提示、手动执行、系统零自动交易。共同硬约束：<strong>债务 L≤30% 硬顶</strong>（50% 已被历史爆仓证伪）、仅宽基指数、融资成本 ≤6%/年。</p>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>信号</th><th>触发条件</th><th>11.5 年历史</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="name">P28 深危机窗</td>
+              <td>中位线下 10% ／ 距峰回撤 40% ／ 恐慌 ≥85，三中取二</td>
+              <td>只开过 3 次：2015-08、2016-01、2018-10，<strong>全是历史级大底、误报 0</strong></td>
+            </tr>
+            <tr>
+              <td class="name">P30 极值共振</td>
+              <td>低于中位线 <strong>且</strong> 恐慌 ≥75</td>
+              <td>只出现 2024-02 一段共 5 天，其后一年 +21~25%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top:12px">P30 触发时：每日计划 🚨🚨 重复提醒、盘中 30 分钟一条、前端页面顶部红色横幅。</p>
+
+      <div class="status">
+        <div class="status-head">当前状态 · 2026-08-01</div>
+        <div class="legs">
+          <div>
+            <div class="leg-name">沪深300</div>
+            <div class="leg-val">+34%</div>
+            <div class="leg-sub">4600 · 卖出区</div>
+          </div>
+          <div>
+            <div class="leg-name">创业板</div>
+            <div class="leg-val">+78%</div>
+            <div class="leg-sub">3327 · 卖出区</div>
+          </div>
+          <div>
+            <div class="leg-name">科创50</div>
+            <div class="leg-val" style="color:var(--muted)">+54%</div>
+            <div class="leg-sub">1588 · 定投照常</div>
+          </div>
+          <div>
+            <div class="leg-name">红利</div>
+            <div class="leg-val">+40%</div>
+            <div class="leg-sub">5569 · 卖出区</div>
+          </div>
+        </div>
+        <div class="status-foot">
+          四腿全在高位，但市场过热强度 <strong>H = 0</strong>（六项迹象一项未中）→ <strong>不买、不卖</strong>，只有科创50 按月定投。杠杆两信号均未触发；池内现金放货基等恐慌。
+        </div>
+      </div>
+    </section>
+
+    <section id="yield">
+      <h2><span class="num">三</span>预期收益</h2>
+      <p class="sec-note">诚实口径：历史回测非未来保证。</p>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>口径</th><th class="num">数字</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>公平窗口回测 2020–2026（四腿齐备）</td><td class="num">+9.44% · 回撤 −4.3%</td><td>价格 XIRR，顺风窗口</td></tr>
+            <tr><td>长窗参照 2015–2026（老四腿口径）</td><td class="num">+7.6% · 回撤 −9%</td><td>含 2015 顶这个最差起点</td></tr>
+            <tr><td>同现金流定投基线</td><td class="num">+4.28% · 回撤 −24%</td><td>策略超额 +3~5pp、回撤减半以上</td></tr>
+            <tr><td class="name">账户级预期</td><td class="num">年化 10–12%</td><td>价格 8–9.5% ＋股息 ~2.5pp（红利腿 5–6%）＋闲置货基 ~1pp</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top:16px"><strong>超额来源排序</strong>：① 恐慌抢买（主力）② 「下方才买」的等待纪律 ③ 分层卖不在慢牛里乱卖。</p>
+      <div class="callout">
+        指数层年化天花板约 10–12%，再往上只能靠个股账户。这是边界声明，不是保守——所有试图在指数层加码的路子（金字塔、移动止盈、动态调仓、收紧买入）都已实测证伪，见下节。
+      </div>
+    </section>
+
+    <section id="ledger">
+      <h2><span class="num">四</span>验证总账</h2>
+      <p class="sec-note">Review 的核心价值在这里：什么试过、为什么不用。判据全部在跑数前预登记，负结果入库防止重复研究。</p>
+
+      <h3>通过并上线</h3>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>验证</th><th>判据结果</th><th>关键数字</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="name">E21 中位线纪律</td><td><span class="chip chip-pass">4/4</span></td><td>XIRR 7.47% vs 定投 4.43%；下方日未来 3 年年化 +13.8% vs 上方 −1.1%</td></tr>
+            <tr><td class="name">E21 v3 创业板估值带</td><td><span class="chip chip-pass">带版有效</span></td><td>±10% 带 XIRR 10.84% → 12.42%</td></tr>
+            <tr><td class="name">E21 v4 指数族调参</td><td><span class="chip chip-pass">双段稳健</span></td><td>约 1.5 万配置试验；单段最优在留出段全灭＝过拟合实证</td></tr>
+            <tr><td class="name">E23 杠杆压测</td><td><span class="chip chip-pass">全存活</span></td><td>L=30% 全部 0 触平仓线；L=50% 历史 3/14 爆仓</td></tr>
+            <tr><td class="name">E25 卖出分层（P31）</td><td><span class="chip chip-pass">3 腿过</span></td><td>卖出 125→56 次、长牛保留 +14%；中证1000 收益条未过，维持旧卖法</td></tr>
+            <tr><td class="name">E21 v6 宽基扩容</td><td><span class="chip chip-pass">中证1000 过</span></td><td>相关性 0.782（独立 β）vs 上证50 的 0.941（冗余）</td></tr>
+            <tr><td class="name">E28 简化篮子</td><td><span class="chip chip-pass">无损失</span></td><td>新四腿 +9.44% vs 旧 +9.48%（公平窗口）</td></tr>
+            <tr><td class="name">数据工程</td><td><span class="chip chip-pass">零缺口</span></td><td>恐慌 2015–2026 共 2813 天：2015 股灾 100、2016 熔断 100、2018 底 94.7、2020 疫情 90.3、2022 上海 92.6、2024-02 微盘 78.3、2025 关税 87</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>证伪入库</h3>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>想法</th><th>验证</th><th>为什么不用</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="name">顶部机械信号</td><td><span class="chip chip-fail">三连败</span></td><td>高价×贪婪在慢牛反复误报（2015-02 提前真顶 4 个月、其后还涨 36%）；两融比在崩盘底反向飙升＝结构性失效</td></tr>
+            <tr><td class="name">点差均衡锚</td><td><span class="chip chip-fail">E20</span></td><td>全历史中位数 1148 而非 500–550；点差极端后是动量不是回归</td></tr>
+            <tr><td class="name">金字塔加仓</td><td><span class="chip chip-fail">0/9</span></td><td>弹药被前移到更浅、更贵的位置</td></tr>
+            <tr><td class="name">移动止盈／动量倾斜／弹药循环</td><td><span class="chip chip-fail">V3/V4/V1</span></td><td>泡沫段回撤恶化／现金灌给贵指数／弹药提前打光</td></tr>
+            <tr><td class="name">跨腿动态资金分配</td><td><span class="chip chip-fail">8 方案</span></td><td>三批独立设计同向失败：提高投入比＝用浅折扣早买换深折扣弹药，恒为负；「最便宜的腿」往往是长弱腿</td></tr>
+            <tr><td class="name">收紧买入条件</td><td><span class="chip chip-fail">四连败</span></td><td>收益来自「窗口开了就在场」，收紧＝错过窗口</td></tr>
+            <tr><td class="name">MA60 择时</td><td><span class="chip chip-fail">四连败</span></td><td>A 股均值回归域鞭打太多（144 次）；唯一幸存变体是 E9 v2 条件化</td></tr>
+            <tr><td class="name">科创50 锚策略</td><td><span class="chip chip-fail">三配置</span></td><td>六年史全部跑输定投 5–9pp → 改定投＋恐慌抢买</td></tr>
+            <tr><td class="name">「越恐慌越重仓」</td><td><span class="chip chip-fail">E17 ①</span></td><td>85+ 前瞻并不优于 75–80，仓位不随恐慌深浅加码</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>开放项</h3>
+      <ul>
+        <li><strong>E26 红利估值锚</strong>（PB／股息率替代价格锚）——等你的银行红利识别材料。</li>
+        <li><strong>E9 v2 趋势市 MA60 卖点</strong>——唯一可能的「牛市尾部大额了结」增强，判据已登记。</li>
+        <li><strong>E16 v2 国家队 500 亿档</strong>——等 ≥2 个样本外触发。</li>
+        <li><strong>P30／P28 后置复核</strong>——每次真实触发记入复盘，累计 ≥2 次后复核前瞻表现。</li>
+        <li>陈老师《数据反常，股市见顶前的征兆》尚未入库——投喂后可补评机构仓位口径。</li>
+      </ul>
+    </section>
+
+    <section id="notify">
+      <h2><span class="num">五</span>通知与端面</h2>
+      <p class="sec-note">信号怎么到你手上。</p>
+      <ul>
+        <li><strong>每日计划</strong>（issue #9／前端计划页）：指数贵贱行（双锚）、宽基四腿状态行、分层卖出纪律行、P30 杠杆信号常驻行（触发时 🚨🚨 每日重复）、P28 仅触发时出现。</li>
+        <li><strong>盘中</strong>（issue #3 盯盘预警）：恐慌 ≥75 当天转 5 分钟密控＋抄底窗口提醒；P30 共振时 30 分钟一条反复提醒。</li>
+        <li><strong>前端 Overview</strong>：杠杆信号常驻卡（距中位线／恐慌值／P28 计数）＋触发时页面顶部红色横幅；恐慌仪表盘、<span class="chip chip-none">/invest/leverage</span> 接口。</li>
+      </ul>
+    </section>
+
+    <section id="misc">
+      <h2><span class="num">六</span>同批完成的非策略项</h2>
+      <ul>
+        <li><strong>恐慌指数十年深度回填基建</strong>：tushare 流式计算、不灌生产库，恐慌曲线从 2 年补到 11.5 年。</li>
+        <li><strong>拥挤度／两融／量能 11.5 年日频数据资产</strong>：E24 v2 的原料，也是分层卖六分量中四项的来源。</li>
+        <li><strong>三仓九项安全修复上线</strong>：/invest 接口收敛 admin、登录密码日志删除、CORS 白名单、鉴权中间件重写（过程中发现平台鉴权从未真正生效的深层缺陷）、持仓 CSV 移出版本库、免责声明移动端渲染等。</li>
+      </ul>
+      <div class="callout">
+        <strong>待你决策的遗留项</strong>：git 历史重写（旧持仓快照仍在历史 commit 里）、RDS 自动备份与两业务凭证拆分、SLS 存量日志清理＋用户改密码、主站非 invest 端点的收口盘点。
+      </div>
+    </section>
+
+  </main>
+
+  <div class="foot">
+    invest-model · docs/broad_index_strategy.md ｜ 全部规则为提示层，执行始终手动，系统不做自动交易。<br>
+    仅供个人研究，不构成投资建议。
+  </div>
+
+</div>
