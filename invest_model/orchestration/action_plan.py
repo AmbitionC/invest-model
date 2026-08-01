@@ -379,15 +379,16 @@ def _p31_sell_hint(loop: ClosedLoop, dt: str) -> str | None:
 
 
 _BROAD_LEGS = [
-    # (名称, 基底CSV, 列, DB代码, ETF, 买规则, 卖规则)
+    # (名称, 基底CSV, 列, DB代码, ETF, 买规则, 卖规则)——E28 简化篮子（owner 2026-08-01：
+    # 只做沪深300/创业板/科创50/红利；中证500/1000 配置记档保留可随时恢复）
     ("沪深300", "index_dump_000300_SH.csv", "close", "000300.SH", "510300",
      lambda c, m, r: c < m, "＜全量中位线（周频·池20%）", lambda c, m, r: c > m, "＞中位线（P31 分层）"),
     ("创业板", "spread_full_history.csv", "chinext", "399006.SZ", "159915",
      lambda c, m, r: c < m * 0.90, "＜中位线−10%带（周频·池20%）", lambda c, m, r: c > m * 1.10, "＞中位线+10%带（P31 分层）"),
-    ("中证500", "index_dump_000905_SH.csv", "close", "000905.SH", "510500",
-     lambda c, m, r: r is not None and c < r * 0.85, "＜滚动5年×0.85（月频·池50%）", lambda c, m, r: r is not None and c > r * 1.10, "＞滚动5年×1.10（P31 分层）"),
-    ("中证1000", "index_dump_000852_SH.csv", "close", "000852.SH", "512100",
-     lambda c, m, r: c < m, "＜全量中位线（周频·池20%）", lambda c, m, r: c > m, "＞中位线（月5%）"),
+    ("科创50", "index_dump_000688_SH.csv", "close", "000688.SH", "588000",
+     lambda c, m, r: False, "月度定投+恐慌抢买（无锚·E21v7 锚策略证伪）", lambda c, m, r: False, "长持不设卖出"),
+    ("红利", "index_dump_000922_CSI.csv", "close", "000922.CSI", "515080",
+     lambda c, m, r: c < m, "＜全量中位线（周频·池20%·临时价格锚，E26 估值锚待验）", lambda c, m, r: c > m, "＞中位线（P31 分层）"),
 ]
 
 
@@ -420,8 +421,7 @@ def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
         return None
     return ("宽基账户（P27 v2·独立决策·四腿）：" + " ｜ ".join(rows)
             + "。买入：" + "；".join(f"{n}{bt}" for n, _, _, _, _, _, bt, _, _ in _BROAD_LEGS)
-            + "；恐慌≥75 任意腿抢买池 50%。科创50 不配锚策略（E21 v7：六年史三配置均跑输定投，"
-              "如需敞口用小额定投）")
+            + "；恐慌≥75 任意腿抢买池 50%；月度入金四腿各 25%、池内现金放货基")
 
 
 def _hs300_hist(loop: ClosedLoop, dt: str) -> pd.DataFrame | None:
