@@ -540,6 +540,21 @@ fear_intraday = Table(
     _created_at(),
 )
 
+# 杠杆信号状态（P28 深危机窗 + P30 AND 共振·低价×恐慌）：每计划日/盘中触发时 upsert，
+# 供 FaaS API 与前端强透出。提示-only：本表只描述状态，系统零自动交易。
+leverage_signal = Table(
+    "leverage_signal", metadata,
+    Column("trade_date", String(8), primary_key=True),
+    Column("snapshot_ts", String(19), primary_key=True),  # 北京时间；EOD 行固定 'EOD'
+    Column("and_active", Integer),                         # P30：低价×恐慌≥75 共振
+    Column("p28_count", Integer),                          # P28：三信号命中数（≥2=窗口开）
+    Column("close", Numeric(12, 4)),                       # 沪深300 现价/收盘
+    Column("median", Numeric(12, 4)),                      # 全历史 expanding 中位线
+    Column("fear", Numeric(6, 2)),
+    Column("detail", Text),                                # json 明细（信号文字/规则）
+    _created_at(),
+)
+
 # ── 套利模块（arbitrage）表 ──────────────────────────────────
 # 说明：套利与交易是同一资金池的一体两面。以下表全部按 (code|id, trade_date) /
 # version 命名空间落库，回测/复盘/看板复用既有骨架。数据缺失时对应 sleeve 预算
