@@ -374,8 +374,8 @@ def _p31_sell_hint(loop: ClosedLoop, dt: str) -> str | None:
     else:
         act = "本月不卖＝上方但强度低、防慢牛 FOMO"
     return (f"卖出纪律（P31 分层·E25 过关）：相对高位强度 H={st['H']}/{st['avail']}{na_txt}"
-            f"（命中：{on}）→ {act}。不预测顶部、只调节奏；十一年回测：卖出次数 125→56、"
-            f"长牛保留 +14%、收益不降")
+            f"（命中：{on}）→ {act}。适用腿：沪深300/创业板/中证500（中证1000 维持月5%·E25①未过）。"
+            f"不预测顶部、只调节奏；十一年联合回测：组合 XIRR +7.59%/回撤 −7.9% vs 定投 +4.28%/−24.0%")
 
 
 _BROAD_LEGS = [
@@ -383,9 +383,9 @@ _BROAD_LEGS = [
     ("沪深300", "index_dump_000300_SH.csv", "close", "000300.SH", "510300",
      lambda c, m, r: c < m, "＜全量中位线（周频·池20%）", lambda c, m, r: c > m, "＞中位线（P31 分层）"),
     ("创业板", "spread_full_history.csv", "chinext", "399006.SZ", "159915",
-     lambda c, m, r: c < m * 0.90, "＜中位线−10%带（周频·池20%）", lambda c, m, r: c > m * 1.10, "＞中位线+10%带（月5%）"),
+     lambda c, m, r: c < m * 0.90, "＜中位线−10%带（周频·池20%）", lambda c, m, r: c > m * 1.10, "＞中位线+10%带（P31 分层）"),
     ("中证500", "index_dump_000905_SH.csv", "close", "000905.SH", "510500",
-     lambda c, m, r: r is not None and c < r * 0.85, "＜滚动5年×0.85（月频·池50%）", lambda c, m, r: r is not None and c > r * 1.10, "＞滚动5年×1.10（月5%）"),
+     lambda c, m, r: r is not None and c < r * 0.85, "＜滚动5年×0.85（月频·池50%）", lambda c, m, r: r is not None and c > r * 1.10, "＞滚动5年×1.10（P31 分层）"),
     ("中证1000", "index_dump_000852_SH.csv", "close", "000852.SH", "512100",
      lambda c, m, r: c < m, "＜全量中位线（周频·池20%）", lambda c, m, r: c > m, "＞中位线（月5%）"),
 ]
