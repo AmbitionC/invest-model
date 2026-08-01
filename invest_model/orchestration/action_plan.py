@@ -259,6 +259,171 @@ def _hs300_median_hint(loop: ClosedLoop, dt: str) -> str | None:
 _BASE_SLEEVE_CODES = ("510300.SH",)   # P27 指数底仓标的：沪深300ETF
 
 
+def _index_hist_by(loop: ClosedLoop, dt: str, csv_name: str, db_code: str,
+                   col: str = "close") -> pd.Series | None:
+    """通用：指数全历史收盘（静态基底 CSV + index_daily 增量），截至 dt。P27 v2 多腿共用。"""
+    from pathlib import Path
+    base = Path(__file__).resolve().parents[2] / "results" / csv_name
+    if not base.exists():
+        return None
+    hist = pd.read_csv(base, dtype={"trade_date": str})[["trade_date", col]].rename(
+        columns={col: "close"})
+    hist["close"] = pd.to_numeric(hist["close"], errors="coerce")
+    hist = hist.dropna()
+    try:
+        tail = loop.repo.read_sql(
+            "SELECT trade_date, close FROM index_daily WHERE code=:c AND trade_date>:s "
+            "ORDER BY trade_date", {"c": db_code, "s": str(hist["trade_date"].max())})
+        if not tail.empty:
+            tail["close"] = pd.to_numeric(tail["close"], errors="coerce")
+            hist = pd.concat([hist, tail.dropna()], ignore_index=True)
+    except Exception:  # noqa: BLE001 — 无增量不阻断（基底本身够用）
+        pass
+    hist = hist[hist["trade_date"] <= str(dt)].reset_index(drop=True)
+    return hist.set_index("trade_date")["close"] if len(hist) >= 500 else None
+
+
+def _pct_rank_last(v: pd.Series, w: int = 250) -> float | None:
+    """最新值在自身近 w 日中的分位（P31 分量口径，与 E25 回测一致）。"""
+    s = pd.to_numeric(v, errors="coerce").dropna()
+    if len(s) < w:
+        return None
+    win = s.tail(w).to_numpy(dtype=float)
+    return float((win[-1] >= win).mean())
+
+
+def _high_strength(loop: ClosedLoop, dt: str) -> dict | None:
+    """P31 相对高位强度分 H（0-6，E25 双指数过关）：卖出节奏调节器、非顶部预测。
+
+    六分量（判据写死）：H1 MA60 偏离度分位≥90 / H2 创业板÷上证比值分位≥90 /
+    H3 全市场成交额分位≥90 / H4 两融比分位≥90 / H5 价格>滚动5年中位×1.15 / H6 恐慌≤25。
+    数据缺失的分量记 NA 不计入（avail 显示可用分量数），失败静默。
+    """
+    hs = _index_hist_by(loop, dt, "index_dump_000300_SH.csv", "000300.SH")
+    if hs is None:
+        return None
+    c = hs.to_numpy(dtype=float)
+    parts: dict[str, bool | None] = {}
+    ma60 = pd.Series(c).rolling(60).mean()
+    dev = pd.Series(c) / ma60 - 1
+    p = _pct_rank_last(dev)
+    parts["MA60偏离"] = (p >= 0.9) if p is not None else None
+    try:
+        sse = _index_hist_by(loop, dt, "spread_full_history.csv", "000001.SH", col="sse")
+        cnx = _index_hist_by(loop, dt, "spread_full_history.csv", "399006.SZ", col="chinext")
+        if sse is not None and cnx is not None:
+            ratio = (cnx / sse).dropna()
+            p = _pct_rank_last(ratio)
+            parts["风格偏离"] = (p >= 0.9) if p is not None else None
+        else:
+            parts["风格偏离"] = None
+    except Exception:  # noqa: BLE001
+        parts["风格偏离"] = None
+    try:
+        amt = loop.repo.read_sql(
+            "SELECT trade_date, SUM(amount) a FROM stock_daily WHERE trade_date<=:d "
+            "GROUP BY trade_date ORDER BY trade_date DESC LIMIT 250", {"d": str(dt)})
+        p = _pct_rank_last(amt.sort_values("trade_date")["a"]) if len(amt) >= 250 else None
+        parts["量能"] = (p >= 0.9) if p is not None else None
+    except Exception:  # noqa: BLE001
+        parts["量能"] = None
+    try:
+        from pathlib import Path
+        cwp = Path(__file__).resolve().parents[2] / "results" / "crowding_daily.csv"
+        if cwp.exists():
+            cw = pd.read_csv(cwp, dtype={"trade_date": str})
+            cw = cw[cw["trade_date"] <= str(dt)]
+            # 基底过陈（>10 交易日未更新）该分量记 NA，防拿旧两融数据打分
+            if len(cw) >= 250 and str(dt) <= (pd.Timestamp(cw["trade_date"].max())
+                                              + pd.Timedelta(days=15)).strftime("%Y%m%d"):
+                p = _pct_rank_last(cw["margin_ratio"])
+                parts["两融比"] = (p >= 0.9) if p is not None else None
+            else:
+                parts["两融比"] = None
+        else:
+            parts["两融比"] = None
+    except Exception:  # noqa: BLE001
+        parts["两融比"] = None
+    r1250 = float(pd.Series(c[-1250:]).median()) if len(c) >= 1250 else None
+    parts["价格档"] = (c[-1] > r1250 * 1.15) if r1250 else None
+    fear = _fear_score(loop, dt)
+    parts["贪婪"] = (fear <= 25) if fear is not None else None
+    hit = sum(1 for v in parts.values() if v is True)
+    avail = sum(1 for v in parts.values() if v is not None)
+    return {"H": hit, "avail": avail, "parts": parts}
+
+
+def _p31_sell_hint(loop: ClosedLoop, dt: str) -> str | None:
+    """P31 卖出分层（E25 过关替换旧'上方月卖5%'）：H≥4 月卖10% / 2-3 月卖5% / ≤1 不卖。"""
+    hs = _index_hist_by(loop, dt, "index_dump_000300_SH.csv", "000300.SH")
+    if hs is None:
+        return None
+    c = hs.to_numpy(dtype=float)
+    if c[-1] < float(pd.Series(c).median()):
+        return None                              # 下方只买不卖，分层不适用
+    st = _high_strength(loop, dt)
+    if st is None:
+        return None
+    on = "、".join(k for k, v in st["parts"].items() if v is True) or "无"
+    na = [k for k, v in st["parts"].items() if v is None]
+    na_txt = f"（{'/'.join(na)} 缺数据）" if na else ""
+    if st["H"] >= 4:
+        act = "本月卖 10%＝相对高位强共振、加速兑现"
+    elif st["H"] >= 2:
+        act = "本月卖 5%＝常规兑现节奏"
+    else:
+        act = "本月不卖＝上方但强度低、防慢牛 FOMO"
+    return (f"卖出纪律（P31 分层·E25 过关）：相对高位强度 H={st['H']}/{st['avail']}{na_txt}"
+            f"（命中：{on}）→ {act}。不预测顶部、只调节奏；十一年回测：卖出次数 125→56、"
+            f"长牛保留 +14%、收益不降")
+
+
+_BROAD_LEGS = [
+    # (名称, 基底CSV, 列, DB代码, ETF, 买规则, 卖规则)
+    ("沪深300", "index_dump_000300_SH.csv", "close", "000300.SH", "510300",
+     lambda c, m, r: c < m, "＜全量中位线（周频·池20%）", lambda c, m, r: c > m, "＞中位线（P31 分层）"),
+    ("创业板", "spread_full_history.csv", "chinext", "399006.SZ", "159915",
+     lambda c, m, r: c < m * 0.90, "＜中位线−10%带（周频·池20%）", lambda c, m, r: c > m * 1.10, "＞中位线+10%带（月5%）"),
+    ("中证500", "index_dump_000905_SH.csv", "close", "000905.SH", "510500",
+     lambda c, m, r: r is not None and c < r * 0.85, "＜滚动5年×0.85（月频·池50%）", lambda c, m, r: r is not None and c > r * 1.10, "＞滚动5年×1.10（月5%）"),
+    ("中证1000", "index_dump_000852_SH.csv", "close", "000852.SH", "512100",
+     lambda c, m, r: c < m, "＜全量中位线（周频·池20%）", lambda c, m, r: c > m, "＞中位线（月5%）"),
+]
+
+
+def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
+    """P27 v2：独立宽基账户·四腿窗口状态（owner 2026-08-01 拍板：废除 25% 总资产目标、
+    两账户独立决策、多指数配置）。各腿独立触发；恐慌≥75 时任何腿均可抢买池 50%。"""
+    rows = []
+    fear = _fear_score(loop, dt)
+    for name, csvn, col, code, etf, fbuy, buy_txt, fsell, sell_txt in _BROAD_LEGS:
+        try:
+            s = _index_hist_by(loop, dt, csvn, code, col=col)
+            if s is None:
+                continue
+            c = s.to_numpy(dtype=float)
+            last, med = float(c[-1]), float(pd.Series(c).median())
+            r1250 = float(pd.Series(c[-1250:]).median()) if len(c) >= 1250 else None
+            panic = fear is not None and fear >= 75
+            if fbuy(last, med, r1250) or panic:
+                why = "恐慌抢买窗" if (panic and not fbuy(last, med, r1250)) else "买入窗开"
+                state = f"🟢{why}"
+            elif fsell(last, med, r1250):
+                state = "🔴卖出区"
+            else:
+                state = "⚪持有区"
+            anchor = med if "中位线" in buy_txt else (r1250 or med)
+            rows.append(f"{name}({etf}) {last:.0f} 距锚{last / anchor - 1:+.0%} {state}")
+        except Exception:  # noqa: BLE001
+            continue
+    if not rows:
+        return None
+    return ("宽基账户（P27 v2·独立决策·四腿）：" + " ｜ ".join(rows)
+            + "。买入：" + "；".join(f"{n}{bt}" for n, _, _, _, _, _, bt, _, _ in _BROAD_LEGS)
+            + "；恐慌≥75 任意腿抢买池 50%。科创50 不配锚策略（E21 v7：六年史三配置均跑输定投，"
+              "如需敞口用小额定投）")
+
+
 def _hs300_hist(loop: ClosedLoop, dt: str) -> pd.DataFrame | None:
     """P26/P27/P28 共用：沪深300 全历史收盘（静态基底 CSV + index_daily 增量），截至 dt。"""
     from pathlib import Path
@@ -891,11 +1056,19 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             hints.append(_p26)
     except Exception:  # noqa: BLE001
         pass
+    # P31 卖出分层（E25 双指数过关·2026-08-01）：相对高位强度 H 调卖出节奏，替换旧"上方月卖5%"。
+    try:
+        _p31 = _p31_sell_hint(loop, dt)
+        if _p31:
+            hints.append(_p31)
+    except Exception:  # noqa: BLE001
+        pass
     # P27 指数底仓提示行（owner 2026-07-30 拍板：五层能力圈一二层直接进系统）：
     # 底仓＝沪深300ETF，目标占比 BASE_SLEEVE_TARGET（默认25%）；建仓窗口只认两个已验证信号
     # （P26 中位线下方 / E17 恐慌≥75），上方不追——执行始终由 owner 手动。
+    # P27 v2（2026-08-01 owner 拍板）：独立宽基账户四腿窗口状态取代旧"25% 底仓目标"行。
     try:
-        _p27 = _base_sleeve_hint(loop, dt, mv, equity)
+        _p27 = _broad_legs_hint(loop, dt)
         if _p27:
             hints.append(_p27)
     except Exception:  # noqa: BLE001
