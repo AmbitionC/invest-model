@@ -283,99 +283,25 @@ def _index_hist_by(loop: ClosedLoop, dt: str, csv_name: str, db_code: str,
     return hist.set_index("trade_date")["close"] if len(hist) >= 500 else None
 
 
-def _pct_rank_last(v: pd.Series, w: int = 250) -> float | None:
-    """最新值在自身近 w 日中的分位（P31 分量口径，与 E25 回测一致）。"""
-    s = pd.to_numeric(v, errors="coerce").dropna()
-    if len(s) < w:
-        return None
-    win = s.tail(w).to_numpy(dtype=float)
-    return float((win[-1] >= win).mean())
+def _p31_sell_hint(loop: ClosedLoop, dt: str) -> str | None:
+    """卖出纪律（2026-08-02 owner 拍板：删除 H 强度分层，回归无条件月卖 5%）。
 
-
-def _high_strength(loop: ClosedLoop, dt: str) -> dict | None:
-    """P31 相对高位强度分 H（0-6，E25 双指数过关）：卖出节奏调节器、非顶部预测。
-
-    六分量（判据写死）：H1 MA60 偏离度分位≥90 / H2 创业板÷上证比值分位≥90 /
-    H3 全市场成交额分位≥90 / H4 两融比分位≥90 / H5 价格>滚动5年中位×1.15 / H6 恐慌≤25。
-    数据缺失的分量记 NA 不计入（avail 显示可用分量数），失败静默。
+    E30 红队三条独立证据证伪 H 分层的收益主张：无条件卖 5% 在两种资金口径下全面 ≥ H 分层；
+    随机打乱 H（N=300）后真值年化落在打乱分布第 4 百分位、夏普第 52 百分位（噪声位）；
+    bootstrap（B=2000）冠军为 flat5/flat10。定义无关上界：卖 5% 与卖 10% 夏普同为 0.61、
+    年化仅差 0.45pp ⇒ 任何在两档间切换的规则贡献上限 0.45pp。
+    **卖出机制本身保留**——在锚上方持续减仓是全套最大单一贡献（回撤 −50%→−22%）。
     """
     hs = _index_hist_by(loop, dt, "index_dump_000300_SH.csv", "000300.SH")
     if hs is None:
         return None
     c = hs.to_numpy(dtype=float)
-    parts: dict[str, bool | None] = {}
-    ma60 = pd.Series(c).rolling(60).mean()
-    dev = pd.Series(c) / ma60 - 1
-    p = _pct_rank_last(dev)
-    parts["MA60偏离"] = (p >= 0.9) if p is not None else None
-    try:
-        sse = _index_hist_by(loop, dt, "spread_full_history.csv", "000001.SH", col="sse")
-        cnx = _index_hist_by(loop, dt, "spread_full_history.csv", "399006.SZ", col="chinext")
-        if sse is not None and cnx is not None:
-            ratio = (cnx / sse).dropna()
-            p = _pct_rank_last(ratio)
-            parts["风格偏离"] = (p >= 0.9) if p is not None else None
-        else:
-            parts["风格偏离"] = None
-    except Exception:  # noqa: BLE001
-        parts["风格偏离"] = None
-    try:
-        amt = loop.repo.read_sql(
-            "SELECT trade_date, SUM(amount) a FROM stock_daily WHERE trade_date<=:d "
-            "GROUP BY trade_date ORDER BY trade_date DESC LIMIT 250", {"d": str(dt)})
-        p = _pct_rank_last(amt.sort_values("trade_date")["a"]) if len(amt) >= 250 else None
-        parts["量能"] = (p >= 0.9) if p is not None else None
-    except Exception:  # noqa: BLE001
-        parts["量能"] = None
-    try:
-        from pathlib import Path
-        cwp = Path(__file__).resolve().parents[2] / "results" / "crowding_daily.csv"
-        if cwp.exists():
-            cw = pd.read_csv(cwp, dtype={"trade_date": str})
-            cw = cw[cw["trade_date"] <= str(dt)]
-            # 基底过陈（>10 交易日未更新）该分量记 NA，防拿旧两融数据打分
-            if len(cw) >= 250 and str(dt) <= (pd.Timestamp(cw["trade_date"].max())
-                                              + pd.Timedelta(days=15)).strftime("%Y%m%d"):
-                p = _pct_rank_last(cw["margin_ratio"])
-                parts["两融比"] = (p >= 0.9) if p is not None else None
-            else:
-                parts["两融比"] = None
-        else:
-            parts["两融比"] = None
-    except Exception:  # noqa: BLE001
-        parts["两融比"] = None
-    r1250 = float(pd.Series(c[-1250:]).median()) if len(c) >= 1250 else None
-    parts["价格档"] = (c[-1] > r1250 * 1.15) if r1250 else None
-    fear = _fear_score(loop, dt)
-    parts["贪婪"] = (fear <= 25) if fear is not None else None
-    hit = sum(1 for v in parts.values() if v is True)
-    avail = sum(1 for v in parts.values() if v is not None)
-    return {"H": hit, "avail": avail, "parts": parts}
-
-
-def _p31_sell_hint(loop: ClosedLoop, dt: str) -> str | None:
-    """P31 卖出分层（E25 过关替换旧'上方月卖5%'）：H≥4 月卖10% / 2-3 月卖5% / ≤1 不卖。"""
-    hs = _index_hist_by(loop, dt, "index_dump_000300_SH.csv", "000300.SH")
-    if hs is None:
-        return None
-    c = hs.to_numpy(dtype=float)
-    if c[-1] < float(pd.Series(c).median()):
-        return None                              # 下方只买不卖，分层不适用
-    st = _high_strength(loop, dt)
-    if st is None:
-        return None
-    on = "、".join(k for k, v in st["parts"].items() if v is True) or "无"
-    na = [k for k, v in st["parts"].items() if v is None]
-    na_txt = f"（{'/'.join(na)} 缺数据）" if na else ""
-    if st["H"] >= 4:
-        act = "本月卖 10%＝相对高位强共振、加速兑现"
-    elif st["H"] >= 2:
-        act = "本月卖 5%＝常规兑现节奏"
-    else:
-        act = "本月不卖＝上方但强度低、防慢牛 FOMO"
-    return (f"卖出纪律（P31 分层·E25 过关）：相对高位强度 H={st['H']}/{st['avail']}{na_txt}"
-            f"（命中：{on}）→ {act}。适用腿：沪深300/创业板/中证500（中证1000 维持月5%·E25①未过）。"
-            f"不预测顶部、只调节奏；十一年联合回测：组合 XIRR +7.59%/回撤 −7.9% vs 定投 +4.28%/−24.0%")
+    med = float(pd.Series(c).median())
+    if c[-1] < med:
+        return None                              # 下方只买不卖
+    return (f"卖出纪律：沪深300 {c[-1]:.0f} 处中位线 {med:.0f} 上方（{c[-1] / med - 1:+.1%}）"
+            f"＝各腿在各自卖出线上方按月减 5%（无条件、不看市场情绪强度）。"
+            f"E30 红队已证伪按强度分层的收益主张，规则回归简单；卖出机制本身是回撤控制的主要来源")
 
 
 _BROAD_LEGS = [
@@ -386,7 +312,8 @@ _BROAD_LEGS = [
     ("创业板", "spread_full_history.csv", "chinext", "399006.SZ", "159915",
      lambda c, m, r: c < m * 0.90, "＜中位线−10%带（周频·池20%）", lambda c, m, r: c > m * 1.10, "＞中位线+10%带（P31 分层）"),
     ("科创50", "index_dump_000688_SH.csv", "close", "000688.SH", "588000",
-     lambda c, m, r: False, "月度定投+恐慌抢买（无锚·E21v7 锚策略证伪）", lambda c, m, r: False, "长持不设卖出"),
+     lambda c, m, r: False, "深回撤阶梯 L50（距全历史峰 −50/−55/−60/−65 四档，各档一轮只买一次，"
+     "投当前现金 30/35/40/50%）+ 恐慌抢买", lambda c, m, r: False, "长持不设卖出"),
     ("红利", "index_dump_000922_CSI.csv", "close", "000922.CSI", "515080",
      lambda c, m, r: c < m, "＜全量中位线（周频·池20%·临时价格锚，E26 估值锚待验）", lambda c, m, r: c > m, "＞中位线（P31 分层）"),
 ]
