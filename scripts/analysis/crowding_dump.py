@@ -29,6 +29,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from invest_model.sources.tushare_client import TushareClient  # noqa: E402
 
 DUAL_PREFIX = ("300", "301", "688", "689")  # 创业板 + 科创板
+_RETRY = 3          # 单接口重试轮数（镜像半开连接/瞬时空返回）
+_COOLDOWN = 20      # 每轮之间静默秒数
+
+
+def _retry(fn, what: str):
+    """镜像偶发空返回/超时时重试；全部失败返回 None 由调用方按缺口处理。"""
+    last = None
+    for k in range(_RETRY):
+        try:
+            df = fn()
+            if df is not None and not df.empty:
+                return df
+            last = "空返回"
+        except Exception as e:  # noqa: BLE001
+            last = repr(e)[:80]
+        if k < _RETRY - 1:
+            time.sleep(_COOLDOWN)
+    print(f"  · {what} 连续 {_RETRY} 轮失败/空：{last}")
+    return None
 
 
 def main() -> None:
@@ -55,21 +74,26 @@ def main() -> None:
     print(f"目标 {len(days)} 交易日，待取 {len(todo)} 天（已有 {len(have)} 天跳过）")
 
     t0 = time.time()
+    empty_days: list[str] = []
     for i, d in enumerate(todo, 1):
         try:
-            daily = cli.get_daily_bulk(d)
+            daily = _retry(lambda: cli.get_daily_bulk(d), f"daily {d}")
             if daily is None or daily.empty:
+                # 静默 continue 会让缺口在多轮续跑里永远看不见（2023-11-29~2024-01-17
+                # 34 天缺口就是这么攒出来的）：显式记录，收尾时汇总打印。
+                empty_days.append(d)
+                print(f"  ⚠ {d} daily 返回空（已重试 {_RETRY} 轮），记入缺口清单")
                 continue
             amt = pd.to_numeric(daily["amount"], errors="coerce")  # 千元
             total_amt = float(amt.sum()) / 1e5                     # → 亿元
             dual = daily["code"].astype(str).str.startswith(DUAL_PREFIX)
             dual_amt = float(amt[dual].sum()) / 1e5
 
-            basic = cli.get_daily_basic(d)
+            basic = _retry(lambda: cli.get_daily_basic(d), f"daily_basic {d}")
             circ_mv = float(pd.to_numeric(basic["circ_mv"], errors="coerce").sum()) / 1e4 \
                 if basic is not None and not basic.empty else float("nan")  # 万元→亿元
 
-            mg = cli.get_margin(d)
+            mg = _retry(lambda: cli.get_margin(d), f"margin {d}")
             rzye = float(pd.to_numeric(mg["rzye"], errors="coerce").sum()) / 1e8 \
                 if mg is not None and not mg.empty else float("nan")        # 元→亿元
 
@@ -91,6 +115,11 @@ def main() -> None:
 
     pd.DataFrame(rows).sort_values("trade_date").to_csv(out, index=False)
     print(f"✓ 完成：{len(rows)} 行 → {out}")
+    if empty_days:
+        print(f"⚠ 数据源缺口 {len(empty_days)} 天（重试后仍空，非本脚本可修复）："
+              f"{empty_days[0]} ~ {empty_days[-1]}")
+        for d in empty_days:
+            print(f"    {d}")
 
 
 if __name__ == "__main__":
