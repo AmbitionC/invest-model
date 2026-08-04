@@ -69,7 +69,7 @@ def run_leg(d, tr, px, fmap, nm, d0, d1, mode, cash0, shares0=0.0):
     cash, shares = float(cash0), float(shares0)
     last, pend, trades = -999, [], []
     armed, in_ep = np.ones(4, bool), False
-    curve = []
+    curve, mv_s, cash_s = [], [], []
     for i in range(i0, i1):
         ci, p = float(c[i]), float(px[i])
         if i > i0:
@@ -119,9 +119,12 @@ def run_leg(d, tr, px, fmap, nm, d0, d1, mode, cash0, shares0=0.0):
         for k, fr, why in sig:
             pend.append((k, fr, min(i + 1, i1 - 1), why))
         curve.append(cash + shares * p)
+        mv_s.append(shares * p)
+        cash_s.append(cash)
     return dict(cash=cash, shares=shares, px_end=float(px[i1 - 1]),
                 value=cash + shares * float(px[i1 - 1]), trades=trades,
-                curve=np.array(curve), dates=dates[i0:i1],
+                curve=np.array(curve), mv=np.array(mv_s), cashser=np.array(cash_s),
+                dates=dates[i0:i1],
                 px0=float(px[i0]), idx0=float(c[i0]), idx1=float(c[i1 - 1]))
 
 
@@ -130,6 +133,7 @@ def main() -> None:
     ap.add_argument("--data", default="results")
     ap.add_argument("--capital", type=float, default=500_000)
     ap.add_argument("--months", type=int, default=12)
+    ap.add_argument("--start", default=None, help="显式起点 YYYYMMDD，给了就忽略 --months")
     a = ap.parse_args()
     root = Path(a.data)
 
@@ -162,7 +166,7 @@ def main() -> None:
         legs[nm] = dict(d=d, px=px, src=src)
 
     end = min(str(legs[nm]["d"].trade_date.iloc[-1]) for nm in legs)
-    start = (pd.Timestamp(end) - pd.DateOffset(months=a.months)).strftime("%Y%m%d")
+    start = a.start or (pd.Timestamp(end) - pd.DateOffset(months=a.months)).strftime("%Y%m%d")
     per = a.capital / len(legs)
 
     font_manager.fontManager.addfont(FONT)
@@ -175,7 +179,7 @@ def main() -> None:
           f"（近 {a.months} 个月）· 闲置现金 {CASH_RATE:.1%}/年")
     print("=" * 104)
 
-    for scen, hold0 in (("A 新开户（期初全现金）", False), ("B 已持有（期初已满仓）", True)):
+    for scen, hold0 in (("A 空仓起手（期初全现金）", False),):
         print(f"\n{'─' * 104}\n【情景 {scen}】\n{'─' * 104}")
         tot_v, tot_tr, rows = 0.0, [], []
         for nm in legs:
@@ -192,17 +196,21 @@ def main() -> None:
             rows.append((nm, r))
         # 组合资金曲线：各腿按共同日历对齐，缺失日用该腿最近可得值（腿间日历差 ≤2 天）
         ser = {nm: pd.Series(r["curve"], index=list(r["dates"])) for nm, r in rows}
+        mvs = {nm: pd.Series(r["mv"], index=list(r["dates"])) for nm, r in rows}
+        csh = {nm: pd.Series(r["cashser"], index=list(r["dates"])) for nm, r in rows}
         cal = sorted(set().union(*[set(x.index) for x in ser.values()]))
-        eq = []
-        for dd_ in cal:
-            v = 0.0
-            for nm in ser:
-                x = ser[nm]
-                v += float(x[dd_]) if dd_ in x.index else float(
-                    x[x.index <= dd_].iloc[-1] if (x.index <= dd_).any() else x.iloc[0])
-            eq.append(v)
-        SC[scen[0]] = dict(rows=rows, trades=tot_tr, total=tot_v,
-                           cal=cal, eq=np.array(eq))
+
+        def align(d_):
+            out = []
+            for dd_ in cal:
+                out.append(float(d_[dd_]) if dd_ in d_.index else float(
+                    d_[d_.index <= dd_].iloc[-1] if (d_.index <= dd_).any() else d_.iloc[0]))
+            return np.array(out)
+
+        SC[scen[0]] = dict(rows=rows, trades=tot_tr, total=tot_v, cal=cal,
+                           eq=sum(align(ser[nm]) for nm in ser),
+                           mv={nm: align(mvs[nm]) for nm in mvs},
+                           cash=sum(align(csh[nm]) for nm in csh))
         for nm, r in rows:
             pnl = r["value"] - per
             print(f"  {nm:8s}({ETF_NAME[nm]})  期末 {r['value']:>10,.0f} 元  "
@@ -265,15 +273,19 @@ def main() -> None:
 
 def _chart(SC, legs, start, end, per, capital, bh_total, calA, bh_eq):
     yrs = (pd.Timestamp(end) - pd.Timestamp(start)).days / 365.25
-    fig = plt.figure(figsize=(17.5, 15))
-    gs = fig.add_gridspec(3, 4, height_ratios=[0.95, 1.15, 0.85], hspace=0.34,
-                          wspace=0.26, top=0.905)
-    fig.suptitle(f"期初 {capital/10000:.0f} 万空仓起手 · 近 {yrs:.1f} 年"
-                 f"（{start[:4]}-{start[4:6]} ~ {end[:4]}-{end[4:6]}）　四腿买卖点与损益",
-                 fontsize=19, weight="bold", y=0.958)
+    A = SC["A"]
+    fig = plt.figure(figsize=(17.5, 17))
+    gs = fig.add_gridspec(4, 4, height_ratios=[0.82, 1.25, 0.95, 0.8], hspace=0.36,
+                          wspace=0.26, top=0.915)
+    fig.suptitle(f"期初 {capital/10000:.0f} 万 · 空仓起手 · {start[:4]}-{start[4:6]} ~ "
+                 f"{end[:4]}-{end[4:6]}（{yrs:.1f} 年）",
+                 fontsize=20, weight="bold", y=0.965)
 
-    tr = pd.DataFrame(SC["A"]["trades"])
+    tr = pd.DataFrame(A["trades"])
     import matplotlib.dates as mdates
+    tt = pd.to_datetime(calA)
+
+    # ── 上排：四腿价格与买卖点 ──
     for k, nm in enumerate(legs):
         ax = fig.add_subplot(gs[0, k])
         d = legs[nm]["d"]
@@ -281,20 +293,18 @@ def _chart(SC, legs, start, end, per, capital, bh_total, calA, bh_eq):
         t = pd.to_datetime(d.trade_date[m])
         ax.plot(t, d.c[m], lw=1.2, color=COL[nm])
         exp = float(d.exp[m].iloc[-1])
-        sl = exp * (1.43 if nm == "创业板" else 1.30)
-        ax.axhline(sl, color="#c0392b", ls="--", lw=1.3)
+        ax.axhline(exp * (1.43 if nm == "创业板" else 1.30), color="#c0392b", ls="--", lw=1.2)
         if nm != "科创50":
-            ax.axhline(exp * (0.90 if nm == "创业板" else 1.0), color="#1e8449", ls="--", lw=1.3)
+            ax.axhline(exp * (0.90 if nm == "创业板" else 1.0), color="#1e8449", ls="--", lw=1.2)
         sub = tr[tr["腿"] == nm] if len(tr) else pd.DataFrame()
         if len(sub):
             idx = d.set_index("trade_date")
             for _, x in sub.iterrows():
                 if x["日期"] not in idx.index:
                     continue
-                y = float(idx.loc[x["日期"], "c"])
-                buy = x["方向"] == "买"
+                y = float(idx.loc[x["日期"], "c"]); buy = x["方向"] == "买"
                 ax.scatter(pd.Timestamp(x["日期"]), y,
-                           s=(np.clip(x["金额"] / 700, 18, 190) if buy else 24),
+                           s=(np.clip(x["金额"] / 700, 20, 200) if buy else 22),
                            marker=("^" if buy else "v"),
                            color=("#1e8449" if buy else "#c0392b"), zorder=5, alpha=.85)
         nb = int((sub["方向"] == "买").sum()) if len(sub) else 0
@@ -306,49 +316,56 @@ def _chart(SC, legs, start, end, per, capital, bh_total, calA, bh_eq):
         ax.xaxis.set_major_locator(mdates.YearLocator())
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%y"))
 
-    # ① 资金曲线（这张是五年窗口的主角）
-    ax = fig.add_subplot(gs[1, :3])
-    tt = pd.to_datetime(calA)
-    ax.plot(tt, SC["A"]["eq"] / 10000, lw=2.6, color="#1e8449",
-            label=f"情景A 空仓起手  {SC['A']['total']/10000:.1f}万（{SC['A']['total']/capital-1:+.1%}）")
-    ax.plot(tt, SC["B"]["eq"] / 10000, lw=1.8, color="#2980b9",
-            label=f"情景B 满仓起手  {SC['B']['total']/10000:.1f}万（{SC['B']['total']/capital-1:+.1%}）")
-    ax.plot(tt, bh_eq / 10000, lw=1.8, color="#95a5a6", ls="--",
-            label=f"一次性买入持有  {bh_total/10000:.1f}万（{bh_total/capital-1:+.1%}）")
-    ax.axhline(capital / 10000, color="#333", ls=":", lw=1.3)
-    # 标注买入密集期
+    # ── ① 堆叠：各标的持仓市值 + 现金（总高度＝账户总值）──
+    ax = fig.add_subplot(gs[1, :])
+    names = list(legs)
+    stack = [A["mv"][nm] / 10000 for nm in names] + [A["cash"] / 10000]
+    labels = [f"{nm} 持仓" for nm in names] + ["现金（货基）"]
+    colors = [COL[nm] for nm in names] + ["#d5d8dc"]
+    ax.stackplot(tt, *stack, labels=labels, colors=colors, alpha=.92)
+    ax.plot(tt, bh_eq / 10000, lw=2.0, color="#000000", ls="--",
+            label=f"参照：一次性买入持有 {bh_total/10000:.1f}万")
+    ax.axhline(capital / 10000, color="#555", ls=":", lw=1.3)
+    ax.text(tt[-1], capital / 10000, f"本金 {capital/10000:.0f}万 ", fontsize=10.5,
+            va="bottom", ha="right", color="#555")
     if len(tr):
         b = tr[tr["方向"] == "买"]
         if len(b):
             big = b.nlargest(1, "金额").iloc[0]
             xj = pd.Timestamp(big["日期"])
-            yj = float(pd.Series(SC["A"]["eq"], index=calA)[
-                [x for x in calA if x <= big["日期"]][-1]]) / 10000
-            ax.annotate(f"{big['日期'][:4]}-{big['日期'][4:6]} 恐慌抄底\n单笔最大 {big['金额']/10000:.1f}万",
-                        xy=(xj, yj), xytext=(xj, yj - 14), fontsize=11, ha="center",
-                        arrowprops=dict(arrowstyle="->", color="#1e8449", lw=1.6),
-                        bbox=dict(fc="#eafaf1", ec="#1e8449", alpha=.95))
-    ax.set_ylabel("账户总值（万元）", fontsize=11.5)
-    ax.legend(fontsize=11.5, loc="upper left"); ax.grid(alpha=.25)
-    ax.set_title("① 资金曲线——五年窗口里，空仓起手反而是最大优势", fontsize=13.5, weight="bold")
+            ax.annotate(f"{big['日期'][:4]}-{big['日期'][4:6]} 恐慌抄底\n单笔最大 {big['金额']/10000:.2f}万",
+                        xy=(xj, capital / 10000 * 1.02),
+                        xytext=(xj - pd.Timedelta(days=520), capital / 10000 * 1.42),
+                        fontsize=11.5, ha="center",
+                        arrowprops=dict(arrowstyle="->", color="#145a32", lw=1.8),
+                        bbox=dict(fc="#eafaf1", ec="#145a32", alpha=.95))
+    ax.set_ylabel("账户总值（万元）", fontsize=12)
+    ax.legend(fontsize=10.5, loc="upper left", ncol=6, framealpha=.95,
+              bbox_to_anchor=(0, 1.0))
+    ax.grid(alpha=.2); ax.set_xlim(tt[0], tt[-1])
+    ax.set_ylim(0, max(float(A["eq"].max()), float(bh_eq.max())) / 10000 * 1.30)
+    ax.set_title(f"① 账户构成：各标的持仓市值堆叠 + 现金　"
+                 f"期末 {A['total']/10000:.1f} 万（{A['total']/capital-1:+.1%}，年化 "
+                 f"{(A['total']/capital)**(1/yrs)-1:+.1%}）",
+                 fontsize=14, weight="bold")
 
-    # ② 期末对比
-    ax = fig.add_subplot(gs[1, 3])
-    labs = ["A 空仓", "B 满仓", "买入持有"]
-    vals = [SC["A"]["total"], SC["B"]["total"], bh_total]
-    b_ = ax.bar(labs, [v / 10000 for v in vals], color=["#1e8449", "#2980b9", "#95a5a6"], width=.6)
-    ax.axhline(capital / 10000, color="#333", ls=":", lw=1.4)
-    for r_, v in zip(b_, vals):
-        ax.text(r_.get_x() + r_.get_width() / 2, v / 10000, f"{v/10000:.1f}万\n{v/capital-1:+.1%}\n"
-                f"年化{(v/capital)**(1/yrs)-1:+.1%}",
-                ha="center", va="bottom", fontsize=11, weight="bold")
-    ax.set_ylim(0, max(vals) / 10000 * 1.32); ax.grid(alpha=.22, axis="y")
-    ax.tick_params(labelsize=10)
-    ax.set_title("② 期末总值", fontsize=13.5, weight="bold")
-
-    # ③ 分年
+    # ── ② 仓位占比（百分比堆叠）──
     ax = fig.add_subplot(gs[2, :])
-    ea = pd.Series(SC["A"]["eq"], index=calA); eb = pd.Series(bh_eq, index=calA)
+    tot = A["eq"]
+    pct = [A["mv"][nm] / tot * 100 for nm in names] + [A["cash"] / tot * 100]
+    ax.stackplot(tt, *pct, labels=labels, colors=colors, alpha=.92)
+    ax.set_ylim(0, 100); ax.set_xlim(tt[0], tt[-1])
+    ax.set_ylabel("占账户比重（%）", fontsize=12)
+    inv = (1 - A["cash"] / tot) * 100
+    ax.plot(tt, inv, color="#000", lw=1.6)
+    ax.text(tt[-1], inv[-1], f"  当前投入 {inv[-1]:.0f}%", fontsize=11, va="center", weight="bold")
+    ax.grid(alpha=.2)
+    ax.set_title(f"② 仓位占比：黑线＝已投入比例（全期均值 {inv.mean():.0f}%）——"
+                 f"灰色部分是在等买点的钱", fontsize=14, weight="bold")
+
+    # ── ③ 分年 ──
+    ax = fig.add_subplot(gs[3, :])
+    ea = pd.Series(A["eq"], index=calA); eb = pd.Series(bh_eq, index=calA)
     ys, ra, rb = [], [], []
     for y in sorted({x[:4] for x in calA}):
         mm = [x for x in calA if x[:4] == y]
@@ -358,20 +375,20 @@ def _chart(SC, legs, start, end, per, capital, bh_total, calA, bh_eq):
         p0b = float(eb[eb.index < mm[0]].iloc[-1]) if (eb.index < mm[0]).any() else float(eb.iloc[0])
         ys.append(y); ra.append(float(ea[mm[-1]]) / p0a - 1); rb.append(float(eb[mm[-1]]) / p0b - 1)
     x = np.arange(len(ys)); w = 0.38
-    ax.bar(x - w/2, np.array(ra) * 100, w, color="#1e8449", label="情景A 空仓起手")
+    ax.bar(x - w/2, np.array(ra) * 100, w, color="#1e8449", label="策略（空仓起手）")
     ax.bar(x + w/2, np.array(rb) * 100, w, color="#95a5a6", label="一次性买入持有")
-    for i, (u, v) in enumerate(zip(ra, rb)):
-        ax.text(i - w/2, u*100, f"{u:+.1%}", ha="center",
-                va=("bottom" if u >= 0 else "top"), fontsize=10, weight="bold")
-        ax.text(i + w/2, v*100, f"{v:+.1%}", ha="center",
-                va=("bottom" if v >= 0 else "top"), fontsize=9.5, color="#555")
+    for i2, (u, v) in enumerate(zip(ra, rb)):
+        ax.text(i2 - w/2, u*100, f"{u:+.1%}", ha="center",
+                va=("bottom" if u >= 0 else "top"), fontsize=10.5, weight="bold")
+        ax.text(i2 + w/2, v*100, f"{v:+.1%}", ha="center",
+                va=("bottom" if v >= 0 else "top"), fontsize=10, color="#555")
     ax.axhline(0, color="#333", lw=1)
-    ax.set_xticks(x); ax.set_xticklabels(ys, fontsize=12)
-    ax.set_ylabel("当年收益（%）"); ax.legend(fontsize=11); ax.grid(alpha=.22, axis="y")
-    ax.set_title("③ 分年：策略的钱几乎全是 2024 那一年抄底赚的", fontsize=13.5, weight="bold")
+    ax.set_xticks(x); ax.set_xticklabels(ys, fontsize=12.5)
+    ax.set_ylabel("当年收益（%）"); ax.legend(fontsize=11.5); ax.grid(alpha=.22, axis="y")
+    ax.set_title("③ 分年收益", fontsize=14, weight="bold")
 
-    out = Path("results") / "pnl_5y.png"
-    fig.savefig(out, dpi=112, bbox_inches="tight")
+    out = Path("results") / f"pnl_{start}_{end}.png"
+    fig.savefig(out, dpi=110, bbox_inches="tight")
     print(f"saved {out}")
 
 
