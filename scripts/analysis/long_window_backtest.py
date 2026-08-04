@@ -36,15 +36,24 @@ RUNG, FRAC = [0.50, 0.55, 0.60, 0.65], [0.30, 0.35, 0.40, 0.50]
 LEGS = [
     ("沪深300", "hs300.csv", "close", None, None, "anchor"),
     ("创业板", "spread_full.csv", "chinext", None, None, "anchor"),
-    ("科创50", "star50.csv", "close", None, "20200601", "ladder"),   # 阶梯腿不用 expanding 锚
+    ("科创50", "star50.csv", "close", None, None, "ladder"),   # 阶梯腿不用 expanding 锚
     ("红利", "000922_csi.csv", "close", "000922_tr.csv", None, "anchor"),
 ]
 
 
 def first_tradable(df: pd.DataFrame, mode: str, fixed: str | None) -> str:
-    """策略第一个可交易日：anchor 腿 = expanding 锚预热完成日；ladder 腿沿用给定起点。"""
+    """策略第一个可交易日。
+
+    anchor 腿 = expanding 锚预热完成日（第 WARM 个交易日）。
+    ladder 腿 = **数据首日**：阶梯腿只依赖 peak=cummax，第 1 个交易日即有值、无预热要求。
+    2026-08-04 红队 F1：此前 ladder 腿硬编码 20200601，把科创50 超额从 +4.07pp 虚增到
+    +8.77pp（策略年化几乎不动 12.27→13.00，变化几乎全在买入持有 8.20%→4.23%
+    ＝把 2020 年那波涨幅从基准里切掉多少）——正是起点对齐要消除的那种伪影，只是换了条腿。
+    """
     if fixed:
         return fixed
+    if mode == "ladder":
+        return str(df.trade_date.iloc[0])
     idx = df.index[df["exp"].notna()]
     return str(df.trade_date.iloc[int(idx[0])]) if len(idx) else str(df.trade_date.iloc[0])
 
@@ -143,9 +152,26 @@ def run(df, ret, fmap, nm, d0, d1, mode, init=100.0):
     bhv = base[i0:i1]
     bhpk = np.maximum.accumulate(bhv)
     bhvol = float(pd.Series(bhv).pct_change().dropna().std() * np.sqrt(250))
-    return dict(dates=d[i0:i1], curve=v, ann=ann, vol=vol, sharpe=(ann - RF) / vol,
+    bhdd = (bhv - bhpk) / bhpk
+    dd = (v - pk) / pk
+    dts = d[i0:i1]
+    # 红队 F3：长窗回撤对比被「策略还没开始买」污染——沪深300/红利的买持 −72% 全部来自
+    # 2008，而策略当时持仓 0~4%。故并报「策略实际有仓位（≥20%）子区间」的双方回撤。
+    p = np.array(pos)
+    m = p >= 0.20
+    if m.sum() > 250:
+        vp, bp = v[m], bhv[m]
+        mdd_pos = float(((vp - np.maximum.accumulate(vp)) / np.maximum.accumulate(vp)).min())
+        bhmdd_pos = float(((bp - np.maximum.accumulate(bp)) / np.maximum.accumulate(bp)).min())
+    else:
+        mdd_pos = bhmdd_pos = float("nan")
+    return dict(dates=dts, curve=v, ann=ann, vol=vol, sharpe=(ann - RF) / vol,
                 mdd=mdd, calmar=ann / abs(mdd), yrs=yrs, nb=nb, ns=ns, npan=npan,
-                posavg=float(np.mean(pos)), bh=bh, bhmdd=float(((bhv - bhpk) / bhpk).min()), bhsharpe=(bh - RF) / bhvol if bhvol else np.nan)
+                posavg=float(np.mean(pos)), bh=bh, bhmdd=float(bhdd.min()),
+                bhsharpe=(bh - RF) / bhvol if bhvol else np.nan,
+                mdd_date=str(dts[int(dd.argmin())]), bhmdd_date=str(dts[int(bhdd.argmin())]),
+                mdd_pos=mdd_pos, bhmdd_pos=bhmdd_pos, frac_pos=float(m.mean()),
+                mdd_at_end=bool(int(dd.argmin()) >= len(dd) - 5))
 
 
 def combined(data, fmap, starts, END, sleeve_interest=True):
@@ -193,7 +219,37 @@ def combined(data, fmap, starts, END, sleeve_interest=True):
         v3 = three["curve"][idx]; pk3 = np.maximum.accumulate(v3)
         three["mdd_prestar"] = float(((v3 - pk3) / pk3).min())
         three["frac_prestar"] = len(idx) / len(cal)
-    return four, three
+
+    # ── 红队 F2：19.5 年「四腿合计」是不可实现的组合 ──────────────────────────
+    # 2007 年不存在创业板指（2010-06 才有数据）、2020 年前不存在科创50。把两条只在其
+    # 高收益时段存在的腿拼进 19.5 年窗口＝事后可得性偏差。且三腿基线自身含 27.7% 常数腿
+    # （创业板 2007-01~2012-06），同一条批评对它成立。**对外口径只用下面两个：**
+    #   ① 两腿 19.5 年（沪深300+红利，全程真实可持有）
+    #   ② 四腿共同在场窗口（各腿都已存在之后，年数短但组合真实）
+    def agg_from(names, d_start):
+        sub = [d for d in cal if d >= d_start]
+        if len(sub) < 250:
+            return None
+        tot = []
+        for d in sub:
+            v = 0.0
+            for nm in names:
+                sx = series[nm]
+                v += float(sx[d]) if d in sx.index else float(sx.iloc[-1])
+            tot.append(v)
+        v = np.array(tot); pk = np.maximum.accumulate(v)
+        n0 = float(v[0])
+        yrs = (pd.Timestamp(sub[-1]) - pd.Timestamp(sub[0])).days / 365.25
+        ann = (v[-1] / n0) ** (1 / yrs) - 1
+        vol = float(pd.Series(v).pct_change().dropna().std() * np.sqrt(250))
+        return dict(ann=ann, vol=vol, sharpe=(ann - RF) / vol,
+                    mdd=float(((v - pk) / pk).min()), yrs=yrs, curve=v, cal=sub,
+                    start=sub[0], names=list(names))
+
+    both = agg_from(["沪深300", "红利"], cal[0])                      # ① 全窗两腿
+    coexist = agg_from(list(series), max(starts.values()))             # ② 四腿共同在场
+    tri_co = agg_from(["沪深300", "创业板", "红利"], starts["创业板"])  # 三腿共同在场
+    return four, three, {"两腿全窗": both, "四腿共同在场": coexist, "三腿共同在场": tri_co}
 
 
 def main() -> None:
@@ -234,6 +290,16 @@ def main() -> None:
               f"{r['ann']:>9.2%}{r['bh']:>9.2%}{(r['ann']-r['bh'])*100:>+8.2f}"
               f"{r['sharpe']:>9.2f}{r['bhsharpe']:>9.2f}{r['mdd']:>9.1%}{r['bhmdd']:>9.1%}"
               f"{r['posavg']:>7.0%}{r['npan']:>7d}")
+    # 红队 F3：全窗回撤对比含「策略还没开始买」的伪影 —— 沪深300/红利的买持 −72% 全部
+    # 来自 2008，而策略当时持仓 0~4%。并报「策略持仓≥20% 的子区间」双方回撤才是风控读数。
+    print("\n  【回撤诚实读数】策略持仓≥20% 的子区间（剔除「策略空仓期基准自己跌」的伪影）")
+    print(f"  {'腿':8s}{'策略mdd':>9s}{'发生日':>11s}{'买持mdd':>9s}{'发生日':>11s}"
+          f"{'有仓天数占比':>13s}{'子区间策略':>11s}{'子区间买持':>11s}")
+    for nm in longs:
+        r = longs[nm]
+        tag = " ⚠未结束" if r["mdd_at_end"] else ""
+        print(f"  {nm:8s}{r['mdd']:>9.1%}{r['mdd_date']:>11s}{r['bhmdd']:>9.1%}{r['bhmdd_date']:>11s}"
+              f"{r['frac_pos']:>13.0%}{r['mdd_pos']:>11.1%}{r['bhmdd_pos']:>11.1%}{tag}")
 
     # ---------- B. 滚动十年窗口 ----------
     print("\n" + "=" * 104)
@@ -276,16 +342,23 @@ def main() -> None:
               f"｜买持为正比例 {(b > 0).mean():.0%}｜中位超额 {np.median(a - b)*100:+.2f}pp")
 
     print("\n" + "=" * 104)
-    print("C. 四腿合计（各 25 元 · 修正 sleeve 空窗期利息）与三腿诚实基线")
+    print("C. 组合口径（红队 F2：19.5 年「四腿合计」是不可实现组合，已退役为参考行）")
     print("=" * 104)
-    four, three = combined(data, fmap, starts, None)
-    print(f"  四腿合计（{four['yrs']:.1f}年）年化 {four['ann']:.2%} 波动 {four['vol']:.2%} "
-          f"夏普 {four['sharpe']:.3f} 日频回撤 {four['mdd']:.1%}")
-    print(f"  三腿基线（剔科创50）年化 {three['ann']:.2%} 波动 {three['vol']:.2%} "
-          f"夏普 {three['sharpe']:.3f} 日频回撤 {three['mdd']:.1%}")
+    four, three, alt = combined(data, fmap, starts, None)
+    print(f"  {'口径':22s}{'起点':>10s}{'年数':>6s}{'年化':>9s}{'波动':>9s}{'夏普':>8s}{'日频回撤':>10s}")
+    for k, v in alt.items():
+        if v:
+            print(f"  ✅{k:20s}{v['start']:>10s}{v['yrs']:>6.1f}{v['ann']:>9.2%}"
+                  f"{v['vol']:>9.2%}{v['sharpe']:>8.3f}{v['mdd']:>10.1%}")
+    print(f"  ⚠️{'四腿拼接（退役）':18s}{'-':>10s}{four['yrs']:>6.1f}{four['ann']:>9.2%}"
+          f"{four['vol']:>9.2%}{four['sharpe']:>8.3f}{four['mdd']:>10.1%}")
+    print(f"  ⚠️{'三腿拼接（退役）':18s}{'-':>10s}{three['yrs']:>6.1f}{three['ann']:>9.2%}"
+          f"{three['vol']:>9.2%}{three['sharpe']:>8.3f}{three['mdd']:>10.1%}")
+    print("  退役理由：2007 年不存在创业板指（2010-06 起）、2020 年前不存在科创50 ——")
+    print("  把只在其高收益时段存在的腿拼进 19.5 年窗口＝事后可得性偏差；三腿基线自身含")
     if "frac_prestar" in three:
-        print(f"  ⚠ 科创50 空窗期占全窗 {three['frac_prestar']:.1%}，该段四腿风险数字被一个常数腿稀释；"
-              f"该段三腿回撤 {three['mdd_prestar']:.1%} 才是诚实读数")
+        print(f"  27.7% 创业板常数腿，同一条批评对它成立（科创50 空窗占 {three['frac_prestar']:.1%}）。")
+    print("  **对外只用上面两个 ✅ 口径**：两腿全窗（真实可持有但少两条腿）／共同在场（组合真实但年数短）。")
 
     _charts(longs, roll, outd)
 
