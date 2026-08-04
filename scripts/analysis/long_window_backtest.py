@@ -92,6 +92,7 @@ def run(df, ret, fmap, nm, d0, d1, mode, init=100.0):
     last, pend = -999, []
     armed, in_ep = np.ones(4, bool), False
     curve, pos, nb, ns, npan = [], [], 0, 0, 0
+    trades: list[dict] = []
     for i in range(i0, i1):
         ci = float(c[i])
         if i > i0:
@@ -100,23 +101,27 @@ def run(df, ret, fmap, nm, d0, d1, mode, init=100.0):
         elif rr is None:
             nav = ci
         r = df.iloc[i]
-        for k, fr, _t in [x for x in pend if x[2] == i]:
+        for k, fr, _t, why in [x for x in pend if x[2] == i]:
             if k == "B":
                 a = cash * fr
                 if a > 0.05:
                     units += a / nav
                     cash -= a
                     nb += 1
+                    trades.append(dict(date=str(d[i]), side="买", why=why, price=ci,
+                                       amount=a, frac=fr))
             else:
                 s = units * fr
                 if s > 0:
                     cash += s * nav
                     units -= s
                     ns += 1
+                    trades.append(dict(date=str(d[i]), side="卖", why=why, price=ci,
+                                       amount=s * nav, frac=fr))
         pend = [x for x in pend if x[2] > i]
         sig, f = [], fmap.get(d[i], np.nan)
         if f == f and f >= 75 and i - last > 20 and r.r1250 == r.r1250 and ci < r.r1250:
-            sig.append(("B", 0.50))
+            sig.append(("B", 0.50, f"恐慌抢买(fear={f:.0f})"))
             npan += 1
         if f == f and f >= 75:
             last = i
@@ -128,16 +133,16 @@ def run(df, ret, fmap, nm, d0, d1, mode, init=100.0):
                 j = max([k2 for k2, th in enumerate(RUNG) if dd <= -th] or [0])
                 if armed[j] and r.we:
                     armed[j] = False
-                    sig.append(("B", FRAC[j]))
+                    sig.append(("B", FRAC[j], f"深回撤阶梯L{int(RUNG[j]*100)}(距峰{dd:+.0%})"))
             elif in_ep and dd >= -RUNG[0] * 0.5:
                 in_ep, armed[:] = False, True
         elif r.we and r.exp == r.exp and ci < r.exp * (0.90 if nm == "创业板" else 1.0):
-            sig.append(("B", 0.20))
+            sig.append(("B", 0.20, f"锚买(收盘/中位线={ci / r.exp:.2f})"))
         mul = 1.30 * 1.10 if nm == "创业板" else 1.30
         if r.me and r.exp == r.exp and ci > r.exp * mul and units > 0:
-            sig.append(("S", 0.05))
-        for k, fr in sig:
-            pend.append((k, fr, min(i + 1, i1 - 1)))
+            sig.append(("S", 0.05, f"卖出闸(收盘/中位线={ci / r.exp:.2f})"))
+        for k, fr, why in sig:
+            pend.append((k, fr, min(i + 1, i1 - 1), why))
         tv = cash + units * nav
         curve.append(tv)
         pos.append(units * nav / tv)
@@ -167,6 +172,7 @@ def run(df, ret, fmap, nm, d0, d1, mode, init=100.0):
         mdd_pos = bhmdd_pos = float("nan")
     return dict(dates=dts, curve=v, ann=ann, vol=vol, sharpe=(ann - RF) / vol,
                 mdd=mdd, calmar=ann / abs(mdd), yrs=yrs, nb=nb, ns=ns, npan=npan,
+                trades=trades, pos_series=np.array(pos),
                 posavg=float(np.mean(pos)), bh=bh, bhmdd=float(bhdd.min()),
                 bhsharpe=(bh - RF) / bhvol if bhvol else np.nan,
                 mdd_date=str(dts[int(dd.argmin())]), bhmdd_date=str(dts[int(bhdd.argmin())]),
