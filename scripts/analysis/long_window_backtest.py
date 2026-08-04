@@ -29,13 +29,24 @@ from matplotlib import font_manager  # noqa: E402
 FONT = "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"
 RF, CASH, WARM = 0.02, 0.02, 500
 RUNG, FRAC = [0.50, 0.55, 0.60, 0.65], [0.30, 0.35, 0.40, 0.50]
-# (名称, 信号CSV, 列, 全收益CSV, 可用起点=预热后, 模式)
+# (名称, 信号CSV, 列, 全收益CSV, 起点=None 表示按锚预热完成日自动对齐, 模式)
+# 2026-08-04 红队 M1：此前用硬编码起点（如 20070101），但 expanding 锚要到第 WARM=500 个
+# 交易日才可用 —— 中间那段基准全额吃到、策略一股买不了。红利腿实测那 18 个交易日全收益
+# 指数涨 +25.9%，把「跑输」虚增了约 1.2pp。**起点一律 = 策略第一个可交易日，策略与基准同起点。**
 LEGS = [
-    ("沪深300", "hs300.csv", "close", None, "20070101", "anchor"),
-    ("创业板", "spread_full.csv", "chinext", None, "20120701", "anchor"),
-    ("科创50", "star50.csv", "close", None, "20200601", "ladder"),
-    ("红利", "000922_csi.csv", "close", "000922_tr.csv", "20070101", "anchor"),
+    ("沪深300", "hs300.csv", "close", None, None, "anchor"),
+    ("创业板", "spread_full.csv", "chinext", None, None, "anchor"),
+    ("科创50", "star50.csv", "close", None, "20200601", "ladder"),   # 阶梯腿不用 expanding 锚
+    ("红利", "000922_csi.csv", "close", "000922_tr.csv", None, "anchor"),
 ]
+
+
+def first_tradable(df: pd.DataFrame, mode: str, fixed: str | None) -> str:
+    """策略第一个可交易日：anchor 腿 = expanding 锚预热完成日；ladder 腿沿用给定起点。"""
+    if fixed:
+        return fixed
+    idx = df.index[df["exp"].notna()]
+    return str(df.trade_date.iloc[int(idx[0])]) if len(idx) else str(df.trade_date.iloc[0])
 
 
 def prep(root: Path, f: str, col: str, trf: str | None) -> tuple[pd.DataFrame, pd.Series | None]:
@@ -135,6 +146,54 @@ def run(df, ret, fmap, nm, d0, d1, mode, init=100.0):
                 posavg=float(np.mean(pos)), bh=bh, bhmdd=float(((bhv - bhpk) / bhpk).min()), bhsharpe=(bh - RF) / bhvol if bhvol else np.nan)
 
 
+def combined(data, fmap, starts, END, sleeve_interest=True):
+    """四腿合计（各 25 元）。2026-08-04 红队 M5：科创50 sleeve 在开仓前的闲置利息
+    此前只计入中间净值、没带进开仓本金 ⟹ 低报 0.22pp。此处修正为带息进场。
+    同时返回「三腿诚实基线」（剔除科创50，只用三腿全程可比的区间）供风险指标对照。"""
+    series, span0 = {}, min(starts[nm] for nm in starts)
+    for nm, f, col, trf, _fx, mode in LEGS:
+        df, ret = data[nm]
+        d0 = starts[nm]
+        init = 25.0
+        if sleeve_interest and d0 > span0:
+            init = 25.0 * (1 + CASH) ** ((pd.Timestamp(d0) - pd.Timestamp(span0)).days / 365.25)
+        r = run(df, ret, fmap, nm, d0, END, mode, init=init)
+        series[nm] = pd.Series(r["curve"], index=list(r["dates"]))
+    cal = sorted(set().union(*[set(x.index) for x in series.values()]))
+
+    def agg(names):
+        tot = []
+        for d in cal:
+            v = 0.0
+            for nm in names:
+                sx = series[nm]
+                if d in sx.index:
+                    v += float(sx[d])
+                elif d < sx.index[0]:
+                    v += 25.0 * (1 + CASH) ** ((pd.Timestamp(d) - pd.Timestamp(span0)).days / 365.25)
+                else:
+                    v += float(sx.iloc[-1])
+            tot.append(v)
+        v = np.array(tot); pk = np.maximum.accumulate(v)
+        n0 = 25.0 * len(names)
+        yrs = (pd.Timestamp(cal[-1]) - pd.Timestamp(cal[0])).days / 365.25
+        ann = (v[-1] / n0) ** (1 / yrs) - 1
+        vol = float(pd.Series(v).pct_change().dropna().std() * np.sqrt(250))
+        return dict(ann=ann, vol=vol, sharpe=(ann - RF) / vol,
+                    mdd=float(((v - pk) / pk).min()), yrs=yrs, curve=v, cal=cal)
+
+    four = agg([nm for nm in series])
+    three = agg([nm for nm in series if nm != "科创50"])
+    # 三腿诚实基线：只取三腿全程可比的区间（科创50 空窗期风险数字不可用）
+    star0 = starts["科创50"]
+    idx = [i for i, d in enumerate(cal) if d < star0]
+    if idx:
+        v3 = three["curve"][idx]; pk3 = np.maximum.accumulate(v3)
+        three["mdd_prestar"] = float(((v3 - pk3) / pk3).min())
+        three["frac_prestar"] = len(idx) / len(cal)
+    return four, three
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default=".")
@@ -158,8 +217,10 @@ def main() -> None:
     print(f"{'腿':8s}{'区间':>22s}{'年数':>6s}{'策略年化':>9s}{'买持年化':>9s}{'超额':>8s}"
           f"{'策略夏普':>9s}{'买持夏普':>9s}{'策略回撤':>9s}{'买持回撤':>9s}{'均持仓':>7s}{'恐慌买':>7s}")
     longs = {}
-    for nm, f, col, trf, d0, mode in LEGS:
+    starts = {nm: first_tradable(data[nm][0], mode, fx) for nm, _, _, _, fx, mode in LEGS}
+    for nm, f, col, trf, _fx, mode in LEGS:
         df, ret = data[nm]
+        d0 = starts[nm]
         r = run(df, ret, fmap, nm, d0, END, mode)
         longs[nm] = r
         print(f"{nm:8s}{d0[:4]+'-'+d0[4:6]+'~'+END[:4]+'-'+END[4:6]:>22s}{r['yrs']:>6.1f}"
@@ -172,12 +233,13 @@ def main() -> None:
     print("B. 滚动十年窗口（按月滚动起点，每个窗口 10 年）")
     print("=" * 104)
     roll = {}
-    for nm, f, col, trf, d0, mode in LEGS:
+    for nm, f, col, trf, _fx, mode in LEGS:
         df, ret = data[nm]
+        d0 = starts[nm]
         days = df.trade_date.values
-        starts = sorted({d[:6] for d in days if d >= d0})
+        month_starts = sorted({d[:6] for d in days if d >= d0})
         rows = []
-        for s in starts:
+        for s in month_starts:
             s0 = s + "01"
             e0 = f"{int(s[:4]) + 10}{s[4:6]}28"
             if e0 > END:
@@ -191,12 +253,32 @@ def main() -> None:
             continue
         a = np.array([x[1] for x in rows])
         b = np.array([x[2] for x in rows])
-        print(f"{nm}：{len(rows)} 个十年窗口（起点 {rows[0][0]} ~ {rows[-1][0]}）")
+        span = (pd.Timestamp(rows[-1][0] + "01") - pd.Timestamp(rows[0][0] + "01")).days / 365.25
+        indep = span / 10 + 1
+        wins = [x[0] for x in rows if x[1] > x[2]]
+        blocks = 1 + sum(1 for a, b in zip(wins, wins[1:]) if
+                         (pd.Timestamp(b + "01") - pd.Timestamp(a + "01")).days > 45) if wins else 0
+        print(f"{nm}：{len(rows)} 个十年窗口（起点 {rows[0][0]} ~ {rows[-1][0]}）"
+              f"｜⚠ **不重叠独立窗口仅 {indep:.2f} 个**，胜局分布于 {blocks} 个连续段"
+              f"（{wins[0]}~{wins[-1]}）" if wins else
+              f"{nm}：{len(rows)} 个十年窗口｜⚠ 不重叠独立窗口仅 {indep:.2f} 个｜无胜局")
         print(f"    策略年化 中位 {np.median(a):+.2%}｜最差 {a.min():+.2%}（起点 {rows[int(a.argmin())][0]}）"
               f"｜最好 {a.max():+.2%}（起点 {rows[int(a.argmax())][0]}）")
         print(f"    买持年化 中位 {np.median(b):+.2%}｜最差 {b.min():+.2%}｜最好 {b.max():+.2%}")
         print(f"    跑赢买持比例 {(a > b).mean():.0%}｜策略为正比例 {(a > 0).mean():.0%}"
               f"｜买持为正比例 {(b > 0).mean():.0%}｜中位超额 {np.median(a - b)*100:+.2f}pp")
+
+    print("\n" + "=" * 104)
+    print("C. 四腿合计（各 25 元 · 修正 sleeve 空窗期利息）与三腿诚实基线")
+    print("=" * 104)
+    four, three = combined(data, fmap, starts, END)
+    print(f"  四腿合计（{four['yrs']:.1f}年）年化 {four['ann']:.2%} 波动 {four['vol']:.2%} "
+          f"夏普 {four['sharpe']:.3f} 日频回撤 {four['mdd']:.1%}")
+    print(f"  三腿基线（剔科创50）年化 {three['ann']:.2%} 波动 {three['vol']:.2%} "
+          f"夏普 {three['sharpe']:.3f} 日频回撤 {three['mdd']:.1%}")
+    if "frac_prestar" in three:
+        print(f"  ⚠ 科创50 空窗期占全窗 {three['frac_prestar']:.1%}，该段四腿风险数字被一个常数腿稀释；"
+              f"该段三腿回撤 {three['mdd_prestar']:.1%} 才是诚实读数")
 
     _charts(longs, roll, outd)
 
