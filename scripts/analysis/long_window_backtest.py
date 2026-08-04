@@ -72,6 +72,8 @@ def prep(root: Path, f: str, col: str, trf: str | None) -> tuple[pd.DataFrame, p
 
 def run(df, ret, fmap, nm, d0, d1, mode, init=100.0):
     d, c = df.trade_date.values, df.c.values
+    if d1 is None:
+        d1 = str(d[-1])
     rr = ret.pct_change().fillna(0).values if ret is not None else None
     i0 = int(np.searchsorted(d, d0))
     i1 = int(np.searchsorted(d, d1, side="right"))
@@ -157,7 +159,7 @@ def combined(data, fmap, starts, END, sleeve_interest=True):
         init = 25.0
         if sleeve_interest and d0 > span0:
             init = 25.0 * (1 + CASH) ** ((pd.Timestamp(d0) - pd.Timestamp(span0)).days / 365.25)
-        r = run(df, ret, fmap, nm, d0, END, mode, init=init)
+        r = run(df, ret, fmap, nm, d0, str(df.trade_date.iloc[-1]), mode, init=init)
         series[nm] = pd.Series(r["curve"], index=list(r["dates"]))
     cal = sorted(set().union(*[set(x.index) for x in series.values()]))
 
@@ -206,7 +208,11 @@ def main() -> None:
     plt.rcParams["axes.unicode_minus"] = False
     fear = pd.read_csv(root / "fear_daily_dump.csv", dtype={"trade_date": str})
     fmap = dict(zip(fear.trade_date, pd.to_numeric(fear.score)))
-    END = "20260729"
+    # 2026-08-04 S1 质疑：此前 END 硬编码 20260729（沪深300 末日），
+    # 但科创50 数据到 20260730、红利到 20260731 —— 各腿被截断的天数不同，
+    # 且科创50 恰好躲掉了 07-30 的大跌（13.00% vs 12.34%，一天之差 0.66pp）。
+    # 修正：每条腿跑到**它自己的最后一个交易日**，并在表头标注各腿终点。
+    END = None
 
     data = {nm: prep(root, f, col, trf) for nm, f, col, trf, _, _ in LEGS}
 
@@ -221,9 +227,10 @@ def main() -> None:
     for nm, f, col, trf, _fx, mode in LEGS:
         df, ret = data[nm]
         d0 = starts[nm]
-        r = run(df, ret, fmap, nm, d0, END, mode)
+        end_nm = str(df.trade_date.iloc[-1])
+        r = run(df, ret, fmap, nm, d0, end_nm, mode)
         longs[nm] = r
-        print(f"{nm:8s}{d0[:4]+'-'+d0[4:6]+'~'+END[:4]+'-'+END[4:6]:>22s}{r['yrs']:>6.1f}"
+        print(f"{nm:8s}{d0[:4]+'-'+d0[4:6]+'~'+end_nm[:4]+'-'+end_nm[4:6]:>22s}{r['yrs']:>6.1f}"
               f"{r['ann']:>9.2%}{r['bh']:>9.2%}{(r['ann']-r['bh'])*100:>+8.2f}"
               f"{r['sharpe']:>9.2f}{r['bhsharpe']:>9.2f}{r['mdd']:>9.1%}{r['bhmdd']:>9.1%}"
               f"{r['posavg']:>7.0%}{r['npan']:>7d}")
@@ -242,7 +249,7 @@ def main() -> None:
         for s in month_starts:
             s0 = s + "01"
             e0 = f"{int(s[:4]) + 10}{s[4:6]}28"
-            if e0 > END:
+            if e0 > str(df.trade_date.iloc[-1]):
                 break
             r = run(df, ret, fmap, nm, s0, e0, mode)
             if r and r["yrs"] >= 9.5:
@@ -271,7 +278,7 @@ def main() -> None:
     print("\n" + "=" * 104)
     print("C. 四腿合计（各 25 元 · 修正 sleeve 空窗期利息）与三腿诚实基线")
     print("=" * 104)
-    four, three = combined(data, fmap, starts, END)
+    four, three = combined(data, fmap, starts, None)
     print(f"  四腿合计（{four['yrs']:.1f}年）年化 {four['ann']:.2%} 波动 {four['vol']:.2%} "
           f"夏普 {four['sharpe']:.3f} 日频回撤 {four['mdd']:.1%}")
     print(f"  三腿基线（剔科创50）年化 {three['ann']:.2%} 波动 {three['vol']:.2%} "
