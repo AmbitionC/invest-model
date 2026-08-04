@@ -516,6 +516,26 @@ review_report = Table(
 )
 
 # 恐慌指数按日存证（fear_gauge 为即时计算，落库供历史曲线）。
+# ── 宏观数据层（P54，2026-08-04）─────────────────────────────
+# 源自陈老师的月度金融数据框架：他每期固定读五项——居民新增贷款 / M1 / M2 /
+# 总贷款余额增速 / 社融结构（拉动来自政府还是企业居民），并配三条分析纪律
+# （基数校正、政策反证法、看政策文本措辞变化）。这一层**只存数、不做择时**：
+# 宏观影响买卖决策必须先过 E47 预登记判据（见 docs/model_change_proposals.md P54 段）。
+#
+# 长表设计（不是宽表）的理由：tushare 各宏观接口的列名会变、且我们并不预先知道
+# 每个接口返回哪些列。ingest 端把返回帧里的全部数值列 melt 成 (period, series, value)，
+# **新增指标或接口改列名都不用改表结构**，与 factor_exposure 同一套思路。
+macro_series = Table(
+    "macro_series", metadata,
+    Column("period", String(8), primary_key=True),    # 月度 YYYYMM｜日度 YYYYMMDD｜季度取季末月
+    Column("series", String(64), primary_key=True),   # "接口.列"，如 cn_m.m1_yoy / cn_sf.inc_month
+    Column("value", Numeric(20, 4)),
+    Column("freq", String(4)),                        # M / Q / D
+    Column("source", String(32)),                     # tushare 接口名
+    _created_at(),
+)
+
+
 fear_daily = Table(
     "fear_daily", metadata,
     Column("trade_date", String(8), primary_key=True),
