@@ -353,6 +353,19 @@ def _broad_leg_states(loop: ClosedLoop, dt: str) -> list[dict]:
             c = s.to_numpy(dtype=float)
             last, med = float(c[-1]), float(pd.Series(c).median())
             r1250 = float(pd.Series(c[-1250:]).median()) if len(c) >= 1250 else None
+            # 乖离率（P39）：收盘/MA60−1，及其**因果全历史分位**（只用当日可得历史）。
+            # ⚠️ **只作展示与波动刻度，不参与任何买卖闸判定。** E37（2026-08-02）已判死
+            # 它作方向信号：进入全历史前 5% 分位后未来 20 日反而 +0.53~+5.70pp、
+            # 破历史极值后 60 日 +16.5~+33.7%＝顶部机械信号第四次失败。唯一未被否定的
+            # 残留是「破极值后 60 日最大回撤 −11.5~−21.2%、明显高于常态」⟹ 波动刻度。
+            bias = bias_pct = None
+            if len(c) >= 60:
+                ma60 = float(pd.Series(c[-60:]).mean())
+                if ma60 > 0:
+                    bias = last / ma60 - 1.0
+                    bs = (pd.Series(c) / pd.Series(c).rolling(60).mean() - 1.0).dropna()
+                    if len(bs) >= 250:
+                        bias_pct = float((bs <= bias).mean())
             price_buy = bool(fbuy(last, med, r1250))
             panic = fear is not None and fear >= 75
             if price_buy:
@@ -370,6 +383,7 @@ def _broad_leg_states(loop: ClosedLoop, dt: str) -> list[dict]:
                 "buy_mul": _BUY_MUL[name], "sell_mul": _SELL_MUL[name],
                 "buy_txt": buy_txt, "sell_txt": sell_txt,
                 "state": state, "fear": fear,
+                "bias60": bias, "bias_pct": bias_pct,
             })
         except Exception:  # noqa: BLE001
             continue
@@ -413,6 +427,8 @@ def _persist_broad_leg_state(loop: ClosedLoop, dt: str, sts: list[dict],
             "sell_line": round(s["med"] * s["sell_mul"], 4),
             "buy_mul": s["buy_mul"], "sell_mul": s["sell_mul"],
             "state": s["state"], "fear": s["fear"],
+            "bias60": None if s["bias60"] is None else round(s["bias60"], 6),
+            "bias_pct": None if s["bias_pct"] is None else round(s["bias_pct"], 6),
             "shares": sh, "mkt_value": round(sh * px, 3),
             "cost_price": float(cost_map.get(etf, 0) or 0),
         })

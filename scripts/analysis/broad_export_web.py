@@ -66,6 +66,12 @@ def main() -> None:
         _bh = _s.iloc[_i0:_i0 + len(r["dates"])].to_numpy(dtype=float)
         bh_c = _bh / _bh[0]
 
+        # 乖离率（P39/E37）——**只作波动刻度展示，不参与任何闸判定**。
+        # E37 2026-08-02 首跑已判死它作方向信号（高尾进前 5% 后未来 20 日反而
+        # +0.53~+5.70pp），唯一残留是破极值后 60 日最大回撤明显高于常态。
+        bias_s = (df.c / df.c.rolling(60).mean() - 1.0)
+        bv = bias_s.dropna()
+
         cum_s = float(r["curve"][-1] / r["curve"][0])
         cum_b = float((1 + r["bh"]) ** r["yrs"])
         legs.append({
@@ -96,6 +102,14 @@ def main() -> None:
                     for i in range(0, len(r["dates"]), STRIDE)],
             "bh_nav": [round(float(bh_c[i]), 4)
                        for i in range(0, len(r["dates"]), STRIDE)],
+            "bias": [None if pd.isna(bias_s.iloc[i]) else round(float(bias_s.iloc[i]), 4)
+                     for i in keep],
+            "bias_p05": round(float(bv.quantile(0.05)), 4),
+            "bias_p95": round(float(bv.quantile(0.95)), 4),
+            "bias_min": round(float(bv.min()), 4),
+            "bias_max": round(float(bv.max()), 4),
+            "bias_last": round(float(bv.iloc[-1]), 4),
+            "bias_last_pct": round(float((bv <= bv.iloc[-1]).mean()), 4),
             "trades": [{"date": t["date"], "side": t["side"], "why": t["why"],
                         "price": round(float(t["price"]), 2),
                         "amount": round(float(t["amount"]), 3),
@@ -112,6 +126,21 @@ def main() -> None:
         "fear": {"dates": fear_out.trade_date.tolist(),
                  "score": [round(float(v), 1) for v in pd.to_numeric(fear_out.score)]},
         # 页面上必须常驻的三条免责，跟数字一起走，避免前端文案漂移
+        # 乖离率的裁决随数据一起走——网站上凡出现这个数的地方都必须带着它，
+        # 否则一个已被证伪的信号会因为"被画在图上"而重新显得权威。
+        "bias_verdict": {
+            "tested": "P39 / E37（2026-08-02 首跑）",
+            "high_tail": "❌ 已判死作方向信号：乖离率进入全历史前 5% 分位后，未来 20 日收益"
+                         "不是更差而是更好——沪深300 +5.70pp、创业板 +3.94pp、红利 +4.97pp、"
+                         "科创50 +0.53pp（判据要求 ≤−2.0pp，四腿 0/4 达标）；破历史极值后"
+                         "60 日内价格回到 MA60 下方的比例只有 42%/39%/0%/28%（判据 ≥80%）。"
+                         "这是顶部机械信号第四次失败（P16/P19/E24/E37）。",
+            "residual": "✅ 唯一未被否定的残留：破历史极值后 60 日的最大回撤为 −11.5%~−21.2%，"
+                        "明显高于常态 ⟹ 可作波动/回撤刻度，不能作方向信号。",
+            "low_tail": "⏳ 低尾（跌得太深）从未测过，已登记 P65 + E56（判据先写死）。"
+                        "两个尾部不共享先验——本系统已确立「顶部无对称锚、底部有锚」。",
+            "wiring": "本页只显示，不接任何买卖闸。四腿的买卖判定完全由中位线锚决定。",
+        },
         "caveats": [
             "可得性偏差：515080（中证红利ETF）2019 年才有，19.5 年窗口里约 66% 的时间这条腿"
             "无法按回测执行；科创50 的起点 20191231 是回溯基日（指数 2020-07 才发布）。"

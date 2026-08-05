@@ -596,6 +596,12 @@ broad_leg_state = Table(
     Column("shares", Numeric(20, 3)),                       # 实盘持有份额（无则 0）
     Column("mkt_value", Numeric(20, 3)),
     Column("cost_price", Numeric(14, 4)),
+    # 乖离率（P39/E37）：收盘/MA60−1 及其**因果全历史分位**（只用当日可得历史）。
+    # ⚠️ E37 已判死它作方向信号（高尾进前 5% 后未来 20 日反而 +0.53~+5.70pp）。
+    # 这两列**只作展示与波动刻度**，不参与任何买卖闸判定——写在这里是为了让网站上
+    # 看到这个数的人，同时看到它已经被证伪过。
+    Column("bias60", Numeric(10, 6)),
+    Column("bias_pct", Numeric(8, 6)),
     _created_at(),
 )
 
@@ -892,6 +898,7 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "model_view": "VARCHAR(128)",
         "sleeve": "VARCHAR(16)",                          # 套利：一张表容纳 A/B/α/可转债
     },
+    "broad_leg_state": {"bias60": "DECIMAL(10,6)", "bias_pct": "DECIMAL(8,6)"},
     "action_plan_account": {
         "risk_hints": "TEXT",
         "defense_pct": "DECIMAL(12,6)",
