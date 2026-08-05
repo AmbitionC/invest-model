@@ -106,12 +106,14 @@ def main() -> None:
                        label=f"{side}出" if side == "卖" else "买入")
         ax.set_yscale("log")
         ax.set_ylabel("点位（对数）", fontsize=10.5)
+        cum_s = r["curve"][-1] / r["curve"][0]
+        cum_b = (1 + r["bh"]) ** r["yrs"]
         ax.set_title(f"{nm} · {ETF[nm]}　{r['dates'][0][:4]}-{r['dates'][0][4:6]} ~ "
                      f"{r['dates'][-1][:4]}-{r['dates'][-1][4:6]}（{r['yrs']:.1f} 年）　"
                      f"买 {r['nb']} 笔 · 卖 {r['ns']} 笔　｜　"
-                     f"策略年化 {r['ann']:.2%} vs 买入持有 {r['bh']:.2%}　"
-                     f"回撤 {r['mdd']:.1%} vs {r['bhmdd']:.1%}",
-                     fontsize=13.5, weight="bold", color=COL[nm], pad=7)
+                     f"累计 {cum_s - 1:+.0%}（{cum_s:.2f} 倍） vs 买入持有 {cum_b - 1:+.0%}（{cum_b:.2f} 倍）　"
+                     f"年化 {r['ann']:.2%} vs {r['bh']:.2%}　回撤 {r['mdd']:.1%} vs {r['bhmdd']:.1%}",
+                     fontsize=12.5, weight="bold", color=COL[nm], pad=7)
         ax.grid(alpha=.22, which="both"); ax.tick_params(labelbottom=False, labelsize=9)
         ax.legend(fontsize=9, ncol=4, loc="upper left", framealpha=.9)
         ax.set_xlim(XLO, XHI)
@@ -135,22 +137,25 @@ def main() -> None:
     for nm in data:
         r = res[nm]
         dts = pd.to_datetime(r["dates"])
-        ax.plot(dts, r["curve"] / r["curve"][0], lw=2.0, color=COL[nm],
-                label=f"{nm} 策略 {r['ann']:.2%}")
+        cs = r["curve"] / r["curve"][0]
+        ax.plot(dts, cs, lw=2.0, color=COL[nm],
+                label=f"{nm} 策略 {cs[-1]:.2f}倍（年化 {r['ann']:.2%}）")
+        ax.annotate(f"{cs[-1]:.2f}倍", (dts[-1], cs[-1]), textcoords="offset points",
+                    xytext=(6, 0), fontsize=10, weight="bold", color=COL[nm], va="center")
         df, ret = data[nm]
         s = (ret if ret is not None else df.c).ffill()
         i0 = int(np.searchsorted(df.trade_date.values, r["dates"][0]))
         bh = s.iloc[i0:i0 + len(dts)].to_numpy(dtype=float)
-        ax.plot(dts, bh / bh[0], lw=1.1, color=COL[nm], ls=":", alpha=.65,
-                label=f"{nm} 买入持有 {r['bh']:.2%}")
+        cb = bh / bh[0]
+        ax.plot(dts, cb, lw=1.1, color=COL[nm], ls=":", alpha=.65,
+                label=f"{nm} 买入持有 {cb[-1]:.2f}倍（年化 {r['bh']:.2%}）")
     ax.set_yscale("log"); ax.set_ylabel("净值倍数（对数·各腿从 1 起）", fontsize=10.5)
     ax.grid(alpha=.25, which="both"); ax.tick_params(labelsize=9.5)
     ax.legend(fontsize=9.5, ncol=4, loc="upper left", framealpha=.9)
     ax.set_xlim(XLO, XHI)
     ax.xaxis.set_major_locator(mdates.YearLocator(2))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
-    ax.set_title("四条腿净值 vs 各自买入持有（实线=策略，虚线=买入持有；各腿起点不同，"
-                 "只在同色之间比较）", fontsize=13.5, weight="bold", pad=7)
+    ax.set_title("四条腿累计净值 vs 各自买入持有（实线=策略，虚线=买入持有；各腿起点不同、窗口不等长，只在同色之间比较，不可横向比倍数）", fontsize=13.5, weight="bold", pad=7)
 
     out = outd / "broad_history.png"
     fig.savefig(out, dpi=104)
@@ -159,15 +164,15 @@ def main() -> None:
     print("=" * 104)
     print("成交构成（全窗，各腿一笔钱 100）")
     print("=" * 104)
-    print(f"{'腿':>8s}{'区间':>18s}{'年数':>6s}{'买笔':>5s}{'卖笔':>5s}"
-          f"{'锚买':>6s}{'恐慌':>6s}{'阶梯':>6s}{'年均动手':>9s}{'均仓':>6s}")
+    print(f"{'腿':>8s}{'区间':>18s}{'年数':>6s}{'策略累计':>10s}{'买持累计':>10s}"
+          f"{'策略年化':>9s}{'买持年化':>9s}{'买笔':>5s}{'卖笔':>5s}{'均仓':>6s}")
     for nm in data:
         r = res[nm]
-        tb = [x for x in r["trades"] if x["side"] == "买"]
-        cnt = {k2: sum(1 for x in tb if k2 in x["why"]) for k2 in ("锚", "恐慌", "阶梯")}
+        cum_s = r["curve"][-1] / r["curve"][0]
+        cum_b = (1 + r["bh"]) ** r["yrs"]
         print(f"{nm:>8s}{r['dates'][0]+'~'+r['dates'][-1]:>18s}{r['yrs']:>6.1f}"
-              f"{r['nb']:>5d}{r['ns']:>5d}{cnt['锚']:>6d}{cnt['恐慌']:>6d}{cnt['阶梯']:>6d}"
-              f"{(r['nb']+r['ns'])/r['yrs']:>9.1f}{r['posavg']:>6.0%}")
+              f"{cum_s:>9.2f}倍{cum_b:>9.2f}倍{r['ann']:>9.2%}{r['bh']:>9.2%}"
+              f"{r['nb']:>5d}{r['ns']:>5d}{r['posavg']:>6.0%}")
 
 
 if __name__ == "__main__":
