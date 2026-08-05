@@ -154,7 +154,8 @@ def first_tradable_idx(leg: LegData, cfg: Cfg) -> int:
 
 # --------------------------------------------------------------------------- 引擎
 
-def simulate(leg: LegData, cfg: Cfg, i0: int | None = None, i1: int | None = None) -> dict:
+def simulate(leg: LegData, cfg: Cfg, i0: int | None = None, i1: int | None = None,
+             keep_detail: bool = False) -> dict:
     """核心回测。返回全套指标 + 明细。"""
     n = len(leg.px)
     if i0 is None:
@@ -328,7 +329,21 @@ def simulate(leg: LegData, cfg: Cfg, i0: int | None = None, i1: int | None = Non
     else:
         vwap_rel = deep_buymin = deep_winlo = float("nan")
 
+    # 弹药落点的第三种口径：按窗口价格分位分桶的买入金额占比（不依赖任何最低价定义）
+    band = {}
+    if buys:
+        w = sum(a for _, a, _ in buys)
+        qs = np.quantile(px[i0:i1], [0.05, 0.20, 0.40, 0.60, 0.80])
+        labs = ["p0-5", "p5-20", "p20-40", "p40-60", "p60-80", "p80-100"]
+        acc = dict.fromkeys(labs, 0.0)
+        for p, a, _ in buys:
+            k = int(np.searchsorted(qs, p, side="right"))
+            acc[labs[k]] += a
+        band = {k: v / w for k, v in acc.items()}
+
     return dict(
+        band=band, buys=[(float(p), float(a), t) for p, a, t in buys] if keep_detail else None,
+        curve=[float(x) for x in v] if keep_detail else None,
         ann=float(ann), sharpe=float((ann - RF) / vol) if vol > 0 else float("nan"),
         mdd=float(((v - pk) / pk).min()), pos=float(np.mean(posl)),
         nb=nb, ns=ns, nyr=int(len(yr)), nloss=int((yr < 0).sum()),
