@@ -28,7 +28,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[1]))
 from invest_model.broad_gates import BUY_MUL, SELL_MUL  # noqa: E402
 from long_window_backtest import LEGS, first_tradable, prep, run  # noqa: E402
-from bias_low_rank import low_episodes  # noqa: E402
+from bias_rank_extremes import extreme_episodes  # noqa: E402
 
 ETF = {"沪深300": "510300", "创业板": "159915", "科创50": "588000", "红利": "515080"}
 STRIDE = 5          # 序列抽稀步长（交易日）——19.5 年日频 ≈4700 点，图上看不出差别，体积 /5
@@ -80,12 +80,18 @@ def main() -> None:
         #     "谁是第 1 名"要看完全部历史才知道，不可写进规则）
         _bv = bias_s.dropna()
         _i0e = int(np.searchsorted(df.trade_date.values, r["dates"][0]))
-        _eps = low_episodes(bias_s.to_numpy(dtype=float), df.trade_date.values, _i0e)
+        _bnp = bias_s.to_numpy(dtype=float)
         _cur = float(_bv.iloc[-1])
-        bias_rank_day = int((_bv < _cur).sum()) + 1
-        bias_rank_ep = sum(1 for e in _eps if e["bias"] < _cur) + 1
+        _epL = extreme_episodes(_bnp, df.trade_date.values, _i0e, "low")
+        _epH = extreme_episodes(_bnp, df.trade_date.values, _i0e, "high")
+        bias_rank_day = int((_bv < _cur).sum()) + 1                    # 低尾：第几低
+        bias_rank_day_high = int((_bv > _cur).sum()) + 1               # 高尾：第几高
+        bias_rank_ep = sum(1 for e in _epL if e["bias"] < _cur) + 1
+        bias_rank_ep_high = sum(1 for e in _epH if e["bias"] > _cur) + 1
         bias_spectrum = [{"rank": k, "date": e["date"], "bias": round(e["bias"], 4)}
-                         for k, e in enumerate(_eps[:8], 1)]
+                         for k, e in enumerate(_epL[:8], 1)]
+        bias_spectrum_high = [{"rank": k, "date": e["date"], "bias": round(e["bias"], 4)}
+                              for k, e in enumerate(_epH[:8], 1)]
 
         cum_s = float(r["curve"][-1] / r["curve"][0])
         cum_b = float((1 + r["bh"]) ** r["yrs"])
@@ -129,6 +135,9 @@ def main() -> None:
             "bias_n_day": int(len(bv)),
             "bias_rank_ep": bias_rank_ep,
             "bias_spectrum": bias_spectrum,
+            "bias_rank_day_high": bias_rank_day_high,
+            "bias_rank_ep_high": bias_rank_ep_high,
+            "bias_spectrum_high": bias_spectrum_high,
             "trades": [{"date": t["date"], "side": t["side"], "why": t["why"],
                         "price": round(float(t["price"]), 2),
                         "amount": round(float(t["amount"]), 3),
@@ -148,29 +157,28 @@ def main() -> None:
         # 乖离率的裁决随数据一起走——网站上凡出现这个数的地方都必须带着它，
         # 否则一个已被证伪的信号会因为"被画在图上"而重新显得权威。
         "bias_verdict": {
-            "tested": "高尾 P39/E37（2026-08-02）· 低尾 P65/E56（2026-08-05）——两个尾部都已判死",
-            "high_tail": "❌ 已判死作方向信号：乖离率进入全历史前 5% 分位后，未来 20 日收益"
-                         "不是更差而是更好——沪深300 +5.70pp、创业板 +3.94pp、红利 +4.97pp、"
-                         "科创50 +0.53pp（判据要求 ≤−2.0pp，四腿 0/4 达标）；破历史极值后"
-                         "60 日内价格回到 MA60 下方的比例只有 42%/39%/0%/28%（判据 ≥80%）。"
-                         "这是顶部机械信号第四次失败（P16/P19/E24/E37）。",
+            "tested": "高尾 P39/E37（2026-08-02）· 低尾 P65/E56（2026-08-05）"
+                      "· 排名口径两尾补齐（2026-08-05）——两个尾部的 E 验证都是 FAIL",
+            "high_tail": "❌ 作方向信号已判死（E37）：乖离率进入全历史前 5% 分位后，未来 20 日"
+                         "收益不是更差而是更好——沪深300 +5.70pp、创业板 +3.94pp、红利 +4.97pp、"
+                         "科创50 +0.53pp（判据要求 ≤−2.0pp，四腿 0/4）；「超过此前历史最大值」后"
+                         "60 日内回到 MA60 下方的比例只有 42%/39%/0%/28%（判据 ≥80%）。",
             "residual": "✅ 唯一未被否定的残留：破历史极值后 60 日的最大回撤为 −11.5%~−21.2%，"
                         "明显高于常态 ⟹ 可作波动/回撤刻度，不能作方向信号。",
-            "low_tail": "❌ 低尾（跌得太深）也已判死：E56（2026-08-05 首跑）四条判据全不过。"
-                        "失败机制不是「低尾不灵」，而是低尾与 B2 腿的既有价格闸几乎不相交——"
-                        "乖离率低尾是相对 60 日均线的短期偏离（牛市回调也点亮），"
-                        "而 B2 要求收盘低于近 5 年中位数（长期估值位置）；X=5% 时四腿的 "
-                        "10~145 个低尾日里，同时满足价格闸的只有 0~13 天。"
-                        "强行拆掉价格闸后年化 −0.7~−3.1pp、回撤最多恶化 −20.5pp。",
-            "rank": "owner 问的「历史极值排第几」已按博主原口径（排名，不是分位）复测，"
-                    "换排名口径实测仍不改判：因果排名前 3/5/10 的触发日里，"
-                    "与 B2 既有价格闸「收盘<近 5 年中位数」的共现四腿全为 0，"
-                    "接进 B2 后四腿 Δ年化全是 +0.00。且创业板的因果排名低尾有 77% 与"
-                    "恐慌≥75 是同一批日子＝判据②说的「恐慌的影子」。"
-                    "⚠️ 事后 episode 谱上的前瞻收益（后 20 日 +10.0%、18/19 为正）看着很好，"
-                    "但那是事后选点——当天你并不知道自己排第几；可交易的因果版弱得多"
-                    "（沪深300 −0.1%、红利 +3.9%），且前五 episode 跨腿高度重叠"
-                    "（2015-08 三腿、2016-01 三腿），有效独立事件远少于 20。",
+            "low_tail": "❌ 低尾（跌得太深）也已判死：E56 四条判据全不过。失败机制不是「低尾不灵」，"
+                        "而是低尾与 B2 腿的既有价格闸几乎不相交——乖离率低尾是相对 60 日均线的"
+                        "短期偏离（牛市回调也点亮），而 B2 要求收盘低于近 5 年中位数（长期估值位置）；"
+                        "X=5% 时四腿的 10~145 个低尾日里，同时满足价格闸的只有 0~13 天。",
+            "rank": "owner 追问「历史极值排第几、极值包不包括极大和极小」后，两个尾部都按博主原口径"
+                    "（排名，不是分位）补测。结论：事后谱与可交易口径给出相反的答案，差别全在事后视角。"
+                    "① 高尾·事后 episode 谱前五（n=20）：后 20 日 −6.6%、仅 5/20 为正，"
+                    "60 日内回到 MA60 下方 16/20＝80% —— 博主的命题在这一档基本成立。"
+                    "② 高尾·因果排名（当日可知的口径）：创业板 K=5 有 48 个触发日，后 20 日反而 +5.6%、"
+                    "35/48 为正、回落 MA60 下方只有 38%；沪深300 与红利在 K≤5 几乎无触发日"
+                    "（它们的历史最高偏离出现在 2007 年、预热期内）。"
+                    "③ 低尾·因果排名 K=3/5/10：与 B2 价格闸的共现四腿全为 0，接进 B2 后 Δ年化全 +0.00。"
+                    "⟹ 两个尾部的裁决都不因换排名口径而改变；高尾那个 80% 只在事后成立，"
+                    "而当天你并不知道自己是不是第 1 名。",
             "wiring": "本页只显示，不接任何买卖闸。四腿的买卖判定完全由中位线锚决定。",
         },
         "caveats": [
