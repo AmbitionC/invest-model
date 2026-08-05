@@ -28,6 +28,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[1]))
 from invest_model.broad_gates import BUY_MUL, SELL_MUL  # noqa: E402
 from long_window_backtest import LEGS, first_tradable, prep, run  # noqa: E402
+from bias_low_rank import low_episodes  # noqa: E402
 
 ETF = {"沪深300": "510300", "创业板": "159915", "科创50": "588000", "红利": "515080"}
 STRIDE = 5          # 序列抽稀步长（交易日）——19.5 年日频 ≈4700 点，图上看不出差别，体积 /5
@@ -72,6 +73,20 @@ def main() -> None:
         bias_s = (df.c / df.c.rolling(60).mean() - 1.0)
         bv = bias_s.dropna()
 
+        # 乖离率的**极值排名谱**（owner 2026-08-05：「我要看的是历史极值排第几」）。
+        # 两个排名并列，因为它们回答的不是同一个问题：
+        #   · 逐日排名 = 因果、可交易（截至当日见过的第几低）
+        #   · episode 排名 = 事后、只可描述（把同一轮连续深跌折叠成一个代表点；
+        #     "谁是第 1 名"要看完全部历史才知道，不可写进规则）
+        _bv = bias_s.dropna()
+        _i0e = int(np.searchsorted(df.trade_date.values, r["dates"][0]))
+        _eps = low_episodes(bias_s.to_numpy(dtype=float), df.trade_date.values, _i0e)
+        _cur = float(_bv.iloc[-1])
+        bias_rank_day = int((_bv < _cur).sum()) + 1
+        bias_rank_ep = sum(1 for e in _eps if e["bias"] < _cur) + 1
+        bias_spectrum = [{"rank": k, "date": e["date"], "bias": round(e["bias"], 4)}
+                         for k, e in enumerate(_eps[:8], 1)]
+
         cum_s = float(r["curve"][-1] / r["curve"][0])
         cum_b = float((1 + r["bh"]) ** r["yrs"])
         legs.append({
@@ -110,6 +125,10 @@ def main() -> None:
             "bias_max": round(float(bv.max()), 4),
             "bias_last": round(float(bv.iloc[-1]), 4),
             "bias_last_pct": round(float((bv <= bv.iloc[-1]).mean()), 4),
+            "bias_rank_day": bias_rank_day,
+            "bias_n_day": int(len(bv)),
+            "bias_rank_ep": bias_rank_ep,
+            "bias_spectrum": bias_spectrum,
             "trades": [{"date": t["date"], "side": t["side"], "why": t["why"],
                         "price": round(float(t["price"]), 2),
                         "amount": round(float(t["amount"]), 3),
@@ -143,6 +162,15 @@ def main() -> None:
                         "而 B2 要求收盘低于近 5 年中位数（长期估值位置）；X=5% 时四腿的 "
                         "10~145 个低尾日里，同时满足价格闸的只有 0~13 天。"
                         "强行拆掉价格闸后年化 −0.7~−3.1pp、回撤最多恶化 −20.5pp。",
+            "rank": "owner 问的「历史极值排第几」已按博主原口径（排名，不是分位）复测，"
+                    "换排名口径实测仍不改判：因果排名前 3/5/10 的触发日里，"
+                    "与 B2 既有价格闸「收盘<近 5 年中位数」的共现四腿全为 0，"
+                    "接进 B2 后四腿 Δ年化全是 +0.00。且创业板的因果排名低尾有 77% 与"
+                    "恐慌≥75 是同一批日子＝判据②说的「恐慌的影子」。"
+                    "⚠️ 事后 episode 谱上的前瞻收益（后 20 日 +10.0%、18/19 为正）看着很好，"
+                    "但那是事后选点——当天你并不知道自己排第几；可交易的因果版弱得多"
+                    "（沪深300 −0.1%、红利 +3.9%），且前五 episode 跨腿高度重叠"
+                    "（2015-08 三腿、2016-01 三腿），有效独立事件远少于 20。",
             "wiring": "本页只显示，不接任何买卖闸。四腿的买卖判定完全由中位线锚决定。",
         },
         "caveats": [

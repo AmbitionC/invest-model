@@ -602,6 +602,9 @@ broad_leg_state = Table(
     # 看到这个数的人，同时看到它已经被证伪过。
     Column("bias60", Numeric(10, 6)),
     Column("bias_pct", Numeric(8, 6)),
+    # 因果逐日排名（1＝截至当日见过的最低）。owner 2026-08-05：「我要看的是历史极值排第几」。
+    # 与 bias_pct 是同一件事的两种读法，排名更直观；同样只作展示，不接闸。
+    Column("bias_rank", Integer),
     _created_at(),
 )
 
@@ -898,7 +901,8 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "model_view": "VARCHAR(128)",
         "sleeve": "VARCHAR(16)",                          # 套利：一张表容纳 A/B/α/可转债
     },
-    "broad_leg_state": {"bias60": "DECIMAL(10,6)", "bias_pct": "DECIMAL(8,6)"},
+    "broad_leg_state": {"bias60": "DECIMAL(10,6)", "bias_pct": "DECIMAL(8,6)",
+                        "bias_rank": "INT"},
     "action_plan_account": {
         "risk_hints": "TEXT",
         "defense_pct": "DECIMAL(12,6)",
