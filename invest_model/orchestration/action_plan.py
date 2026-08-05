@@ -337,11 +337,14 @@ _BROAD_LEGS = [
 ]
 
 
-def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
-    """P27 v2：独立宽基账户·四腿窗口状态（owner 2026-08-01 拍板：废除 25% 总资产目标、
-    两账户独立决策、多指数配置）。各腿独立触发；恐慌≥75 时任何腿均可抢买池 50%。"""
-    rows = []
+def _broad_leg_states(loop: ClosedLoop, dt: str) -> list[dict]:
+    """四腿的窗口判定读数——提示行 `_broad_legs_hint` 与落库 `_persist_broad_leg_state`
+    共用同一份计算，保证 issue #9 的计划、库表、前端板块三处永远是同一个数。
+
+    state：buy=买入窗开 ｜ panic=恐慌抢买窗（价格未到但恐慌≥75）｜ sell=卖出区 ｜ hold=持有区。
+    """
     fear = _fear_score(loop, dt)
+    out: list[dict] = []
     for name, csvn, col, code, etf, fbuy, buy_txt, fsell, sell_txt in _BROAD_LEGS:
         try:
             s = _index_hist_by(loop, dt, csvn, code, col=col)
@@ -350,23 +353,71 @@ def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
             c = s.to_numpy(dtype=float)
             last, med = float(c[-1]), float(pd.Series(c).median())
             r1250 = float(pd.Series(c[-1250:]).median()) if len(c) >= 1250 else None
+            price_buy = bool(fbuy(last, med, r1250))
             panic = fear is not None and fear >= 75
-            if fbuy(last, med, r1250) or panic:
-                why = "恐慌抢买窗" if (panic and not fbuy(last, med, r1250)) else "买入窗开"
-                state = f"🟢{why}"
+            if price_buy:
+                state = "buy"
+            elif panic:
+                state = "panic"
             elif fsell(last, med, r1250):
-                state = "🔴卖出区"
+                state = "sell"
             else:
-                state = "⚪持有区"
-            anchor = med if "中位线" in buy_txt else (r1250 or med)
-            rows.append(f"{name}({etf}) {last:.0f} 距锚{last / anchor - 1:+.0%} {state}")
+                state = "hold"
+            out.append({
+                "name": name, "etf": etf, "code": code,
+                "last": last, "med": med, "r1250": r1250,
+                "anchor": med if "中位线" in buy_txt else (r1250 or med),
+                "buy_mul": _BUY_MUL[name], "sell_mul": _SELL_MUL[name],
+                "buy_txt": buy_txt, "sell_txt": sell_txt,
+                "state": state, "fear": fear,
+            })
         except Exception:  # noqa: BLE001
             continue
-    if not rows:
+    return out
+
+
+_BROAD_STATE_TXT = {"buy": "🟢买入窗开", "panic": "🟢恐慌抢买窗",
+                    "sell": "🔴卖出区", "hold": "⚪持有区"}
+
+
+def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
+    """P27 v2：独立宽基账户·四腿窗口状态（owner 2026-08-01 拍板：废除 25% 总资产目标、
+    两账户独立决策、多指数配置）。各腿独立触发；恐慌≥75 时任何腿均可抢买池 50%。"""
+    sts = _broad_leg_states(loop, dt)
+    if not sts:
         return None
+    rows = [f"{s['name']}({s['etf']}) {s['last']:.0f} 距锚{s['last'] / s['anchor'] - 1:+.0%} "
+            f"{_BROAD_STATE_TXT[s['state']]}" for s in sts]
     return ("宽基账户（P27 v2·独立决策·四腿）：" + " ｜ ".join(rows)
             + "。买入：" + "；".join(f"{n}{bt}" for n, _, _, _, _, _, bt, _, _ in _BROAD_LEGS)
             + "；恐慌≥75 任意腿抢买池 50%；月度入金四腿各 25%、池内现金放货基")
+
+
+def _persist_broad_leg_state(loop: ClosedLoop, dt: str, sts: list[dict],
+                             shares_map: dict, cost_map: dict, last_close: dict) -> None:
+    """四腿状态落库（`/invest/broad` 与前端「宽基指数」板块的数据源）。best-effort。
+
+    shares/mkt_value/cost_price 取**实盘** current_holding 里对应 ETF 的持仓；本表逐日累积，
+    因而它就是 owner 要的「以当前时间为起点」的仓位账本（历史仓位只有回测口径，不入此表）。
+    """
+    rows = []
+    for s in sts:
+        etf = f"{s['etf']}.SH" if s["etf"].startswith(("5", "6")) else f"{s['etf']}.SZ"
+        etf = _BROAD_ETF.get(s["name"], etf)
+        sh = float(shares_map.get(etf, 0) or 0)
+        px = float(last_close.get(etf, 0) or 0)
+        rows.append({
+            "trade_date": str(dt), "leg": s["name"], "etf": etf,
+            "close": round(s["last"], 4), "median": round(s["med"], 4),
+            "buy_line": round(s["med"] * s["buy_mul"], 4),
+            "sell_line": round(s["med"] * s["sell_mul"], 4),
+            "buy_mul": s["buy_mul"], "sell_mul": s["sell_mul"],
+            "state": s["state"], "fear": s["fear"],
+            "shares": sh, "mkt_value": round(sh * px, 3),
+            "cost_price": float(cost_map.get(etf, 0) or 0),
+        })
+    if rows:
+        loop.repo.upsert("broad_leg_state", pd.DataFrame(rows), ["trade_date", "leg"])
 
 
 # ── 陈老师宽基体系·执行纪律层（P51~P53，提示-only）───────────────────────────
@@ -1132,6 +1183,14 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         _p27 = _broad_legs_hint(loop, dt)
         if _p27:
             hints.append(_p27)
+    except Exception:  # noqa: BLE001
+        pass
+    # 同一份四腿读数落库 broad_leg_state，供 `/invest/broad` 与前端「宽基指数」板块——
+    # 提示行与网站因此不可能出现两套数（P58 之后的一贯做法：一处计算、多处消费）。
+    try:
+        _bst = _broad_leg_states(loop, dt)
+        if _bst:
+            _persist_broad_leg_state(loop, dt, _bst, shares_map, cost_map, last_close)
     except Exception:  # noqa: BLE001
         pass
     # P51 容错自检行 / P52「不动也是决策」行（2026-08-04 内化审计产物，提示-only）：

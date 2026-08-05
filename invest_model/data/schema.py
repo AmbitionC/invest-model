@@ -575,6 +575,30 @@ leverage_signal = Table(
     _created_at(),
 )
 
+# 宽基四腿窗口状态（P27 v2·陈老师宽基体系内化）：每计划日逐腿 upsert，
+# 供 FaaS `/invest/broad` 与前端「宽基指数」板块透出，与每日计划 hints 同源同数。
+# 提示-only：本表只描述四腿的闸位读数与当前持仓，系统零自动交易。
+# 注意 shares/mkt_value 记的是**实盘**该 ETF 的持仓（来自 current_holding），
+# 因此这张表天然是「以当前时间为起点」的仓位账本——历史仓位只有回测口径，不在此表。
+broad_leg_state = Table(
+    "broad_leg_state", metadata,
+    Column("trade_date", String(8), primary_key=True),
+    Column("leg", String(16), primary_key=True),            # 沪深300 / 创业板 / 科创50 / 红利
+    Column("etf", String(16)),
+    Column("close", Numeric(14, 4)),                        # 指数收盘点位
+    Column("median", Numeric(14, 4)),                       # expanding 中位线（锚）
+    Column("buy_line", Numeric(14, 4)),                     # 锚 × buy_mul
+    Column("sell_line", Numeric(14, 4)),                    # 锚 × sell_mul
+    Column("buy_mul", Numeric(6, 3)),
+    Column("sell_mul", Numeric(6, 3)),
+    Column("state", String(8)),                             # buy / panic / hold / sell
+    Column("fear", Numeric(6, 2)),
+    Column("shares", Numeric(20, 3)),                       # 实盘持有份额（无则 0）
+    Column("mkt_value", Numeric(20, 3)),
+    Column("cost_price", Numeric(14, 4)),
+    _created_at(),
+)
+
 # ── 套利模块（arbitrage）表 ──────────────────────────────────
 # 说明：套利与交易是同一资金池的一体两面。以下表全部按 (code|id, trade_date) /
 # version 命名空间落库，回测/复盘/看板复用既有骨架。数据缺失时对应 sleeve 预算
