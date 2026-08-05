@@ -300,25 +300,40 @@ def _p31_sell_hint(loop: ClosedLoop, dt: str) -> str | None:
     if c[-1] < med:
         return None                              # 下方只买不卖
     return (f"卖出纪律：沪深300 {c[-1]:.0f} 处中位线 {med:.0f} 上方（{c[-1] / med - 1:+.1%}）"
-            f"＝各腿在各自卖出线上方按月减 5%（无条件、不看市场情绪强度）。"
+            f"＝各腿在各自卖出线（中位线×1.30，创业板×1.43）上方按月减 5%（无条件、不看情绪强度）。"
             f"E30 红队已证伪按强度分层的收益主张，规则回归简单；卖出机制本身是回撤控制的主要来源")
+
+
+# 宽基四腿买卖闸：唯一定义在 invest_model/broad_gates.py（P58，2026-08-05）。
+# 那里同时记着「为什么是 1.30」「代价是什么」「为什么这不算 E51 通过」。
+from invest_model.broad_gates import BUY_MUL as _BUY_MUL, SELL_MUL as _SELL_MUL  # noqa: E402
+
+
+def _sell_above(name: str):
+    """卖出闸判定：收盘 > 中位线 × 该腿倍数。"""
+    mul = _SELL_MUL[name]
+    return lambda c, m, r: c > m * mul
 
 
 _BROAD_LEGS = [
     # (名称, 基底CSV, 列, DB代码, ETF, 买规则, 卖规则)——E28 简化篮子（owner 2026-08-01：
     # 只做沪深300/创业板/科创50/红利；中证500/1000 配置记档保留可随时恢复）
     ("沪深300", "index_dump_000300_SH.csv", "close", "000300.SH", "510300",
-     lambda c, m, r: c < m, "＜全量中位线（周频·池20%）", lambda c, m, r: c > m, "＞中位线（P31 分层）"),
+     lambda c, m, r: c < m, "＜全量中位线（周频·池20%）",
+     _sell_above("沪深300"), "＞中位线×1.30（月减5%）"),
     ("创业板", "spread_full_history.csv", "chinext", "399006.SZ", "159915",
-     lambda c, m, r: c < m * 0.90, "＜中位线−10%带（周频·池20%）", lambda c, m, r: c > m * 1.10, "＞中位线+10%带（P31 分层）"),
+     lambda c, m, r: c < m * 0.90, "＜中位线−10%带（周频·池20%）",
+     _sell_above("创业板"), "＞中位线×1.43（月减5%）"),
     # 2026-08-02 回滚：此前部署的「长持不设卖出」不是 E31 验证过的配置。实测同窗口
     # 含卖出 13.00%/夏普0.59/回撤−17.2%/卡玛0.76 vs 不卖 13.21%/0.55/−22.6%/0.58
     # ＝多赚 0.21pp 换 5.4pp 回撤，风险调整后严格更差 ⇒ 与其余三腿统一，按月减 5%。
     ("科创50", "index_dump_000688_SH.csv", "close", "000688.SH", "588000",
      lambda c, m, r: False, "深回撤阶梯 L50（距全历史峰 −50/−55/−60/−65 四档，各档一轮只买一次，"
-     "投当前现金 30/35/40/50%）+ 恐慌抢买", lambda c, m, r: c > m * 1.30, "＞中位线+30%（P31 月减5%）"),
+     "投当前现金 30/35/40/50%）+ 恐慌抢买",
+     _sell_above("科创50"), "＞中位线×1.30（月减5%）"),
     ("红利", "index_dump_000922_CSI.csv", "close", "000922.CSI", "515080",
-     lambda c, m, r: c < m, "＜全量中位线（周频·池20%·临时价格锚，E26 估值锚待验）", lambda c, m, r: c > m, "＞中位线（P31 分层）"),
+     lambda c, m, r: c < m, "＜全量中位线（周频·池20%·临时价格锚，E26 估值锚待验）",
+     _sell_above("红利"), "＞中位线×1.30（月减5%）"),
 ]
 
 
@@ -374,8 +389,8 @@ def _broad_anchor_states(loop: ClosedLoop, dt: str) -> list[dict]:
             c = s.to_numpy(dtype=float)
             last, med = float(c[-1]), float(pd.Series(c).median())
             out.append({"name": name, "etf": _BROAD_ETF.get(name, ""), "last": last, "med": med,
-                        "buy_mul": 0.90 if name == "创业板" else 1.00,
-                        "sell_mul": 1.43 if name == "创业板" else 1.30})
+                        "buy_mul": _BUY_MUL[name],
+                        "sell_mul": _SELL_MUL[name]})
         except Exception:  # noqa: BLE001
             continue
     return out

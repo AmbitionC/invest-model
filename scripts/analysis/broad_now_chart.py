@@ -18,6 +18,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 
+from invest_model.broad_gates import BUY_MUL, SELL_MUL  # noqa: E402
 from long_window_backtest import FONT, LEGS, prep  # noqa: E402
 
 COL = {"沪深300": "#c0392b", "创业板": "#2980b9", "科创50": "#8e44ad", "红利": "#1e8449"}
@@ -27,7 +28,7 @@ GREEN, RED, GREY = "#1e8449", "#c0392b", "#7f8c8d"
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default=".")
+    ap.add_argument("--data", default="results")
     ap.add_argument("--out-dir", default="results")
     ap.add_argument("--years", type=float, default=3.0, help="下排小图回看年数")
     a = ap.parse_args()
@@ -48,8 +49,7 @@ def main() -> None:
         exp = float(df.exp.iloc[-1]) if df.exp.notna().any() else float("nan")
         r1250 = float(df.r1250.iloc[-1]) if df.r1250.notna().any() else float("nan")
         peak = float(df.peak.iloc[-1])
-        bm = 0.90 if nm == "创业板" else 1.00
-        sm = 1.43 if nm == "创业板" else 1.30
+        bm, sm = BUY_MUL[nm], SELL_MUL[nm]      # P58：唯一真源 invest_model/broad_gates.py
         G[nm] = dict(df=df, mode=mode, date=str(df.trade_date.iloc[-1]), last=last,
                      exp=exp, r1250=r1250, peak=peak,
                      buy=exp * bm if exp == exp else float("nan"),

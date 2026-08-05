@@ -40,7 +40,7 @@ with contextlib.redirect_stdout(io.StringIO()):   # 标定脚本 import 时会�
 COL = {"沪深300": "#c0392b", "创业板": "#2980b9", "科创50": "#8e44ad", "红利": "#1e8449"}
 GREEN, RED, GREY, AMBER = "#1e8449", "#c0392b", "#7f8c8d", "#b7950b"
 LEGS = list(K.data)
-PROD = {"沪深300": 1.00, "创业板": 1.10, "科创50": 1.30, "红利": 1.00}   # _BROAD_LEGS 实际值
+PROD = {"沪深300": 1.00, "创业板": 1.10, "科创50": 1.30, "红利": 1.00}   # 08-05 统一前的旧生产值（本图记录的是当时的事故状态）
 BACK = {"沪深300": 1.30, "创业板": 1.43, "科创50": 1.30, "红利": 1.30}   # 回测引擎默认值
 _SRC = (HERE / "review_disposition_calib.py").read_text()
 _CUT = 'BAR = "="'

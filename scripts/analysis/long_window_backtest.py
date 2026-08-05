@@ -26,6 +26,8 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 
+from invest_model.broad_gates import SELL_MUL  # noqa: E402  卖出闸唯一真源（P58）
+
 FONT = "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"
 RF, CASH, WARM = 0.02, 0.02, 500
 RUNG, FRAC = [0.50, 0.55, 0.60, 0.65], [0.30, 0.35, 0.40, 0.50]
@@ -33,11 +35,13 @@ RUNG, FRAC = [0.50, 0.55, 0.60, 0.65], [0.30, 0.35, 0.40, 0.50]
 # 2026-08-04 红队 M1：此前用硬编码起点（如 20070101），但 expanding 锚要到第 WARM=500 个
 # 交易日才可用 —— 中间那段基准全额吃到、策略一股买不了。红利腿实测那 18 个交易日全收益
 # 指数涨 +25.9%，把「跑输」虚增了约 1.2pp。**起点一律 = 策略第一个可交易日，策略与基准同起点。**
+# 2026-08-05：文件名此前指向 scratchpad 时代的临时文件（hs300.csv 等），scratchpad 清空后
+# 本脚本一直跑不起来。改为仓内 results/ 的正式落地文件，复现不再依赖任何外部目录。
 LEGS = [
-    ("沪深300", "hs300.csv", "close", None, None, "anchor"),
-    ("创业板", "spread_full.csv", "chinext", None, None, "anchor"),
-    ("科创50", "star50.csv", "close", None, None, "ladder"),   # 阶梯腿不用 expanding 锚
-    ("红利", "000922_csi.csv", "close", "000922_tr.csv", None, "anchor"),
+    ("沪深300", "index_dump_000300_SH.csv", "close", None, None, "anchor"),
+    ("创业板", "spread_full_history.csv", "chinext", None, None, "anchor"),
+    ("科创50", "index_dump_000688_SH.csv", "close", None, None, "ladder"),   # 阶梯腿不用 expanding 锚
+    ("红利", "index_dump_000922_CSI.csv", "close", "index_dump_H00922_CSI.csv", None, "anchor"),
 ]
 
 
@@ -138,7 +142,7 @@ def run(df, ret, fmap, nm, d0, d1, mode, init=100.0):
                 in_ep, armed[:] = False, True
         elif r.we and r.exp == r.exp and ci < r.exp * (0.90 if nm == "创业板" else 1.0):
             sig.append(("B", 0.20, f"锚买(收盘/中位线={ci / r.exp:.2f})"))
-        mul = 1.30 * 1.10 if nm == "创业板" else 1.30
+        mul = SELL_MUL[nm]            # P58：唯一真源 invest_model/broad_gates.py
         if r.me and r.exp == r.exp and ci > r.exp * mul and units > 0:
             sig.append(("S", 0.05, f"卖出闸(收盘/中位线={ci / r.exp:.2f})"))
         for k, fr, why in sig:
@@ -260,7 +264,7 @@ def combined(data, fmap, starts, END, sleeve_interest=True):
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default=".")
+    ap.add_argument("--data", default="results")
     ap.add_argument("--out-dir", default="results")
     args = ap.parse_args()
     root, outd = Path(args.data), Path(args.out_dir)
