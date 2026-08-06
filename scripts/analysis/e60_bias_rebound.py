@@ -26,6 +26,11 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[1]))
 from e57_bias_top3_leg import UNIVERSE  # noqa: E402
 
+# 🔴 2026-08-06 修正：owner 两轮前就指定过「近十年、滚动算」，E59 用了、E60 却错用成
+#    全历史 expanding。expanding 的 σ 随历史积累变大 ⟹ 同样幅度的暴跌越来越难算「极值」，
+#    这会**系统性制造**「近年不触发」。窗口口径改回滚动 10 年（2500 交易日）。
+ROLL_WIN = 2500                     # 近十年（交易日）
+WINS = (1250, 2500, 3750)           # 窗口敏感性：5 / 10 / 15 年
 ZS = (1.5, 2.0, 2.5, 3.0)
 NS = (1, 2, 3, 5, 10)
 Z_MAIN, WARM_MAIN, MA_MAIN = 2.0, 750, 60
@@ -38,10 +43,24 @@ HURDLE = 0.0030             # 判据①：含成本每笔 ≥ +0.30%
 OOS_SCORED, OOS_NOTED = ("上证50", "中证500"), ("中证1000",)
 
 
-def zscore(b: pd.Series, warm: int) -> np.ndarray:
-    mu = b.expanding(min_periods=warm).mean()
-    sd = b.expanding(min_periods=warm).std(ddof=1)
+def zscore(b: pd.Series, warm: int, win: int | None = ROLL_WIN) -> np.ndarray:
+    """滚动窗口内的 z 分数（win=None 退回全历史 expanding，作对照臂）。
+
+    窗口不足 win 时用截至当日的全部历史（owner：「不足十年就按最大的来」）。
+    """
+    if win is None:
+        mu = b.expanding(min_periods=warm).mean()
+        sd = b.expanding(min_periods=warm).std(ddof=1)
+    else:
+        mu = b.rolling(win, min_periods=warm).mean()
+        sd = b.rolling(win, min_periods=warm).std(ddof=1)
     return ((b - mu) / sd).to_numpy()
+
+
+def pct_rank(b: pd.Series, warm: int, win: int | None = ROLL_WIN) -> np.ndarray:
+    """滚动窗口内的分位（0=窗口内最低）——「近十年历史极值」的另一种读法，作并列对照臂。"""
+    r = (b.rolling(win, min_periods=warm) if win else b.expanding(min_periods=warm))
+    return r.apply(lambda x: (x <= x.iloc[-1]).mean(), raw=False).to_numpy()
 
 
 def run(c: np.ndarray, z: np.ndarray, dates: np.ndarray, zin: float, n: int,
@@ -91,12 +110,13 @@ def run(c: np.ndarray, z: np.ndarray, dates: np.ndarray, zin: float, n: int,
                 expo=float(hold[i0:].mean()), trades=trades)
 
 
-def load_all(root: Path, ma: int = MA_MAIN, warm: int = WARM_MAIN) -> dict:
+def load_all(root: Path, ma: int = MA_MAIN, warm: int = WARM_MAIN,
+             win: int | None = ROLL_WIN) -> dict:
     D = {}
     for nm, _, _, _ in UNIVERSE:
         d = pd.read_csv(root / f"{nm}.csv", dtype={"trade_date": str})
         D[nm] = dict(c=d.close.to_numpy(float), dates=d.trade_date.to_numpy(),
-                     z=zscore(d[f"bias{ma}"], warm), fear=d.fear.to_numpy(),
+                     z=zscore(d[f"bias{ma}"], warm, win), fear=d.fear.to_numpy(),
                      bias=d[f"bias{ma}"].to_numpy())
     return D
 
@@ -121,7 +141,8 @@ def main() -> None:
 
     print("=" * 120)
     print("E60 —— 乖离率极值短线搏反弹（P70）｜判据 2026-08-06 跑数前写死")
-    print(f"入场 z≤−{Z_MAIN}（expanding, WARM={WARM_MAIN}）· T+1 收盘买 · 持有 N 日 · "
+    print(f"入场 z≤−{Z_MAIN}（**滚动 {ROLL_WIN} 交易日≈近十年**, 预热 {WARM_MAIN}）· "
+          f"T+1 收盘买 · 持有 N 日 · "
           f"往返成本 {COST_MAIN:.2%} · 空仓现金 {CASH:.1%}/年 · 非重叠")
     print("★ = 样本外（上证50/中证500 计分；中证1000 有 45% 回溯段，记录不计分）")
     print("=" * 120)
@@ -182,6 +203,16 @@ def main() -> None:
     c4 = bool((ep.ep >= 5).all() and (ep.ep16 >= 3).all())
     print(f"  ④ 每腿 episode ≥5（最少 {int(ep.ep.min())}）· 2016 年后每腿 ≥3"
           f"（最少 {int(ep.ep16.min())}）⟹ {'✅' if c4 else '❌'}")
+    print("     逐腿明细（判据写的是「每腿」，一腿不过即整条不过）：")
+    for nm, _, _, _ in UNIVERSE:
+        r = ep.loc[nm]
+        yrs = len([1 for _ in D[nm]["z"] if _ == _]) / 250.0
+        ok = "✅" if (r.ep >= 5 and r.ep16 >= 3) else "❌"
+        why = ("" if (r.ep >= 5 and r.ep16 >= 3) else
+               ("（可算历史仅 %.1f 年，结构上不可能凑够 5 个 episode）" % yrs if yrs < 10
+                else "（2016 年后不够）" if r.ep >= 5 else "（总数不够）"))
+        print(f"       {ok} {nm:>8s}  episode {int(r.ep):>2d} · 2016年后 {int(r.ep16):>2d}"
+              f" · 可算历史 {yrs:>4.1f} 年{why}")
 
     ann_ok = int((ep.ann > 0.02).sum())
     c5 = ann_ok >= 5
@@ -198,11 +229,15 @@ def main() -> None:
         gm = grid(load_all(root, m, WARM_MAIN))
         v = int((gm[(gm.zin == Z_MAIN) & (gm.n == best_n)]["mean"] >= HURDLE).sum())
         sub.append(("MA", m, v))
+    for w in WINS:
+        gw = grid(load_all(root, MA_MAIN, WARM_MAIN, w))
+        v = int((gw[(gw.zin == Z_MAIN) & (gw.n == best_n)]["mean"] >= HURDLE).sum())
+        sub.append(("窗口", w, v))
     for cs in COSTS:
         gc = grid(D, cs)
         v = int((gc[(gc.zin == Z_MAIN) & (gc.n == best_n)]["mean"] >= HURDLE).sum())
         sub.append(("成本", f"{cs:.2%}", v))
-    for lbl in ("WARM", "MA", "成本"):
+    for lbl in ("WARM", "窗口", "MA", "成本"):
         xs = [(k, v) for g, k, v in sub if g == lbl]
         print(f"     {lbl}：" + "　".join(f"{k}→{v}/7" for k, v in xs))
     warm_ok = all((v >= 5) == c1 for g, _, v in sub if g == "WARM")
