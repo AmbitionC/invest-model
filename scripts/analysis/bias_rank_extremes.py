@@ -116,7 +116,13 @@ def main() -> None:
         df0, ret = prep_all(root, f, col, trf)
         b, pct = bias_and_causal_pct(df0.c, a.w)
         df = with_warm(df0, 500)
-        i0 = int(np.searchsorted(df.trade_date.values, first_tradable(df, mode)))
+        # 🔴 2026-08-05 修正：此前这里用 `first_tradable`（＝expanding 中位线锚的 WARM=500
+        # 预热日），但**那是锚的预热，不是乖离率的预热**。乖离率只需要 60 个交易日。
+        # 后果：①每条 anchor 腿的极值谱都被砍掉了前 ~499 个可算日，沪深300 的谱首位
+        # （2007-01-29 +35.74%）其实不是全历史最高——被砍掉的段里 2007-01-22 有 +37.64%；
+        # ②科创50 是 ladder 腿、first_tradable 返回数据首日 ⟹ **腿间口径还不一致**。
+        # 现统一为「bias 首个可算日」，全指数同一口径。
+        i0 = int(np.argmax(~np.isnan(b)))
         D[nm] = dict(df=df, ret=ret, mode=mode, b=b, pct=pct, i0=i0)
 
     print("=" * 112)

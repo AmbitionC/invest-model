@@ -361,5 +361,44 @@ def main() -> None:
             print("    ⟹ **①②③④过而⑤⑥不过 → 记知识库，不接入生产。**")
 
 
+def warm_sensitivity(root: Path) -> None:
+    """附（**非判据·披露**）：排名预热对触发数与效应量的影响。
+
+    🔴 起因：主表里沪深300 与中证红利的**高尾触发数为 0**，我在首轮汇报里把它写成
+    「它们的历史最高偏离出现在 2007 年、落在预热期内」——**这是把我自己的参数选择
+    说成了数据事实**。预登记的判据⑥ WARM 网格是 {350,500,650,800}，**下界 350 本身
+    就高到足以永远排除 2007 年那批峰值** ⟹ 那条稳健性判据在这个问题上没有分辨力。
+    这是本系列第三处判据设计缺陷（前两处：E56 的②聚合口径未写明、④零触发时空洞通过）。
+
+    本节把预热放宽到 {120, 250, 500}，看裁决是否为参数假象。**结果不改判**（见下），
+    但理由必须换成实测，不能再用「落在预热期内」这种把参数当事实的说法。
+    """
+    print("\n" + "=" * 112)
+    print("附（非判据·披露）：排名预热敏感性 —— 主表的 0 触发是数据事实还是参数假象？")
+    print("=" * 112)
+    for side in ("high", "low"):
+        print(f"\n  ── {'高尾' if side == 'high' else '低尾'}（H=20）──")
+        print(f"    {'指数':>9s}" + "".join(f"{'预热'+str(w):>22s}" for w in (120, 250, 500)))
+        print(f"    {'':>9s}" + "".join(f"{'触发/事件':>11s}{'效应量':>11s}" for _ in range(3)))
+        for nm, f, col, oos in UNIVERSE:
+            d = load(root, f, col)
+            c = d.c.to_numpy(dtype=float)
+            b = (pd.Series(c) / pd.Series(c).rolling(60).mean() - 1).to_numpy()
+            row = ""
+            for w in (120, 250, 500):
+                i0 = int(np.argmax(~np.isnan(b))) + w
+                if i0 >= len(c) - 22:
+                    row += f"{'—':>11s}{'—':>11s}"
+                    continue
+                idx = [i for i in np.where(causal_topk(b, K, side, w))[0]
+                       if i0 <= i < len(c) - 21]
+                e, n = eff(c, idx, 20, i0)
+                row += f"{f'{len(idx)}/{eps_count(idx, 20)}':>11s}"
+                row += (f"{e:>+11.2%}" if n else f"{'—':>11s}")
+            star = "★" if oos else " "
+            print(f"    {star}{nm:>8s}" + row)
+
+
 if __name__ == "__main__":
     main()
+    warm_sensitivity(Path("results"))
