@@ -79,7 +79,11 @@ def run(c: np.ndarray, z: np.ndarray, dates: np.ndarray, zin: float, n: int,
             break
         trades.append(dict(sig=str(dates[i]), entry=str(dates[e]), exit=str(dates[x]),
                            ret=c[x] / c[e] - 1.0 - cost, z=float(z[i])))
-        hold[e:x + 1] = True
+        # 🔴 V 通道 2026-08-06 抓到的前视 bug：原写 hold[e:x+1]，把**买入日当天**
+        #    （close[T+1]/close[T]，即信号日→买入日那一段）也算进了净值。T+1 收盘才买入，
+        #    这一天赚不到。累乘应从 e+1 开始，与逐笔口径 c[x]/c[e] 严格一致。
+        #    影响仅限年化贡献（判据⑤）；逐笔收益表不受影响（本来就是 c[x]/c[e]）。
+        hold[e + 1:x + 1] = True
         i = x                                        # 非重叠：平仓后才可再触发
     if not trades:
         return dict(ntr=0, mean=np.nan, med=np.nan, win=np.nan, ann=np.nan,
@@ -266,6 +270,55 @@ def main() -> None:
         print(f"{nm:>9s}{base['ntr']:>10d}{base['mean']:>+9.2%}{res['ntr']:>7d}"
               f"{res['mean']:>+10.2%}{(res['mean']-base['mean'])*100:>+9.2f}"
               f"{base['win']:>9.0%}{res['win']:>9.0%}")
+
+    # ── V 通道三条对照臂（2026-08-06 交叉验证提出，全部并列呈现） ──
+    print("\n" + "=" * 120)
+    print("V 通道对照臂：三处「换个写法读数就变」的地方")
+    print("=" * 120)
+
+    print("\n  【V-D】判据⑤的年化贡献里有多少是**空仓吃利息**？")
+    print(f"  🔴 净值里空仓按 {CASH:.1%}/年 计息，而判据⑤的门槛写的是 2.0% —— 光放着不动就有 "
+          f"{CASH:.2%}，\n     这条判据实际只要求交易本身贡献 0.5pp。**判据设计偏松，记缺陷。**")
+    print(f"{'指数':>9s}{'年化贡献':>10s}{'减去现金':>10s}{'纯交易项':>10s}{'仍>2.0%?':>10s}")
+    for nm, _, _, _ in UNIVERSE:
+        r = ep.loc[nm]
+        base = (1 + CASH / 250) ** 250 - 1
+        print(f"{nm:>9s}{r.ann:>10.2%}{base:>10.2%}{r.ann - base:>10.2%}"
+              f"{('是' if r.ann - base > 0.02 else '否'):>10s}")
+
+    print("\n  【V-C】不同 N 不是在同一批交易上比较（非重叠 ⟹ N 越大后续触发被吃掉）")
+    print(f"{'指数':>9s}" + "".join(f"{f'N={n}笔数':>10s}" for n in NS) + "  固定信号集对照")
+    for nm, d in D.items():
+        cnts = [int(M[(M.nm == nm) & (M.n == n)]["ntr"].iloc[0]) for n in NS]
+        # 固定信号集：用 N=1 的触发日，对所有 N 复用同一批信号
+        sig = [t["sig"] for t in run(d["c"], d["z"], d["dates"], Z_MAIN, 1, COST_MAIN)["trades"]]
+        idx = np.searchsorted(d["dates"].astype(str), sig)
+        fixed = []
+        for n in NS:
+            rr = [d["c"][i + 1 + n] / d["c"][i + 1] - 1 - COST_MAIN
+                  for i in idx if i + 1 + n < len(d["c"])]
+            fixed.append(f"{np.mean(rr):+.2%}" if rr else "—")
+        print(f"{nm:>9s}" + "".join(f"{c:>10d}" for c in cnts) + "  " + " ".join(fixed))
+    print("     ⟹ 固定信号集下 N 的排序会变（V 报 2/7 腿最优 N 翻转、5/7 腿最优是 N=10）"
+          "\n        ——**「N=2 最好」这个读数不成立**，跨 N 横向比较须用固定信号集。")
+
+    print("\n  【V-B】🔴 滚动窗口把 E59 判死的**阈值漂移**装了回来")
+    print("  滚动 σ 随近十年波动收缩而变小 ⟹ 同样的 z=−2 在不同年代对应完全不同的实际跌幅。")
+    print(f"{'指数':>9s}{'前半段触发 bias60 中位':>24s}{'后半段':>12s}{'漂移':>10s}"
+          f"{'最近一次触发':>14s}{'其 bias60':>11s}")
+    for nm, d in D.items():
+        tr = run(d["c"], d["z"], d["dates"], Z_MAIN, best_n, COST_MAIN)["trades"]
+        if len(tr) < 4:
+            print(f"{nm:>9s}{'样本不足':>24s}")
+            continue
+        idx = np.searchsorted(d["dates"].astype(str), [t["sig"] for t in tr])
+        bs = d["bias"][idx]
+        h = len(bs) // 2
+        print(f"{nm:>9s}{np.median(bs[:h]):>24.1%}{np.median(bs[h:]):>12.1%}"
+              f"{(np.median(bs[h:]) - np.median(bs[:h])) * 100:>+10.1f}"
+              f"{tr[-1]['sig']:>14s}{bs[-1]:>11.1%}")
+    print("     ⟹ 与 E59 记的失败机制逐字相同：阈值随最近十年的波动幅度漂移，"
+          "\n        它度量的是「比最近十年安静时期波动更大」，不是「跌得够深」。")
 
     # ── 探索（非判据·不可晋升） ────────────────────────────
     print("\n" + "=" * 120)
