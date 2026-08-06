@@ -50,3 +50,7 @@ data/*.db
 results/action_plan_real*.md
 config/holdings_*.csv
 config/holding_snapshot_*.csv
+
+# 乖离率均值回归研究的数据包（17MB，由 scripts/analysis/bias_meanrev_data.py 确定性重建）
+# manifest.json 例外——它是 md5 对账记录，交叉验证通道的依据，必须入库
+results/bias_meanrev/*.csv
