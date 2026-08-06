@@ -300,30 +300,51 @@ def _p31_sell_hint(loop: ClosedLoop, dt: str) -> str | None:
     if c[-1] < med:
         return None                              # 下方只买不卖
     return (f"卖出纪律：沪深300 {c[-1]:.0f} 处中位线 {med:.0f} 上方（{c[-1] / med - 1:+.1%}）"
-            f"＝各腿在各自卖出线上方按月减 5%（无条件、不看市场情绪强度）。"
+            f"＝各腿在各自卖出线（中位线×1.30，创业板×1.43）上方按月减 5%（无条件、不看情绪强度）。"
             f"E30 红队已证伪按强度分层的收益主张，规则回归简单；卖出机制本身是回撤控制的主要来源")
+
+
+# 宽基四腿买卖闸：唯一定义在 invest_model/broad_gates.py（P58，2026-08-05）。
+# 那里同时记着「为什么是 1.30」「代价是什么」「为什么这不算 E51 通过」。
+from invest_model.broad_gates import BUY_MUL as _BUY_MUL, SELL_MUL as _SELL_MUL  # noqa: E402
+
+
+def _sell_above(name: str):
+    """卖出闸判定：收盘 > 中位线 × 该腿倍数。"""
+    mul = _SELL_MUL[name]
+    return lambda c, m, r: c > m * mul
 
 
 _BROAD_LEGS = [
     # (名称, 基底CSV, 列, DB代码, ETF, 买规则, 卖规则)——E28 简化篮子（owner 2026-08-01：
     # 只做沪深300/创业板/科创50/红利；中证500/1000 配置记档保留可随时恢复）
     ("沪深300", "index_dump_000300_SH.csv", "close", "000300.SH", "510300",
-     lambda c, m, r: c < m, "＜全量中位线（周频·池20%）", lambda c, m, r: c > m, "＞中位线（P31 分层）"),
+     lambda c, m, r: c < m, "＜全量中位线（周频·池20%）",
+     _sell_above("沪深300"), "＞中位线×1.30（月减5%）"),
     ("创业板", "spread_full_history.csv", "chinext", "399006.SZ", "159915",
-     lambda c, m, r: c < m * 0.90, "＜中位线−10%带（周频·池20%）", lambda c, m, r: c > m * 1.10, "＞中位线+10%带（P31 分层）"),
+     lambda c, m, r: c < m * 0.90, "＜中位线−10%带（周频·池20%）",
+     _sell_above("创业板"), "＞中位线×1.43（月减5%）"),
+    # 2026-08-02 回滚：此前部署的「长持不设卖出」不是 E31 验证过的配置。实测同窗口
+    # 含卖出 13.00%/夏普0.59/回撤−17.2%/卡玛0.76 vs 不卖 13.21%/0.55/−22.6%/0.58
+    # ＝多赚 0.21pp 换 5.4pp 回撤，风险调整后严格更差 ⇒ 与其余三腿统一，按月减 5%。
     ("科创50", "index_dump_000688_SH.csv", "close", "000688.SH", "588000",
      lambda c, m, r: False, "深回撤阶梯 L50（距全历史峰 −50/−55/−60/−65 四档，各档一轮只买一次，"
-     "投当前现金 30/35/40/50%）+ 恐慌抢买", lambda c, m, r: False, "长持不设卖出"),
+     "投当前现金 30/35/40/50%）+ 恐慌抢买",
+     _sell_above("科创50"), "＞中位线×1.30（月减5%）"),
     ("红利", "index_dump_000922_CSI.csv", "close", "000922.CSI", "515080",
-     lambda c, m, r: c < m, "＜全量中位线（周频·池20%·临时价格锚，E26 估值锚待验）", lambda c, m, r: c > m, "＞中位线（P31 分层）"),
+     lambda c, m, r: c < m, "＜全量中位线（周频·池20%·临时价格锚，E26 估值锚待验）",
+     _sell_above("红利"), "＞中位线×1.30（月减5%）"),
 ]
 
 
-def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
-    """P27 v2：独立宽基账户·四腿窗口状态（owner 2026-08-01 拍板：废除 25% 总资产目标、
-    两账户独立决策、多指数配置）。各腿独立触发；恐慌≥75 时任何腿均可抢买池 50%。"""
-    rows = []
+def _broad_leg_states(loop: ClosedLoop, dt: str) -> list[dict]:
+    """四腿的窗口判定读数——提示行 `_broad_legs_hint` 与落库 `_persist_broad_leg_state`
+    共用同一份计算，保证 issue #9 的计划、库表、前端板块三处永远是同一个数。
+
+    state：buy=买入窗开 ｜ panic=恐慌抢买窗（价格未到但恐慌≥75）｜ sell=卖出区 ｜ hold=持有区。
+    """
     fear = _fear_score(loop, dt)
+    out: list[dict] = []
     for name, csvn, col, code, etf, fbuy, buy_txt, fsell, sell_txt in _BROAD_LEGS:
         try:
             s = _index_hist_by(loop, dt, csvn, code, col=col)
@@ -332,23 +353,205 @@ def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
             c = s.to_numpy(dtype=float)
             last, med = float(c[-1]), float(pd.Series(c).median())
             r1250 = float(pd.Series(c[-1250:]).median()) if len(c) >= 1250 else None
+            # 乖离率（P39）：收盘/MA60−1，及其**因果全历史分位**（只用当日可得历史）。
+            # ⚠️ **只作展示与波动刻度，不参与任何买卖闸判定。** E37（2026-08-02）已判死
+            # 它作方向信号：进入全历史前 5% 分位后未来 20 日反而 +0.53~+5.70pp、
+            # 破历史极值后 60 日 +16.5~+33.7%＝顶部机械信号第四次失败。唯一未被否定的
+            # 残留是「破极值后 60 日最大回撤 −11.5~−21.2%、明显高于常态」⟹ 波动刻度。
+            bias = bias_pct = bias_rank = None
+            if len(c) >= 60:
+                ma60 = float(pd.Series(c[-60:]).mean())
+                if ma60 > 0:
+                    bias = last / ma60 - 1.0
+                    bs = (pd.Series(c) / pd.Series(c).rolling(60).mean() - 1.0).dropna()
+                    if len(bs) >= 250:
+                        bias_pct = float((bs <= bias).mean())
+                        bias_rank = int((bs < bias).sum()) + 1   # 1＝历史最低
+            price_buy = bool(fbuy(last, med, r1250))
             panic = fear is not None and fear >= 75
-            if fbuy(last, med, r1250) or panic:
-                why = "恐慌抢买窗" if (panic and not fbuy(last, med, r1250)) else "买入窗开"
-                state = f"🟢{why}"
+            if price_buy:
+                state = "buy"
+            elif panic:
+                state = "panic"
             elif fsell(last, med, r1250):
-                state = "🔴卖出区"
+                state = "sell"
             else:
-                state = "⚪持有区"
-            anchor = med if "中位线" in buy_txt else (r1250 or med)
-            rows.append(f"{name}({etf}) {last:.0f} 距锚{last / anchor - 1:+.0%} {state}")
+                state = "hold"
+            out.append({
+                "name": name, "etf": etf, "code": code,
+                "last": last, "med": med, "r1250": r1250,
+                "anchor": med if "中位线" in buy_txt else (r1250 or med),
+                "buy_mul": _BUY_MUL[name], "sell_mul": _SELL_MUL[name],
+                "buy_txt": buy_txt, "sell_txt": sell_txt,
+                "state": state, "fear": fear,
+                "bias60": bias, "bias_pct": bias_pct, "bias_rank": bias_rank,
+            })
         except Exception:  # noqa: BLE001
             continue
-    if not rows:
+    return out
+
+
+_BROAD_STATE_TXT = {"buy": "🟢买入窗开", "panic": "🟢恐慌抢买窗",
+                    "sell": "🔴卖出区", "hold": "⚪持有区"}
+
+
+def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
+    """P27 v2：独立宽基账户·四腿窗口状态（owner 2026-08-01 拍板：废除 25% 总资产目标、
+    两账户独立决策、多指数配置）。各腿独立触发；恐慌≥75 时任何腿均可抢买池 50%。"""
+    sts = _broad_leg_states(loop, dt)
+    if not sts:
         return None
+    rows = [f"{s['name']}({s['etf']}) {s['last']:.0f} 距锚{s['last'] / s['anchor'] - 1:+.0%} "
+            f"{_BROAD_STATE_TXT[s['state']]}" for s in sts]
     return ("宽基账户（P27 v2·独立决策·四腿）：" + " ｜ ".join(rows)
             + "。买入：" + "；".join(f"{n}{bt}" for n, _, _, _, _, _, bt, _, _ in _BROAD_LEGS)
             + "；恐慌≥75 任意腿抢买池 50%；月度入金四腿各 25%、池内现金放货基")
+
+
+def _persist_broad_leg_state(loop: ClosedLoop, dt: str, sts: list[dict],
+                             shares_map: dict, cost_map: dict, last_close: dict) -> None:
+    """四腿状态落库（`/invest/broad` 与前端「宽基指数」板块的数据源）。best-effort。
+
+    shares/mkt_value/cost_price 取**实盘** current_holding 里对应 ETF 的持仓；本表逐日累积，
+    因而它就是 owner 要的「以当前时间为起点」的仓位账本（历史仓位只有回测口径，不入此表）。
+    """
+    rows = []
+    for s in sts:
+        etf = f"{s['etf']}.SH" if s["etf"].startswith(("5", "6")) else f"{s['etf']}.SZ"
+        etf = _BROAD_ETF.get(s["name"], etf)
+        sh = float(shares_map.get(etf, 0) or 0)
+        px = float(last_close.get(etf, 0) or 0)
+        rows.append({
+            "trade_date": str(dt), "leg": s["name"], "etf": etf,
+            "close": round(s["last"], 4), "median": round(s["med"], 4),
+            "buy_line": round(s["med"] * s["buy_mul"], 4),
+            "sell_line": round(s["med"] * s["sell_mul"], 4),
+            "buy_mul": s["buy_mul"], "sell_mul": s["sell_mul"],
+            "state": s["state"], "fear": s["fear"],
+            "bias60": None if s["bias60"] is None else round(s["bias60"], 6),
+            "bias_pct": None if s["bias_pct"] is None else round(s["bias_pct"], 6),
+            "bias_rank": s["bias_rank"],
+            "shares": sh, "mkt_value": round(sh * px, 3),
+            "cost_price": float(cost_map.get(etf, 0) or 0),
+        })
+    if rows:
+        loop.repo.upsert("broad_leg_state", pd.DataFrame(rows), ["trade_date", "leg"])
+
+
+# ── 陈老师宽基体系·执行纪律层（P51~P53，提示-only）───────────────────────────
+# 2026-08-04 内化审计的产物。此前几轮一直在试图把他的每样东西变成"能不能跑赢"的回测规则，
+# 但他体系里很大一部分根本不是收益规则，是**执行纪律与判断框架**——它们不做收益主张，
+# 因而也不适用 E 系列的超额判据（用"能不能跑赢"去卡它们是判据错配）。
+# 这一层的验收标准只有两条：①算术可复核 ②不改变任何仓位、不产生自动交易。
+_BROAD_ETF = {"沪深300": "510300.SH", "创业板": "159915.SZ",
+              "科创50": "588000.SH", "红利": "515080.SH"}
+
+
+def _broad_anchor_states(loop: ClosedLoop, dt: str) -> list[dict]:
+    """四腿的锚位读数（收盘 / expanding 中位线 / 买卖闸倍数），P51~P52 共用。"""
+    out = []
+    for name, csvn, col, code, etf, _fb, _bt, _fs, _st in _BROAD_LEGS:
+        try:
+            s = _index_hist_by(loop, dt, csvn, code, col=col)
+            if s is None:
+                continue
+            c = s.to_numpy(dtype=float)
+            last, med = float(c[-1]), float(pd.Series(c).median())
+            out.append({"name": name, "etf": _BROAD_ETF.get(name, ""), "last": last, "med": med,
+                        "buy_mul": _BUY_MUL[name],
+                        "sell_mul": _SELL_MUL[name]})
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+def _first_lot_cap(last: float, med: float) -> float:
+    """容错三步法的「首笔上限」——把他的口算推广成本系统锚位的通式。
+
+    原始算术（2026-03-23）：3700 买入、极端情形跌到 3100 补仓，要把均价压回 3400 需后备
+    资金 46%、压回 3300 需 63% ⟹ **首笔最多动用总资金 37%**。
+    本系统的对应量：极端落点取 P28 已上线的深危机口径「中位线下方 10%」＝ med×0.90，
+    安全线取 P26 的 expanding 中位线 med（＝"指数会长期停留其上的点位"的系统定义）。
+    解 f：在 last 处投 f、在 0.9·med 处投 (1−f)，要求成交均价 ≤ med
+        f/last + (1−f)/(0.9·med) ≥ 1/med  ⟹  f ≤ (1/med − 1/d) / (1/last − 1/d),  d = 0.9·med
+    在卖出闸 1.30·med 处该式给出 32.5%，与他实盘口算的 37% 同量级——这不是巧合，
+    是同一个"留够后备把均价压到长期停留位"的约束。
+    """
+    if last <= med:
+        return 1.0                      # 中位线下方：全额可用（跌到 0.9·med 补仓仍安全）
+    d = 0.90 * med
+    den = 1.0 / last - 1.0 / d
+    if den >= -1e-12:
+        return 0.0
+    return max(0.0, min(1.0, (1.0 / med - 1.0 / d) / den))
+
+
+def _fault_tolerance_hint(loop: ClosedLoop, dt: str, cost_map: dict,
+                          shares_map: dict, last_close: dict) -> str | None:
+    """P51 容错自检行（提示-only）：把"安全"还原成可计算量。
+
+    陈老师的定义：**安全 ＝ 持仓均价 ≤ 指数会长期停留其上的点位**（他取沪深300 的
+    3300~3400）。本系统把"长期停留点位"落在 P26 的 expanding 中位线上——同一个锚，
+    因而这条行与买卖闸完全同源，不引入新参数。
+    三问（答不上就是没有容错，不该按那个仓位买）：
+      ①还要再跌多少我才扛不住 ②均价会到哪 ③还需多少后备资金
+    这条行不产生任何买卖指令，只把三问的答案先算出来摆在决策前面。
+    """
+    rows = []
+    for st in _broad_anchor_states(loop, dt):
+        etf, last, med = st["etf"], st["last"], st["med"]
+        sh = float(shares_map.get(etf, 0) or 0)
+        cost = float(cost_map.get(etf, 0) or 0)
+        px = float(last_close.get(etf, 0) or 0)
+        cap = _first_lot_cap(last, med)
+        if sh <= 0 or cost <= 0 or px <= 0:
+            rows.append(f"{st['name']} 无持仓·首笔上限 {cap:.0%}")
+            continue
+        k = px / last                                  # ETF 价 ↔ 指数点 的换算因子
+        cost_idx = cost / k if k > 0 else float("nan")
+        tgt = med * k                                  # 安全线对应的 ETF 价
+        if cost_idx <= med:
+            rows.append(f"{st['name']} 均价≈{cost_idx:.0f}点 ✅安全（≤中位线 {med:.0f}）")
+        elif px < tgt:
+            need = sh * (cost - tgt) / (tgt / px - 1.0)
+            rows.append(f"{st['name']} 均价≈{cost_idx:.0f}点 ⚠高于中位线 {med:.0f}，"
+                        f"按现价还需后备 {need:,.0f} 元才能压回安全线")
+        else:
+            rows.append(f"{st['name']} 均价≈{cost_idx:.0f}点 ⚠高于中位线 {med:.0f}，"
+                        f"且现价也在线上＝**这个价位买不回容错，只能等**")
+    if not rows:
+        return None
+    return ("容错自检（P51·提示）：" + " ｜ ".join(rows)
+            + "。安全＝均价≤该指数 expanding 中位线（与 P26 同锚）；"
+              "首笔上限＝留够后备、在中位线下方 10% 补完仍能把均价压回安全线的最大首投比例"
+              "（卖出闸处约 32%，与实盘口算的 37% 同量级）。容错是一票否决项：答不上"
+              "「还需多少后备/均价会到哪」就不该按那个仓位买")
+
+
+def _broad_no_action_hint(loop: ClosedLoop, dt: str, shares_map: dict) -> str | None:
+    """P52「不动也是决策」行（提示-only）：四腿都没触发时，把不动的正反两条理由写出来。
+
+    源自他的实盘表述习惯——对"不动"分别给出**为何不卖**与**为何不买**两条理由，
+    而不是沉默跳过。沉默会让人把"系统没说话"读成"系统失灵"或"可以随便动"。
+    """
+    sts = _broad_anchor_states(loop, dt)
+    if not sts:
+        return None
+    fear = _fear_score(loop, dt)
+    if fear is not None and fear >= 75:
+        return None                                   # 恐慌抢买窗开着，不是"不动"的日子
+    act = [s for s in sts
+           if s["last"] < s["med"] * s["buy_mul"] or s["last"] > s["med"] * s["sell_mul"]]
+    if act:
+        return None                                   # 有腿触发，交给 P27 v2 行
+    held = [s["name"] for s in sts if float(shares_map.get(s["etf"], 0) or 0) > 0]
+    gaps = "、".join(f"{s['name']}距买入线 {s['last'] / (s['med'] * s['buy_mul']) - 1:+.0%}"
+                    f"/距卖出线 {s['last'] / (s['med'] * s['sell_mul']) - 1:+.0%}" for s in sts)
+    why_hold = (f"为何不卖：{'、'.join(held)} 均未上到各自卖出闸，减仓会白白让出 beta 底座"
+                if held else "为何不卖：本账户暂无宽基持仓，无可卖")
+    return (f"宽基不动（P52·提示）：四腿今日均未触发买卖闸——{gaps}。"
+            f"{why_hold}；为何不买：价格在买入闸上方，此时买入会抬高均价、压低容错，"
+            f"而容错是一票否决项。**不动是本日的决策结果，不是系统没跑**")
 
 
 def _hs300_hist(loop: ClosedLoop, dt: str) -> pd.DataFrame | None:
@@ -998,6 +1201,28 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         _p27 = _broad_legs_hint(loop, dt)
         if _p27:
             hints.append(_p27)
+    except Exception:  # noqa: BLE001
+        pass
+    # 同一份四腿读数落库 broad_leg_state，供 `/invest/broad` 与前端「宽基指数」板块——
+    # 提示行与网站因此不可能出现两套数（P58 之后的一贯做法：一处计算、多处消费）。
+    try:
+        _bst = _broad_leg_states(loop, dt)
+        if _bst:
+            _persist_broad_leg_state(loop, dt, _bst, shares_map, cost_map, last_close)
+    except Exception:  # noqa: BLE001
+        pass
+    # P51 容错自检行 / P52「不动也是决策」行（2026-08-04 内化审计产物，提示-only）：
+    # 不做收益主张、不改仓位，故不走 E 系列超额判据；验收只有"算术可复核 + 零自动交易"。
+    try:
+        _p51 = _fault_tolerance_hint(loop, dt, cost_map, shares_map, last_close)
+        if _p51:
+            hints.append(_p51)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        _p52 = _broad_no_action_hint(loop, dt, shares_map)
+        if _p52:
+            hints.append(_p52)
     except Exception:  # noqa: BLE001
         pass
     # P28 杠杆窗口提示行（提示-only·平时静默）：三信号取二共振才出现——

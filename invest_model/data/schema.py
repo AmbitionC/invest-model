@@ -516,6 +516,26 @@ review_report = Table(
 )
 
 # 恐慌指数按日存证（fear_gauge 为即时计算，落库供历史曲线）。
+# ── 宏观数据层（P54，2026-08-04）─────────────────────────────
+# 源自陈老师的月度金融数据框架：他每期固定读五项——居民新增贷款 / M1 / M2 /
+# 总贷款余额增速 / 社融结构（拉动来自政府还是企业居民），并配三条分析纪律
+# （基数校正、政策反证法、看政策文本措辞变化）。这一层**只存数、不做择时**：
+# 宏观影响买卖决策必须先过 E47 预登记判据（见 docs/model_change_proposals.md P54 段）。
+#
+# 长表设计（不是宽表）的理由：tushare 各宏观接口的列名会变、且我们并不预先知道
+# 每个接口返回哪些列。ingest 端把返回帧里的全部数值列 melt 成 (period, series, value)，
+# **新增指标或接口改列名都不用改表结构**，与 factor_exposure 同一套思路。
+macro_series = Table(
+    "macro_series", metadata,
+    Column("period", String(8), primary_key=True),    # 月度 YYYYMM｜日度 YYYYMMDD｜季度取季末月
+    Column("series", String(64), primary_key=True),   # "接口.列"，如 cn_m.m1_yoy / cn_sf.inc_month
+    Column("value", Numeric(20, 4)),
+    Column("freq", String(4)),                        # M / Q / D
+    Column("source", String(32)),                     # tushare 接口名
+    _created_at(),
+)
+
+
 fear_daily = Table(
     "fear_daily", metadata,
     Column("trade_date", String(8), primary_key=True),
@@ -552,6 +572,39 @@ leverage_signal = Table(
     Column("median", Numeric(12, 4)),                      # 全历史 expanding 中位线
     Column("fear", Numeric(6, 2)),
     Column("detail", Text),                                # json 明细（信号文字/规则）
+    _created_at(),
+)
+
+# 宽基四腿窗口状态（P27 v2·陈老师宽基体系内化）：每计划日逐腿 upsert，
+# 供 FaaS `/invest/broad` 与前端「宽基指数」板块透出，与每日计划 hints 同源同数。
+# 提示-only：本表只描述四腿的闸位读数与当前持仓，系统零自动交易。
+# 注意 shares/mkt_value 记的是**实盘**该 ETF 的持仓（来自 current_holding），
+# 因此这张表天然是「以当前时间为起点」的仓位账本——历史仓位只有回测口径，不在此表。
+broad_leg_state = Table(
+    "broad_leg_state", metadata,
+    Column("trade_date", String(8), primary_key=True),
+    Column("leg", String(16), primary_key=True),            # 沪深300 / 创业板 / 科创50 / 红利
+    Column("etf", String(16)),
+    Column("close", Numeric(14, 4)),                        # 指数收盘点位
+    Column("median", Numeric(14, 4)),                       # expanding 中位线（锚）
+    Column("buy_line", Numeric(14, 4)),                     # 锚 × buy_mul
+    Column("sell_line", Numeric(14, 4)),                    # 锚 × sell_mul
+    Column("buy_mul", Numeric(6, 3)),
+    Column("sell_mul", Numeric(6, 3)),
+    Column("state", String(8)),                             # buy / panic / hold / sell
+    Column("fear", Numeric(6, 2)),
+    Column("shares", Numeric(20, 3)),                       # 实盘持有份额（无则 0）
+    Column("mkt_value", Numeric(20, 3)),
+    Column("cost_price", Numeric(14, 4)),
+    # 乖离率（P39/E37）：收盘/MA60−1 及其**因果全历史分位**（只用当日可得历史）。
+    # ⚠️ E37 已判死它作方向信号（高尾进前 5% 后未来 20 日反而 +0.53~+5.70pp）。
+    # 这两列**只作展示与波动刻度**，不参与任何买卖闸判定——写在这里是为了让网站上
+    # 看到这个数的人，同时看到它已经被证伪过。
+    Column("bias60", Numeric(10, 6)),
+    Column("bias_pct", Numeric(8, 6)),
+    # 因果逐日排名（1＝截至当日见过的最低）。owner 2026-08-05：「我要看的是历史极值排第几」。
+    # 与 bias_pct 是同一件事的两种读法，排名更直观；同样只作展示，不接闸。
+    Column("bias_rank", Integer),
     _created_at(),
 )
 
@@ -848,6 +901,8 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "model_view": "VARCHAR(128)",
         "sleeve": "VARCHAR(16)",                          # 套利：一张表容纳 A/B/α/可转债
     },
+    "broad_leg_state": {"bias60": "DECIMAL(10,6)", "bias_pct": "DECIMAL(8,6)",
+                        "bias_rank": "INT"},
     "action_plan_account": {
         "risk_hints": "TEXT",
         "defense_pct": "DECIMAL(12,6)",

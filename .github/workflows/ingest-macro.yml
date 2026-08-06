@@ -1,0 +1,64 @@
+name: ingest-macro
+
+# 宏观数据层入库（P54）：tushare 宏观/利率/汇率接口 → 长表 macro_series，随后打印读数。
+# 源自陈老师的月度金融数据框架（M1/M2/社融/CPI/PPI/PMI/GDP/LPR/国债/汇率）。
+# **只存数、不择时**——宏观影响买卖决策必须先过 E47 预登记判据。
+# 幂等 upsert（主键 period+series），可反复重跑。
+# 触发：手动 / 改 ops/ingest-macro.trigger 后 push（仅 master）。
+# trigger 文件首行可写 `probe` 只探测接口可得性与列名、不落库。
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_m:
+        description: "起始月 YYYYMM（默认 200501 全量）"
+        default: "200501"
+      probe:
+        description: "只探测列名不落库（true/false）"
+        default: "false"
+  push:
+    branches: [master]
+    paths:
+      - 'ops/ingest-macro.trigger'
+
+concurrency:
+  group: ingest-macro
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      INVEST_DB_URL: ${{ secrets.INVEST_DB_URL }}
+      MYSQL_HOST: ${{ secrets.DB_HOST }}
+      MYSQL_USER: ${{ secrets.DB_USER }}
+      MYSQL_PASSWORD: ${{ secrets.DB_PASS }}
+      MYSQL_DATABASE: ${{ vars.INVEST_DB_NAME || 'invest' }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TUSHARE_HTTP_URL: ${{ secrets.TUSHARE_HTTP_URL }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: 入库 macro_series
+        run: |
+          START="${{ github.event.inputs.start_m || '200501' }}"
+          MODE=""
+          if [ "${{ github.event.inputs.probe }}" = "true" ]; then MODE="--probe"; fi
+          if [ -f ops/ingest-macro.trigger ] && head -1 ops/ingest-macro.trigger | grep -qi '^probe'; then
+            MODE="--probe"
+          fi
+          echo "== start_m=$START mode=${MODE:-ingest}"
+          python scripts/ingest_macro.py --start-m "$START" $MODE
+      - name: 读数摘要（不落库、不构成仓位主张）
+        if: ${{ github.event.inputs.probe != 'true' }}
+        run: python scripts/macro_digest.py || echo "WARN digest 失败（不阻断入库结果）"
