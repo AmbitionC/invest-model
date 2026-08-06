@@ -87,15 +87,35 @@ def main() -> None:
     print(f"恐慌 fear_daily：{fdf.trade_date.min()}~{fdf.trade_date.max()}  {len(fdf)} 行"
           f"（⚠️ 只回填到 2015，早于此的极值点没有恐慌读数，相关性一节须据此裁剪样本）")
 
+    # 🔴 前视列清单（D1 报的坑）：dlnbias/leg_price/leg_ma/resid 名字里**没有 fwd_ 前缀**
+    #    但它们同样用到了 t+h 的信息。与 2026-07-25 复盘取数前视事故同型，必须显式登记。
+    lookahead = ([f"fwd_ret{h}" for h in HORIZONS] + [f"fwd_bias{h}" for h in HORIZONS]
+                 + [f"dlnbias{h}" for h in HORIZONS] + [f"leg_price{h}" for h in HORIZONS]
+                 + [f"leg_ma{h}" for h in HORIZONS] + [f"resid{h}" for h in HORIZONS])
     man: dict = {"mas": list(MAS), "horizons": list(HORIZONS), "ma_main": MA_MAIN,
                  "fear_start": fdf.trade_date.min(), "fear_end": fdf.trade_date.max(),
+                 "float_format": "%.17g（往返无损；此前 %.10g 会让 ma120 误差达 5e-6，"
+                                 "从 CSV 复算恒等式只能到 1e-10，判据若写 <1e-12 会假性 FAIL）",
+                 "lookahead_columns": lookahead,
+                 "price_index_only": "七腿全是价格指数、不含股息。中证红利用 000922（价格），"
+                                     "仓内另有 H00922（全收益，21.6 年累计差 +116%、年化 3.64%）。"
+                                     "⟹ 绝对收益水平类主张不可用本包；排名/分位/组差类可用"
+                                     "（两版 bias60 相关 0.9973、双尾前 5 完全重合）。",
+                 "backfilled_before_launch": {
+                     "中证1000": "发布日约 20141017，之前约 45.3% 为回溯段；其 bias60 高尾前 5 "
+                                 "全部落在回溯段（2007-03~05）⟹ 作样本外对照须打折",
+                     "中证红利": "发布日约 200805，高尾前 4 全在 2007-01（回溯段）",
+                     "科创50": "首行 20191231=1000.0 是回溯基日，该合成点落在第一个 60 日窗口内",
+                     "上证50": "0%，唯一完全干净的对照指数",
+                     "中证500": "约 9.4%，基本干净",
+                 },
                  "indices": {}}
     print(f"\n{'指数':>9s}{'行数':>7s}{'起':>10s}{'止':>10s}"
           f"{'有恐慌':>8s}{'bias60 可算':>12s}{'恒等式残差':>12s}{'md5':>10s}")
     for nm, f, col, oos in UNIVERSE:
         df = build(root, fear, nm, f, col)
         p = out / f"{nm}.csv"
-        df.to_csv(p, index=False, float_format="%.10g")
+        df.to_csv(p, index=False, float_format="%.17g")   # F-5：17 位＝float 往返无损
         md5 = hashlib.md5(p.read_bytes()).hexdigest()
 
         rmax = float(np.nanmax(np.abs(df[[f"resid{h}" for h in HORIZONS]].to_numpy())))
@@ -115,6 +135,14 @@ def main() -> None:
         }
         print(f"{nm:>9s}{len(df):>7d}{df.trade_date.iloc[0]:>10s}{df.trade_date.iloc[-1]:>10s}"
               f"{nf:>8d}{nb:>12d}{rmax:>12.2e}{md5[:8]:>10s}")
+
+    ends = {k: v["end"] for k, v in man["indices"].items()}
+    man["right_edge"] = {"per_index": ends, "min": min(ends.values()), "max": max(ends.values())}
+    if len(set(ends.values())) > 1:
+        man["right_edge"]["warning"] = (
+            "🔴 七腿末日不一致 ⟹ 任何「当前横截面排名」实际在比不同日期的数，"
+            "跨腿横截面结论须先对齐到 min(end)。")
+        print(f"\n⚠️ 右端参差：{sorted(set(ends.values()))} —— 跨腿横截面须对齐到 {min(ends.values())}")
 
     (out / "manifest.json").write_text(json.dumps(man, ensure_ascii=False, indent=2),
                                        encoding="utf-8")

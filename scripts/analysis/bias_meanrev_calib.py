@@ -152,10 +152,13 @@ def main() -> None:
           f"{'共振n':>7s}{'共振价格腿':>11s}{'共振−同期低尾':>15s}{'共振胜率':>9s}{'同期胜率':>9s}")
     for nm, d in D.items():
         b = d.bias60
-        lo = b <= b.quantile(QLOW)
         has_fear = d.fear.notna()
-        lo_same = lo & has_fear                       # 同期对照臂
-        res = lo & (d.fear >= 75)
+        lo = b <= b.quantile(QLOW)                    # 全样本阈值（只用于显示时期效应）
+        # 🔴 F-3（D2 报的口径错配）：阈值取自全样本、样本却裁到 2015 年后 ⟹ 两头对不上。
+        #    D2 实测全窗 vs fear 窗的 p95 能差 4.7~7.1pp。同期两臂一律用**同窗内**的分位。
+        th_same = b[has_fear].quantile(QLOW)
+        lo_same = (b <= th_same) & has_fear           # 同期对照臂（同窗阈值）
+        res = lo_same & (d.fear >= 75)
         for h in (20, 60, 120):
             s0 = d[lo].dropna(subset=[f"leg_price{h}"])
             s1 = d[lo_same].dropna(subset=[f"leg_price{h}"])
@@ -177,7 +180,11 @@ def main() -> None:
     print("\n" + "=" * 118)
     print("标定五：🔴 「低尾价格腿为负」这个结论本身分期稳不稳？")
     print("=" * 118)
-    print("  标定四里沪深300 全样本低尾 H60 价格腿 −6.92%，但只看 2015 年后是 **+2.86%** ——")
+    _h3 = D["沪深300"]
+    _b3, _f3 = _h3.bias60, _h3.fear.notna()
+    _a = _h3[_b3 <= _b3.quantile(QLOW)]["leg_price60"].mean()
+    _c = _h3[(_b3 <= _b3[_f3].quantile(QLOW)) & _f3]["leg_price60"].mean()
+    print(f"  标定四里沪深300 全样本低尾 H60 价格腿 {_a:+.2%}，但只看 2015 年后是 {_c:+.2%} ——")
     print("  符号翻了。所以要把分期拆开看，否则整套结论建在一个不稳的点估计上。")
     print(f"\n{'指数':>9s}{'H':>5s}" + "".join(f"{p:>16s}" for p in
                                               ("2005-2010", "2011-2015", "2016-2020", "2021-今")))
