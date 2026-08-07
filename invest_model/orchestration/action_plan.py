@@ -408,6 +408,117 @@ def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
             + "；恐慌≥75 任意腿抢买池 50%；月度入金四腿各 25%、池内现金放货基")
 
 
+# ── P70 乖离率读数层（提示-only·零仓位主张） ──────────────────────
+# owner 2026-08-06 拍板：「乖离率不参与具体模型决策，但这个指标加进系统；处于近十年前 4 时
+# 走到邮件推送里；指数数据库里也要存入和更新；页面里也要加上透出。」
+#
+# 🔴 **它不接任何买卖闸。** 六个口径全部验证失败：E37（分位高尾）· E56（分位低尾）·
+# E57（全历史排名双尾）· E58（排名+止盈止损）· E59（近十年滚动排名状态机）· E60（滚动 z
+# 分数短线搏反弹，六条判据过五条、卡在触发频次）。凡展示这个数的地方必须同屏呈现裁决。
+#
+# 覆盖 7 个指数（比宽基四腿多 上证50/中证500/中证1000——它们不在 _BROAD_LEGS 里，
+# 但 owner 要的是「所有指数」）。排名＝**近十年滚动窗口内**的名次，rank=1 为窗口内最极端。
+_BIAS_UNIVERSE = [
+    ("沪深300", "index_dump_000300_SH.csv", "close", "000300.SH"),
+    ("创业板", "spread_full_history.csv", "chinext", "399006.SZ"),
+    ("科创50", "index_dump_000688_SH.csv", "close", "000688.SH"),
+    ("中证红利", "index_dump_000922_CSI.csv", "close", "000922.CSI"),
+    ("上证50", "index_dump_000016_SH.csv", "close", "000016.SH"),
+    ("中证500", "index_dump_000905_SH.csv", "close", "000905.SH"),
+    ("中证1000", "index_dump_000852_SH.csv", "close", "000852.SH"),
+]
+BIAS_MA = 60             # 乖离率的均线窗口
+BIAS_WIN = 2500          # 排名窗口＝近十年（交易日）
+BIAS_TOPK = 4            # owner 指定：进前 4 才推送
+_BIAS_MIN_ROWS = 250     # 窗口不足十年时用截至当日全部历史，但至少要这么多天才给排名
+
+
+def _index_bias_states(loop: ClosedLoop, dt: str) -> list[dict]:
+    """七个指数的乖离率读数 + 近十年滚动窗口内的双尾名次。
+
+    取数与 P26/P27 同款：仓内基底 CSV（2005 起全历史）+ `index_daily` 增量补齐，
+    单个指数任何一步失败就跳过它，绝不影响整张计划。
+    """
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2] / "results"
+    out: list[dict] = []
+    for name, fn, col, code in _BIAS_UNIVERSE:
+        try:
+            base = root / fn
+            if not base.exists():
+                continue
+            h = pd.read_csv(base, dtype={"trade_date": str})[["trade_date", col]]
+            h = h.rename(columns={col: "close"})
+            h["close"] = pd.to_numeric(h["close"], errors="coerce")
+            h = h.dropna()
+            tail = loop.repo.read_sql(
+                "SELECT trade_date, close FROM index_daily WHERE code=:c AND trade_date>:s "
+                "ORDER BY trade_date", {"c": code, "s": str(h["trade_date"].max())})
+            if not tail.empty:
+                tail["close"] = pd.to_numeric(tail["close"], errors="coerce")
+                h = pd.concat([h, tail.dropna()], ignore_index=True)
+            h = h[h["trade_date"] <= str(dt)].drop_duplicates("trade_date", keep="last")
+            if len(h) < BIAS_MA + _BIAS_MIN_ROWS:
+                continue
+            c = h["close"].to_numpy(dtype=float)
+            ma = float(c[-BIAS_MA:].mean())
+            if ma <= 0:
+                continue
+            bias = c[-1] / ma - 1.0
+            # 窗口内的历史乖离率（含当日）——不足十年就用截至当日的全部可算历史
+            b_all = (pd.Series(c) / pd.Series(c).rolling(BIAS_MA).mean() - 1.0).dropna()
+            w = b_all.to_numpy(dtype=float)[-BIAS_WIN:]
+            if len(w) < _BIAS_MIN_ROWS:
+                continue
+            rank_low = int((w < bias).sum()) + 1       # 1＝窗口内最低
+            rank_high = int((w > bias).sum()) + 1      # 1＝窗口内最高
+            ext = ("low" if rank_low <= BIAS_TOPK else
+                   "high" if rank_high <= BIAS_TOPK else "")
+            out.append(dict(name=name, code=code, date=str(h["trade_date"].iloc[-1]),
+                            close=float(c[-1]), ma60=ma, bias60=float(bias),
+                            win=int(len(w)), rank_low=rank_low, rank_high=rank_high,
+                            pct_low=float((w <= bias).mean()), extreme=ext))
+        except Exception:                              # 单腿失败不影响其余
+            continue
+    return out
+
+
+def _bias_extreme_hint(sts: list[dict]) -> str | None:
+    """P70 提示行：近十年前 4 才触发 🚨（→ issue #9 评论 → 邮件）；否则给一行状态。
+
+    **提示-only：这一行不改任何仓位、不产生任何操作项。**
+    """
+    if not sts:
+        return None
+    hit = [s for s in sts if s["extreme"]]
+    if hit:
+        seg = "；".join(
+            f"{s['name']} 乖离率 {s['bias60']:+.1%}＝近十年第 "
+            f"{s['rank_low'] if s['extreme'] == 'low' else s['rank_high']} "
+            f"{'低' if s['extreme'] == 'low' else '高'}（{s['win']}日窗）"
+            for s in sorted(hit, key=lambda x: min(x["rank_low"], x["rank_high"])))
+        return ("🚨 乖离率极值：" + seg
+                + "。⚠️ 这是读数不是信号——乖离率已在六个口径上全部验证失败"
+                  "（E37/E56/E57/E58/E59/E60），不构成买卖依据，"
+                  "尤其涨到极值后历史上是继续涨（E37/E57）。仓位仍只由中位线锚决定。")
+    near = sorted(sts, key=lambda s: min(s["rank_low"], s["rank_high"]))[:3]
+    seg = "；".join(f"{s['name']} {s['bias60']:+.1%}（第{s['rank_low']}低/第{s['rank_high']}高）"
+                   for s in near)
+    return f"乖离率（读数·不接买卖闸）：最接近极值的三条 {seg}｜前 {BIAS_TOPK} 才推送"
+
+
+def _persist_index_bias_daily(loop: ClosedLoop, dt: str, sts: list[dict]) -> None:
+    """乖离率读数落库（`/invest/bias` 与前端透出的数据源）。best-effort，失败静默。"""
+    if not sts:
+        return
+    rows = [{"trade_date": str(dt), "code": s["code"], "name": s["name"],
+             "close": round(s["close"], 4), "ma60": round(s["ma60"], 4),
+             "bias60": round(s["bias60"], 6), "win_days": s["win"],
+             "rank_low": s["rank_low"], "rank_high": s["rank_high"],
+             "pct_low": round(s["pct_low"], 6), "extreme": s["extreme"]} for s in sts]
+    loop.repo.upsert("index_bias_daily", pd.DataFrame(rows), ["trade_date", "code"])
+
+
 def _persist_broad_leg_state(loop: ClosedLoop, dt: str, sts: list[dict],
                              shares_map: dict, cost_map: dict, last_close: dict) -> None:
     """四腿状态落库（`/invest/broad` 与前端「宽基指数」板块的数据源）。best-effort。
@@ -1209,6 +1320,18 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
         _bst = _broad_leg_states(loop, dt)
         if _bst:
             _persist_broad_leg_state(loop, dt, _bst, shares_map, cost_map, last_close)
+    except Exception:  # noqa: BLE001
+        pass
+    # P70 乖离率读数（owner 2026-08-06）：一处计算、三处消费——提示行进 issue #9（→邮件）、
+    # 落库 index_bias_daily、前端 `/invest/bias` 透出。**近十年前 4 才出 🚨 行**，否则只给
+    # 一行状态。**零仓位主张**：它不改任何目标仓位、不产生操作项，仓位仍只由中位线锚决定。
+    try:
+        _bias = _index_bias_states(loop, dt)
+        if _bias:
+            _p70 = _bias_extreme_hint(_bias)
+            if _p70:
+                hints.append(_p70)
+            _persist_index_bias_daily(loop, dt, _bias)
     except Exception:  # noqa: BLE001
         pass
     # P51 容错自检行 / P52「不动也是决策」行（2026-08-04 内化审计产物，提示-only）：

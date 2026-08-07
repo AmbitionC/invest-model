@@ -608,6 +608,35 @@ broad_leg_state = Table(
     _created_at(),
 )
 
+# 指数乖离率日频读数（P70·提示-only）。owner 2026-08-06 拍板：
+#   「乖离率不参与具体模型决策，但这个指标加进系统；处于近十年前 4 时走到邮件推送里；
+#     指数数据库里也要存入和更新；页面里也要加上透出。」
+#
+# 🔴 **边界写死：只存数、只打印读数、零仓位主张。** 乖离率已在**六个口径**上全部验证失败
+# （E37 分位高尾 · E56 分位低尾 · E57 全历史排名双尾 · E58 排名+止盈止损 ·
+#  E59 近十年滚动排名状态机 · E60 滚动 z 分数短线搏反弹），没有任何一条判据支持它进买卖闸。
+# 本表存在的意义是**让 owner 看到读数**，不是让系统据此下单——凡展示这些列的地方
+# （邮件/网站）都必须同屏呈现裁决。
+#
+# 排名口径＝**近十年滚动窗口（2500 交易日）内的名次**，rank=1 表示窗口内最极端的一天。
+# 这是 owner 反复指定的口径（E59/E60 同源），不是全历史排名——全历史排名会在 2008/2015
+# 之后被永久锁死，而滚动窗口会重新武装（代价是阈值随近十年波动幅度漂移，见 E59/E60 裁决）。
+index_bias_daily = Table(
+    "index_bias_daily", metadata,
+    Column("trade_date", String(8), primary_key=True),
+    Column("code", String(16), primary_key=True),            # 000300.SH / 399006.SZ / …
+    Column("name", String(16)),                              # 沪深300 / 创业板 / …
+    Column("close", Numeric(14, 4)),
+    Column("ma60", Numeric(14, 4)),
+    Column("bias60", Numeric(10, 6)),                        # 收盘 / MA60 − 1
+    Column("win_days", Integer),                             # 实际参与排名的窗口天数（≤2500）
+    Column("rank_low", Integer),                             # 窗口内第几低（1＝最低）
+    Column("rank_high", Integer),                            # 窗口内第几高（1＝最高）
+    Column("pct_low", Numeric(8, 6)),                        # 窗口内分位（0＝最低）
+    Column("extreme", String(8)),                            # low / high / ""（前 4 才置位）
+    _created_at(),
+)
+
 # ── 套利模块（arbitrage）表 ──────────────────────────────────
 # 说明：套利与交易是同一资金池的一体两面。以下表全部按 (code|id, trade_date) /
 # version 命名空间落库，回测/复盘/看板复用既有骨架。数据缺失时对应 sleeve 预算
