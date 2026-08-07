@@ -561,6 +561,8 @@ def _persist_broad_leg_state(loop: ClosedLoop, dt: str, sts: list[dict],
             "bias60": None if s["bias60"] is None else round(s["bias60"], 6),
             "bias_pct": None if s["bias_pct"] is None else round(s["bias_pct"], 6),
             "bias_rank": s["bias_rank"],
+            # 价格真实截止日：与 trade_date 不等即表示该腿在吃旧价（见 schema 注释）。
+            "data_date": s.get("data_date"),
             "shares": sh, "mkt_value": round(sh * px, 3),
             "cost_price": float(cost_map.get(etf, 0) or 0),
         })

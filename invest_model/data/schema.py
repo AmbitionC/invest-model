@@ -602,6 +602,11 @@ broad_leg_state = Table(
     # 看到这个数的人，同时看到它已经被证伪过。
     Column("bias60", Numeric(10, 6)),
     Column("bias_pct", Numeric(8, 6)),
+    # 该腿价格的真实截止日（可能早于 trade_date）。2026-08-07 加：此前四腿只有沪深300
+    # 在 update.BENCHMARKS 里日更，另三腿吃基底 CSV 末行却被当作当日价用（创业板一度
+    # 落后 8 个交易日），而库表与前端都只有 trade_date、陈旧完全不可见。
+    # ⚠️ 消费端（/invest/broad、前端卡片）必须在 data_date < trade_date 时显式标注。
+    Column("data_date", String(8)),
     # 因果逐日排名（1＝截至当日见过的最低）。owner 2026-08-05：「我要看的是历史极值排第几」。
     # 与 bias_pct 是同一件事的两种读法，排名更直观；同样只作展示，不接闸。
     Column("bias_rank", Integer),
@@ -931,7 +936,9 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
         "sleeve": "VARCHAR(16)",                          # 套利：一张表容纳 A/B/α/可转债
     },
     "broad_leg_state": {"bias60": "DECIMAL(10,6)", "bias_pct": "DECIMAL(8,6)",
-                        "bias_rank": "INT"},
+                        "bias_rank": "INT",
+                        # 2026-08-07：既有表需在线加列，否则 upsert 会因未知列报错
+                        "data_date": "VARCHAR(8)"},
     "action_plan_account": {
         "risk_hints": "TEXT",
         "defense_pct": "DECIMAL(12,6)",
