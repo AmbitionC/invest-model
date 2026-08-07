@@ -13,7 +13,19 @@ from invest_model.repositories.base import BaseRepository
 
 logger = get_logger()
 
-BENCHMARKS = ["000300.SH", "000905.SH", "000906.SH"]
+# 指数日线日更清单。前三个是模型基准；后五个是宽基四腿（P27 v2）与 P70 乖离率七腿
+# 的取数底座——2026-08-07 修：此前只日更前三个，导致创业板/科创50/红利三腿只能吃
+# 仓内基底 CSV 的最后一行，实测当日计划显示的「现价」逐位等于 CSV 末行（创业板 3327
+# ＝20260728、科创50 1588＝20260730、红利 5569＝20260731），分别落后 8/6/5 个交易日，
+# 而计划口径行却标着「行情/决策日 20260807」。四腿窗口判定与容错自检行全部建立在
+# 这些价格上，故属越过提示层的数据缺陷。
+BENCHMARKS = [
+    "000300.SH", "000905.SH", "000906.SH",   # 模型基准（沪深300 同时是宽基第一腿）
+    "399006.SZ",                              # 创业板指——宽基第二腿
+    "000688.SH",                              # 科创50——宽基第三腿
+    "000922.CSI",                             # 中证红利——宽基第四腿
+    "000016.SH", "000852.SH",                 # 上证50 / 中证1000——P70 乖离率七腿补全
+]
 _FINA_COLS = ["code", "report_date", "ann_date", "roe", "roa", "gross_margin",
               "revenue_yoy", "profit_yoy", "q_sales_yoy", "q_profit_yoy", "ocfps"]
 _FINA_EXT_COLS = ["code", "report_date", "ann_date", "goodwill", "minority_int",

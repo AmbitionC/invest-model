@@ -385,6 +385,12 @@ def _broad_leg_states(loop: ClosedLoop, dt: str) -> list[dict]:
                 "buy_txt": buy_txt, "sell_txt": sell_txt,
                 "state": state, "fear": fear,
                 "bias60": bias, "bias_pct": bias_pct, "bias_rank": bias_rank,
+                # 该腿价格实际截止到哪天（基底 CSV 末行 或 index_daily 增量末行）。
+                # 2026-08-07 加：此前四腿只有沪深300 在 update.BENCHMARKS 里日更，另三腿
+                # 吃 CSV 末行却被当作当日价用（创业板落后 8 个交易日），而计划口径行标的是
+                # 决策日 ⟹ 必须逐腿把真实数据日期透出来，让陈旧无法隐身。
+                "data_date": str(s.index[-1]),
+                "stale_td": None,   # 由 _broad_legs_hint 按交易日历回填
             })
         except Exception:  # noqa: BLE001
             continue
@@ -401,11 +407,24 @@ def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
     sts = _broad_leg_states(loop, dt)
     if not sts:
         return None
-    rows = [f"{s['name']}({s['etf']}) {s['last']:.0f} 距锚{s['last'] / s['anchor'] - 1:+.0%} "
-            f"{_BROAD_STATE_TXT[s['state']]}" for s in sts]
-    return ("宽基账户（P27 v2·独立决策·四腿）：" + " ｜ ".join(rows)
+    # 陈旧标注：某腿价格若不是决策日的，直接把日期写进提示行（不静默、不四舍五入）。
+    stale = [s for s in sts if str(s.get("data_date") or "") and str(s["data_date"]) < str(dt)]
+    rows = []
+    for s in sts:
+        r = (f"{s['name']}({s['etf']}) {s['last']:.0f} 距锚{s['last'] / s['anchor'] - 1:+.0%} "
+             f"{_BROAD_STATE_TXT[s['state']]}")
+        if str(s.get("data_date") or "") and str(s["data_date"]) < str(dt):
+            r += f"⚠️价格截至{s['data_date']}"
+        rows.append(r)
+    txt = ("宽基账户（P27 v2·独立决策·四腿）：" + " ｜ ".join(rows)
             + "。买入：" + "；".join(f"{n}{bt}" for n, _, _, _, _, _, bt, _, _ in _BROAD_LEGS)
             + "；恐慌≥75 任意腿抢买池 50%；月度入金四腿各 25%、池内现金放货基")
+    if stale:
+        txt += ("。🔴 数据陈旧告警：" + "、".join(f"{s['name']}止于{s['data_date']}" for s in stale)
+                + f"（决策日 {dt}）——该腿的窗口判定与容错自检行建立在过期价格上，"
+                "修复路径＝`update.BENCHMARKS` 已于 20260807 补齐四腿+七腿指数日更，"
+                "待下一次 data-update 跑完即自愈；若本行持续出现说明日更未生效")
+    return txt
 
 
 # ── P70 乖离率读数层（提示-only·零仓位主张） ──────────────────────
