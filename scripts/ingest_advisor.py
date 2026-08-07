@@ -27,6 +27,9 @@ from invest_model.repositories.advisor_repo import (  # noqa: E402
 )
 from invest_model.repositories.base import BaseRepository  # noqa: E402
 
+# research 信号未显式给 valid_until 时的默认复核期（自然日）。owner 2026-08-07 定。
+RESEARCH_VALID_DAYS = 30
+
 
 def _next_trading_day(repo: BaseRepository, rec_date: str, n: int) -> str | None:
     df = repo.read_sql(
@@ -67,9 +70,19 @@ def ingest_reco(engine, df: pd.DataFrame, intraday_valid_days: int = 3) -> int:
     if "valid_until" not in df.columns:
         df["valid_until"] = None
     for i, r in df.iterrows():
-        if (pd.isna(r.get("valid_until")) or not str(r.get("valid_until")).strip()) \
-                and r["source_type"] == "intraday":
-            df.at[i, "valid_until"] = _next_trading_day(repo, str(r["rec_date"]), intraday_valid_days)
+        if pd.isna(r.get("valid_until")) or not str(r.get("valid_until")).strip():
+            if r["source_type"] == "intraday":
+                df.at[i, "valid_until"] = _next_trading_day(
+                    repo, str(r["rec_date"]), intraday_valid_days)
+            else:
+                # research 默认 30 自然日复核期（owner 2026-08-07 拍板：「30 天，直到再次
+                # 被提起」）。此前 research 留空＝永久有效，退出只靠 direction=exit，而投顾
+                # 实践中不会逐票宣告「逻辑证伪」，于是老信号永久占据观察池——0807 实测
+                # 104 条无失效日、最老为 20260611（近两个月），且其中 8 只当日模型全部看空。
+                # 同标的被再次提起时按新 rec_date 重新计 30 天（advisor_repo 取最新 rec_date）。
+                df.at[i, "valid_until"] = (
+                    pd.Timestamp(str(r["rec_date"])) + pd.Timedelta(days=RESEARCH_VALID_DAYS)
+                ).strftime("%Y%m%d")
     return AdvisorRepo(engine).save_reco(df)
 
 
