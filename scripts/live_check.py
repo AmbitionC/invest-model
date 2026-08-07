@@ -310,6 +310,11 @@ def _half_lot(shares: float) -> int:
     return min(half, int(sh // 100) * 100)    # 不超过可卖整手数
 
 
+# 盘中买入挂单文案的免责后缀（owner 2026-08-07 拍板·方案1「最小改动」）：盘中只判价位、
+# 收盘才跑三层闸，两者候选集本就不同；下单量易被读成可执行指令，故统一附此后缀。
+_BUY_CAVEAT = "⚠️仅价位到位，是否可买以收盘三层闸为准"
+
+
 def _buy_ticket(level: float, cash: float, equity: float, weight: float,
                 code: str = "") -> str:
     """买入挂单：挂单价 + 按目标占比定量（股数/金额/占比），并标注资金是否够。
@@ -318,6 +323,14 @@ def _buy_ticket(level: float, cash: float, equity: float, weight: float,
     科创板最低 200 股）——不管现金够不够都给出该买多少，便于「先卖出腾资金 →
     再按此挂买」；末尾注明现金够或还需腾多少。最小一笔远超目标（高价股+小目标
     权重）→ 明示不可执行，不再硬塞一手（科创板塞 100 股是废单，主板一手可占权益 15%+）。
+
+    ⚠️ 口径边界（owner 2026-08-07 命题「盘中给标的+价格+数量、收盘却没有推荐」）：
+    盘中盯盘**只判价位**（MA60 闸 + 到回踩位/突破位），**不跑量化闸（rank_pct≥0.5）、
+    不跑环境闸（gross≥min_gross）、也不要求放量阳线确认**；而收盘计划的「建议买入」
+    必须三层闸全过（`invest_model/signals/buypoint.py:detect_buypoints`）。故同一标的
+    盘中出价位预警、收盘判不买是**正常且预期内**的——典型如 0807 中船特气「现突破新高
+    买点但量化分偏弱(rank<50%)」。本函数给出的股数是「若可买则买多少」的备算量，
+    **不是可执行指令**，据此在文案尾部附免责后缀，避免下单量淹没条件语义。
     """
     from invest_model.portfolio.sizing import buy_shares, min_lot
     if not level or level <= 0:
@@ -332,7 +345,8 @@ def _buy_ticket(level: float, cash: float, equity: float, weight: float,
     amt = n * level
     wt = (amt / equity) if equity else 0.0
     fund = "现金够" if cash >= amt else f"需先卖出腾≈{amt - cash:.0f}"
-    return f"挂买 限价{level:.2f} {n}股≈{amt:.0f}(占{wt:.1%}); {fund}"
+    return (f"挂买 限价{level:.2f} {n}股≈{amt:.0f}(占{wt:.1%}); {fund}"
+            f"｜{_BUY_CAVEAT}")
 
 
 def _fetch_rt(ctx: dict) -> dict:
@@ -499,10 +513,17 @@ def _scan(ctx: dict, rt: dict, args: argparse.Namespace) -> tuple[list, list, li
         if not hit and "趋势未上" not in st:
             _track(px, ma20, hi20)
         if hit:
-            # 挂单信号：回踩位挂 MA20 照旧给量（与主闸买点语义一致）；
-            # **突破提示不再给「挂买×股」可执行话术**（0728 锐捷教训：突破提示未过
-            # rank 闸却递到用户面前一张带股数金额的单子、次日 -9%。盯盘是观察通道
-            # 不是下单通道——突破只报事实+风险，是否买以当晚计划闸门结论为准）。
+            # 挂单信号：**突破提示不给「挂买×股」可执行话术**（0728 锐捷教训：突破提示
+            # 未过 rank 闸却递到用户面前一张带股数金额的单子、次日 -9%。盘中盯盘是观察
+            # 通道不是下单通道——突破只报事实+风险，是否买以当晚计划闸门结论为准）。
+            #
+            # 🔴 2026-08-07 更正（owner 命题「盘中给标的+价格+数量、收盘却没有推荐」）：
+            # 此处原写「回踩位挂 MA20 照旧给量（**与主闸买点语义一致**）」——该理由不成立、
+            # 已作废。主闸 detect_buypoints 的回踩腿要求「回踩 MA20 **放量阳线** +
+            # rank_pct≥0.5 + gross≥min_gross」三层全过，而本函数的回踩只判 |dev|≤3%
+            # （连放量阳线都不要求）⟹ 两者语义并不一致，0728 那次修复只覆盖了突破这一半，
+            # 回踩这一半带着同样的缺陷留到了今天。现回踩分支保留股数（作「若可买则买多少」
+            # 的备算量、便于先卖后买腾资金），但由 _buy_ticket 统一附免责后缀。
             if "突破" in st:
                 alerts.append((akey,
                                f"🟢 观察 {q.get('name', c)}({g_of.get(c, '')}) {px:.2f} — {st}"
