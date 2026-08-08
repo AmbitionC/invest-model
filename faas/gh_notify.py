@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -97,13 +98,46 @@ def post_issue_comment(title: str, seed_body: str, comment_body: str,
     return {"posted": True, "issue": number, "reason": "ok"}
 
 
+def commit_file(repo_path: str, content: str, message: str,
+                branch: str = "master") -> dict:
+    """经 contents API 把单文件提交到仓库（存在则带 sha 覆盖，不存在则创建）。
+
+    用途：FC 只读代码目录、产物落 /tmp 后回写仓库（如复盘 JSON 双轨，handoff 1.3——
+    周度复盘迁 FC 后 results/review/latest.json 停更，按 schema 消费的 Agent 拿两周前
+    数据当最新）。凭证同 issue 推送（GITHUB_TOKEN/GH_TOKEN）；**token 须有本仓
+    Contents RW**——若仅 Issues RW 会 403，调用方应告警提示补权限而不是静默。
+    返回 {"committed": bool, "path": str, "reason": str}。
+    """
+    import base64
+
+    token, repo = _cred()
+    if not token or not repo:
+        print(f"  (未配置 GITHUB_TOKEN/GITHUB_REPOSITORY，跳过提交 {repo_path})")
+        return {"committed": False, "path": repo_path, "reason": "no-credentials"}
+    url = f"{_GH_API}/repos/{repo}/contents/{urllib.parse.quote(repo_path)}"
+    sha = None
+    try:
+        cur = _req("GET", f"{url}?ref={branch}", token)
+        sha = cur.get("sha")
+    except urllib.error.HTTPError as e:
+        if e.code != 404:          # 404=新文件正常路径；403/401 是权限问题，须往上抛
+            raise
+    payload = {"message": message, "branch": branch,
+               "content": base64.b64encode(content.encode("utf-8")).decode("ascii")}
+    if sha:
+        payload["sha"] = sha
+    _req("PUT", url, token, payload)
+    print(f"  → 已提交 {repo_path}（{branch}）")
+    return {"committed": True, "path": repo_path, "reason": "ok"}
+
+
 _JOB_CN = {
     "live_watch": "盘中盯盘", "snapshot_remind": "持仓快照提醒",
     "ingest_etf": "ETF行情入库", "daily_update_plan": "盘后计划链",
     "plan_watchdog": "计划哨兵", "weekly_rebuild_review": "周末重建复盘",
     "watermeter_remind": "水表提醒", "ingest_advisor": "投顾信号入库",
     "ingest_snapshot": "持仓快照入库", "fear_intraday": "盘中恐慌",
-    "fear_daily": "恐慌指数落库",
+    "fear_daily": "恐慌指数落库", "weekly_review_json": "复盘JSON回写",
 }
 
 

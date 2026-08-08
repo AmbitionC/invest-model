@@ -247,3 +247,13 @@ python scripts/analysis/review_meta_audit.py   # 退出码 0 = 两项均复现
 
 对照数据源：issue #8 的 2026-07-27 与 2026-08-01 两条复盘评论；`docs/review_schema.md`；
 `docs/model_change_proposals.md` P23/P24 段。
+
+## 七、修复附记（2026-08-08，接手会话落地）
+
+§五第 1–6 项（修量尺档）已全部实现，见 `docs/handoff_20260808.md` §1 的落地记录：
+
+- 审计 A/B 对应的缺陷已修（`execution.py` 新增 `no_op` 状态与 `alert_state` 状态机）。
+- **`review_meta_audit.py` 随之翻转为回归护栏**：断言从「缺陷复现」改为「修复行为在位」，
+  退出码 0=修复在位、1=回归。缺陷原始复现版脚本见 git 历史（2026-08-08 前）。
+  本文档 §一 引用的「退出码 0=全部复现」自该日起作废，以脚本 docstring 为准。
+- 第 7–8 项（E18 v2 并列口径 + 时间兜底）属治理判据登记，仍待 owner 拍板，未动。

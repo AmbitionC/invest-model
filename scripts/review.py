@@ -165,7 +165,7 @@ def review_advisor(repo: BaseRepository, asof: str, horizon: int,
                      "校准决策看超额列。")
     lines.append("")
     lines.append(f"| 分级 | 条数 | 至今均值 | 平均超额 | 至今胜率 | 超额胜率 "
-                 f"| {horizon}日均值 | {horizon}日胜率 | 最好 | 最差 |")
+                 f"| {horizon}日均值(n) | {horizon}日胜率 | 最好 | 最差 |")
     lines.append("|---|---|---|---|---|---|---|---|---|---|")
 
     def _ex_cols(sub):
@@ -175,10 +175,12 @@ def review_advisor(repo: BaseRepository, asof: str, horizon: int,
         return f"{ex.mean():+.1%}", f"{(ex > 0).mean():.0%}"
 
     def _h_cols(sub):
+        """10 日固定窗口列带样本量 n——两列排序矛盾时判断谁可信的前提（handoff 1.2：
+        0731→0807「至今」列动 9~12pp 而 10 日列 0pp，无 n 无从裁定）。"""
         h = sub["ret_h"].dropna()
         if h.empty:
             return "—", "—"
-        return f"{h.mean():+.1%}", f"{(h > 0).mean():.0%}"
+        return f"{h.mean():+.1%}(n={len(h)})", f"{(h > 0).mean():.0%}"
 
     for g in ["A", "B", "C", "?"]:
         sub = df[df["grade"] == g]
@@ -200,6 +202,7 @@ def review_advisor(repo: BaseRepository, asof: str, horizon: int,
                               if sub2["ret_h"].notna().any() else None),
              "win_rate_h10": (round(float((sub2["ret_h"].dropna() > 0).mean()), 3)
                               if sub2["ret_h"].notna().any() else None),
+             "n_h10": int(sub2["ret_h"].notna().sum()),
              "caliber": "adv_ret"}
             for g2, sub2 in df.groupby("grade")]}
     alldf = df[df["first_overall"]]
@@ -295,7 +298,19 @@ def review_model(repo: BaseRepository, facts: dict | None = None) -> list[str]:
 
 
 # ── 3) 持仓盈亏归因 ──────────────────────────────────────────────
-def review_holdings(repo: BaseRepository, facts: dict | None = None) -> list[str]:
+def _td_between(repo: BaseRepository, d0: str, d1: str) -> int | None:
+    """(d0, d1] 之间的交易日数（沪深300 日历）；查询失败返回 None。"""
+    try:
+        df = repo.read_sql(
+            "SELECT COUNT(*) n FROM index_daily WHERE code='000300.SH' "
+            "AND trade_date>:s AND trade_date<=:e", {"s": d0, "e": d1})
+        return int(df["n"].iloc[0]) if not df.empty else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def review_holdings(repo: BaseRepository, asof: str,
+                    facts: dict | None = None) -> list[str]:
     lines = ["", "## 三、持仓盈亏归因（最新快照）"]
     if not repo.table_exists("holding_snapshot"):
         return lines + ["（无 holding_snapshot 表）"]
@@ -315,8 +330,31 @@ def review_holdings(repo: BaseRepository, facts: dict | None = None) -> list[str
     gross = stock["pnl"].abs().sum(skipna=True)   # 贡献分母用绝对值和，避免净额近零时占比被放大
     lines.append(f"- 快照日：{last} | 持仓市值合计：{stock['market_value'].sum(skipna=True):,.0f} | "
                  f"合计浮盈亏：{tot_pnl:+,.0f}")
+    # 快照日 vs 报告截至日差值（handoff 1.7：标题「截至 asof」但本段是快照日口径，滞后须可见）
+    snap_lag_td = None
+    if last < asof:
+        snap_lag_td = _td_between(repo, last, asof)
+        lag_s = f"{snap_lag_td} 个交易日" if snap_lag_td is not None else "未知天数"
+        lines.append(f"- ⚠️ 快照日 {last} 落后报告截至日 {asof} {lag_s}——"
+                     "本段浮盈亏为快照日口径，非最新收盘；快照补传后自动对齐。")
+    # 集中度（handoff 1.5：投顾 8.4 直播口径「单一方向 15-20%、健康上限不超过 30%」）
+    conc = None
+    mv = stock["market_value"].fillna(0.0)
+    tot_mv = float(mv.sum())
+    if tot_mv > 0 and len(stock):
+        w = (mv / tot_mv).sort_values(ascending=False)
+        i1 = w.index[0]
+        top1_name = str(stock.loc[i1, "name"] or stock.loc[i1, "code"])
+        top1, top3 = float(w.iloc[0]), float(w.head(3).sum())
+        conc = {"top1_name": top1_name, "top1_pct": round(top1, 4),
+                "top3_pct": round(top3, 4), "threshold": 0.30}
+        warn = "　⚠️ **超过健康上限 30%**" if top1 > 0.30 else ""
+        lines.append(f"- 集中度：最大单票 {top1_name} **{top1:.1%}** · 前三大 {top3:.1%}"
+                     f"（投顾口径：单一方向 15-20%、上限 30%）{warn}")
     if facts is not None:
         facts["holdings"] = {"snapshot_date": last,
+                             "snapshot_lag_td": snap_lag_td,
+                             "concentration": conc,
                              "total_mv": round(float(stock["market_value"].sum(skipna=True)), 2),
                              "total_pnl": round(float(tot_pnl), 2),
                              "positions": [{"code": str(r2["code"]), "name": str(r2["name"] or ""),
@@ -342,7 +380,10 @@ def review_holdings(repo: BaseRepository, facts: dict | None = None) -> list[str
         hp["pnl"] = pd.to_numeric(hp["pnl"], errors="coerce")
         prev_map = dict(zip(hp["code"].astype(str), hp["pnl"]))
         prev_names = dict(zip(hp["code"].astype(str), hp["name"].astype(str)))
-        lines.append(f"\n### 区间归因（{prev} → {last} 浮盈亏变化）\n")
+        span = _td_between(repo, prev, last)
+        span_s = f"，跨 {span} 个交易日" if span is not None else ""
+        lines.append(f"\n### 区间归因（{prev} → {last} 浮盈亏变化{span_s}——"
+                     "「区间」=相邻两份快照，非固定周窗）\n")
         lines.append("| 标的 | 上期浮盈亏 | 本期浮盈亏 | 区间变化 |")
         lines.append("|---|---|---|---|")
         deltas = []
@@ -451,7 +492,7 @@ _ST_CN = {"executed": "✅已执行", "partial": "🟡部分执行", "not_execut
           "reversed": "❗反向操作", "cond_untriggered": "⏸条件未触发",
           "pre_executed": "✅已执行(前置)", "corporate_action": "⏭送转窗跳过",
           "no_baseline": "—无法对账·缺基线", "no_snapshot": "—无法对账·缺快照",
-          "too_recent": "…观察中"}
+          "no_op": "◦空指令(0股·不计)", "too_recent": "…观察中"}
 
 
 def review_execution(repo: BaseRepository, asof: str, facts: dict | None = None) -> list[str]:
@@ -468,7 +509,8 @@ def review_execution(repo: BaseRepository, asof: str, facts: dict | None = None)
     m, cov = rec["metrics"], rec["coverage"]
     n_show = [o for o in orders if o["status"] != "too_recent"]
     lines.append(f"- 对账指令 {len(n_show)} 条（条件未触发豁免 {m['n_cond_untriggered']}、"
-                 f"无法对账 {m['n_unreconcilable']}）；近10交易日快照覆盖 "
+                 f"无法对账 {m['n_unreconcilable']}、空指令不计 {m.get('n_no_op', 0)}）；"
+                 f"近10交易日快照覆盖 "
                  f"{cov['snapshots_last10']}/{cov['trading_days_last10']}"
                  + (f"，缺 {'、'.join(cov['gaps_last10'])}" if cov["gaps_last10"] else ""))
     lines.append("- 口径：快照股数差分推断（1手容忍/观察窗5交易日/挂单价未触及豁免/送转窗跳过）；"
@@ -485,8 +527,7 @@ def review_execution(repo: BaseRepository, asof: str, facts: dict | None = None)
         lines.append(f"| {o['plan_date'][4:]} | {o['name']} | {o['action']} "
                      f"| {o['planned_shares']:+,.0f} | {act} | {er} | {dl} "
                      f"| {_ST_CN.get(o['status'], o['status'])} |")
-    alerts = [o for o in n_show if o["strong_risk"] and o["status"] == "not_executed"
-              and o.get("condition_still_valid") and o.get("still_held")]
+    alerts = [o for o in n_show if o.get("alert_state") == "active"]
     seen: set = set()   # 同票多日重复计划只提示最新一条（滚动重申≠N次失败）
     alerts = [o for o in sorted(alerts, key=lambda x: x["plan_date"], reverse=True)
               if not (o["code"] in seen or seen.add(o["code"]))]
@@ -498,6 +539,25 @@ def review_execution(repo: BaseRepository, asof: str, facts: dict | None = None)
             lines.append(f"- ⚠️ 强风控条款未执行且条件仍成立：{o['name']} {o['plan_date']} "
                          f"计划 {o['action']} {o['planned_shares']:+,.0f} 股（{o['reason']}）"
                          f"{cost}。属主动改判请留档，否则每周滚动提示。")
+    # 熄火留痕（修 2026-08-08）：告警因价格回升熄火时降级为历史行，保留累计计数不静默——
+    # 此前一笔拖着不卖的单子只要等到一次反弹就自动从复盘消失、计数归零（熄火由价格驱动
+    # 而非执行驱动，review_meta_audit 审计 B）。
+    lapsed = [o for o in n_show if o.get("alert_state") == "lapsed"]
+    seen_l: set = set()
+    lapsed = [o for o in sorted(lapsed, key=lambda x: x["plan_date"], reverse=True)
+              if not (o["code"] in seen_l or seen_l.add(o["code"]))]
+    if lapsed:
+        lines.append("")
+        lines.append("### 曾触发·现已回落（历史留痕，不再滚动告警）")
+        for o in lapsed:
+            n_hist = sum(1 for x in n_show if x["code"] == o["code"]
+                         and x["strong_risk"] and x["status"] == "not_executed")
+            cost = f"，按次日收盘口径未执行成本 {o['nonexec_cost']:+,.0f} 元" \
+                if o["nonexec_cost"] else ""
+            lines.append(f"- ⏬ {o['name']} {o['plan_date']} 强风控 {o['action']} "
+                         f"{o['planned_shares']:+,.0f} 股未执行，现价已回到止损线上方"
+                         f"（熄火原因=价格回升，非执行）{cost}。"
+                         f"该票累计强风控未执行 {n_hist} 次——回落≠履约，计数保留。")
     if rec["off_plan"]:
         lines.append("")
         lines.append("### 计划外操作（提示补录信号，非违纪）")
@@ -594,6 +654,150 @@ def review_arb(repo: BaseRepository, asof: str) -> list[str]:
     return out
 
 
+# ── 7) 宽基与杠杆承接 ────────────────────────────────────────────
+_LEG_ST_CN = {"buy": "🟢价格买入窗", "panic": "🟢恐慌抢买窗",
+              "hold": "⏸持有区(闸间)", "sell": "🔴卖出区"}
+
+
+def review_broad_leverage(repo: BaseRepository, asof: str,
+                          facts: dict | None = None) -> list[str]:
+    """七、宽基与杠杆承接（handoff 1.6，2026-08-08 补）。
+
+    此前 `grep "broad|leverage|宽基" review.py` 零命中——P27 v2 四腿、P26 中位线、
+    P28/P30 在复盘里无承接位，而 P30 的后置义务白纸黑字写着「触发记复盘」。
+    数据与每日计划同源（broad_leg_state / leverage_signal 表），**只读状态与触发史，
+    零仓位主张、不产生操作项**（与 P26/P27/P28/P30 的提示-only 边界一致）。
+    """
+    lines = ["", "## 七、宽基与杠杆承接（P26/P27 四腿 · P28 深危机窗 · P30 杠杆信号）"]
+    fx: dict = {}
+    # 本期窗口 = 最近 5 个交易日（周度复盘节奏）
+    win: list[str] = []
+    try:
+        cal = repo.read_sql(
+            "SELECT trade_date FROM index_daily WHERE code='000300.SH' "
+            "AND trade_date<=:e ORDER BY trade_date DESC LIMIT 5", {"e": asof})
+        win = sorted(str(x) for x in cal["trade_date"]) if not cal.empty else []
+    except Exception:  # noqa: BLE001
+        win = []
+    fx["window"] = win
+
+    # 7.1 四腿窗口状态（P27 v2）+ 本期状态迁移
+    if not repo.table_exists("broad_leg_state"):
+        lines.append("（无 broad_leg_state 表——宽基四腿随每日计划落库后生效）")
+    else:
+        bl = repo.read_sql(
+            "SELECT trade_date, leg, etf, close, median, buy_line, sell_line, state, "
+            "shares, mkt_value, data_date FROM broad_leg_state "
+            "WHERE trade_date=(SELECT MAX(trade_date) FROM broad_leg_state)")
+        if bl.empty:
+            lines.append("（broad_leg_state 暂无数据）")
+        else:
+            for c in ("close", "median", "buy_line", "sell_line", "shares", "mkt_value"):
+                bl[c] = pd.to_numeric(bl[c], errors="coerce")
+            td = str(bl["trade_date"].iloc[0])
+            lines.append(f"- 四腿窗口状态（{td}，与当日计划同源；买卖判定完全由中位线锚决定）：")
+            lines.append("")
+            lines.append("| 腿 | 状态 | 收盘 | 买入闸 | 卖出闸 | 距买入闸 | 实盘份额 | 数据截止 |")
+            lines.append("|---|---|---|---|---|---|---|---|")
+            legs_fx = []
+            for _, r in bl.iterrows():
+                stale = (str(r["data_date"]) < td) if r["data_date"] else False
+                dd = (f"⚠️{r['data_date']}(陈旧)" if stale
+                      else (str(r["data_date"]) if r["data_date"] else "—"))
+                gap = (float(r["close"]) / float(r["buy_line"]) - 1.0
+                       if np.isfinite(r["close"]) and np.isfinite(r["buy_line"])
+                       and r["buy_line"] else float("nan"))
+                gap_s = f"{gap:+.1%}" if np.isfinite(gap) else "—"
+                sh = f"{r['shares']:,.0f}" if np.isfinite(r["shares"]) and r["shares"] else "0"
+                lines.append(
+                    f"| {r['leg']} | {_LEG_ST_CN.get(str(r['state']), str(r['state']))} "
+                    f"| {r['close']:,.1f} | {r['buy_line']:,.1f} | {r['sell_line']:,.1f} "
+                    f"| {gap_s} | {sh} | {dd} |")
+                legs_fx.append({"leg": str(r["leg"]), "state": str(r["state"]),
+                                "close": round(float(r["close"]), 2)
+                                if np.isfinite(r["close"]) else None,
+                                "buy_line": round(float(r["buy_line"]), 2)
+                                if np.isfinite(r["buy_line"]) else None,
+                                "sell_line": round(float(r["sell_line"]), 2)
+                                if np.isfinite(r["sell_line"]) else None,
+                                "gap_to_buy": round(gap, 4) if np.isfinite(gap) else None,
+                                "shares": float(r["shares"])
+                                if np.isfinite(r["shares"]) else 0.0,
+                                "data_date": str(r["data_date"]) if r["data_date"] else None,
+                                "stale": bool(stale)})
+            fx["legs"] = legs_fx
+            # P26 指数贵贱（沪深300 收盘 vs expanding 中位线；四腿锚同源）
+            hs = bl[bl["leg"].astype(str).str.contains("300")]
+            if not hs.empty and np.isfinite(hs["median"].iloc[0]) \
+                    and float(hs["median"].iloc[0]) > 0:
+                c0, m0 = float(hs["close"].iloc[0]), float(hs["median"].iloc[0])
+                pos = c0 / m0 - 1.0
+                side = "上方（纪律：只卖不买）" if pos >= 0 else "下方（纪律：只买不卖）"
+                lines.append("")
+                lines.append(f"- P26 指数贵贱：沪深300 {c0:,.1f} 在 expanding 中位线 "
+                             f"{m0:,.1f} **{side}**，偏离 {pos:+.1%}。")
+                fx["p26"] = {"close": round(c0, 2), "median": round(m0, 2),
+                             "above": bool(pos >= 0), "gap": round(pos, 4)}
+            # 本期状态迁移（窗口内逐腿 state 变化＝开窗/关窗事件）
+            if win:
+                try:
+                    hist = repo.read_sql(
+                        "SELECT trade_date, leg, state FROM broad_leg_state "
+                        "WHERE trade_date>=:s AND trade_date<=:e ORDER BY trade_date",
+                        {"s": win[0], "e": win[-1]})
+                    events = []
+                    for leg, g in hist.groupby("leg"):
+                        sts = g.sort_values("trade_date")[["trade_date", "state"]].values
+                        for (d0, s0), (d1, s1) in zip(sts[:-1], sts[1:]):
+                            if s0 != s1:
+                                events.append(f"{leg} {s0}→{s1}（{str(d1)[4:]}）")
+                    if events:
+                        lines.append("- 本期窗口事件：" + "；".join(events))
+                    else:
+                        lines.append("- 本期窗口事件：无（四腿状态整周未变）。")
+                    fx["week_events"] = events
+                except Exception:  # noqa: BLE001
+                    pass
+
+    # 7.2 P28 / P30 触发记录（P30 后置义务「触发记复盘」的承接位——本段即履约）
+    if not repo.table_exists("leverage_signal"):
+        lines.append("- P28/P30：无 leverage_signal 表（信号层随每日计划落库后生效）。")
+    else:
+        lv = repo.read_sql(
+            "SELECT trade_date, MAX(and_active) a, MAX(p28_count) p "
+            "FROM leverage_signal GROUP BY trade_date ORDER BY trade_date")
+        if lv.empty:
+            lines.append("- P28/P30：leverage_signal 暂无记录。")
+        else:
+            lv["a"] = pd.to_numeric(lv["a"], errors="coerce").fillna(0).astype(int)
+            lv["p"] = pd.to_numeric(lv["p"], errors="coerce").fillna(0).astype(int)
+            lv["trade_date"] = lv["trade_date"].astype(str)
+            wk = lv[lv["trade_date"].isin(win)] if win else lv.iloc[0:0]
+            p30_wk = wk[wk["a"] >= 1]["trade_date"].tolist()
+            p28_wk = wk[wk["p"] >= 2]["trade_date"].tolist()
+            p30_tot = int((lv["a"] >= 1).sum())
+            p28_tot = int((lv["p"] >= 2).sum())
+            if p30_wk:
+                lines.append(f"- 🚨🚨 **P30 杠杆信号本期触发**（低价×恐慌≥75 AND 共振）："
+                             f"{'、'.join(p30_wk)}——按后置义务记入复盘（本行即履约）；"
+                             "硬约束 L≤30%/仅宽基/手动，系统零自动交易。")
+            else:
+                lines.append(f"- P30 杠杆信号：本期无触发（记录期内累计 {p30_tot} 个交易日触发；"
+                             "复核门=≥2 次真实触发后复核）。")
+            if p28_wk:
+                lines.append(f"- 🚨 **P28 深危机窗本期开窗**（三信号取二）：{'、'.join(p28_wk)}。")
+            else:
+                lines.append(f"- P28 深危机窗：本期未开窗（记录期内累计 {p28_tot} 个交易日开窗；"
+                             "全期审计 11.5 年仅 3 次开窗、误报 0＝深危机专用）。")
+            fx["p30"] = {"week_trigger_dates": p30_wk, "total_trigger_days": p30_tot}
+            fx["p28"] = {"week_open_dates": p28_wk, "total_open_days": p28_tot}
+    lines.append("- 📌 边界：本段只读 broad_leg_state / leverage_signal 的状态与触发史，"
+                 "零仓位主张、不产生操作项（提示-only 边界与生产一致）。")
+    if facts is not None:
+        facts["broad_leverage"] = fx
+    return lines
+
+
 CALIBERS = {
     "adv_ret": {"id": "qfq/next-day-entry/grade-first-dedup/2026-07-27",
                 "desc": "前复权收盘；首评次一交易日收盘入场；(code,分级)首评分桶、ALL按票唯一；"
@@ -613,20 +817,21 @@ KNOWN_BIASES = [
 
 def build_review(repo: BaseRepository, asof: str, horizon: int = 10,
                  facts: dict | None = None) -> str:
-    """构建六段复盘 Markdown（单段出错跳过不阻断）；facts 传 dict 则同批收集结构化事实。"""
+    """构建七段复盘 Markdown（单段出错跳过不阻断）；facts 传 dict 则同批收集结构化事实。"""
     lines = [f"# 复盘报告 — 截至 {asof}", "",
              "> 闭环校准：投顾说得准不准、模型分位有没有区分力、持仓靠什么赚钱、"
-             "计划执行到没到位、套利账本守没守住零杠杆。",
+             "计划执行到没到位、套利账本守没守住零杠杆、宽基/杠杆信号有没有承接。",
              "> 口径：收益均按 stock_adj **前复权**（2026-07-25 修复——此前未复权，分红/送转污染战绩；"
              "与本日期前的历史报告数字不可直接对比）。",
              "> 机器可读版：`results/review/latest.json`（schema 见 docs/review_schema.md）。"]
     for fn in (lambda: review_advisor(repo, asof, horizon, facts),
                lambda: review_model(repo, facts),
-               lambda: review_holdings(repo, facts),
+               lambda: review_holdings(repo, asof, facts),
                lambda: review_discipline(repo, asof),
                lambda: review_execution(repo, asof, facts),
                lambda: review_policy_shadow(repo),
-               lambda: review_arb(repo, asof)):
+               lambda: review_arb(repo, asof),
+               lambda: review_broad_leverage(repo, asof, facts)):
         try:
             lines += fn()
         except Exception as e:  # noqa: BLE001
@@ -700,21 +905,37 @@ def _write_json(asof: str, period: str, facts: dict, json_dir: str) -> None:
     _seen_a: set = set()
     for o in sorted(facts.get("execution", {}).get("orders", []),
                     key=lambda x: x.get("plan_date", ""), reverse=True):
-        if o.get("strong_risk") and o.get("status") == "not_executed" \
-                and o.get("condition_still_valid") and o.get("still_held") \
+        st = o.get("alert_state")
+        if st in ("active", "lapsed") \
                 and o["code"] not in _seen_a and not _seen_a.add(o["code"]):
-            conclusions.append({
-                "id": f"c-exec-{o['plan_date']}-{o['code']}", "kind": "discipline_fact",
-                "claim": f"{o['name']} {o['plan_date']} 强风控 {o['action']} 未执行且条件仍成立"
-                         + (f"，未执行成本 {o['nonexec_cost']:+,.0f} 元"
-                            if o.get("nonexec_cost") else ""),
-                "based_on": [f"facts.execution.orders[{o['plan_date']}/{o['code']}]"],
-                "confidence": "high",
-                "suggested_action": {"type": "owner_ack_or_execute", "requires_owner": True},
-                "status": "pending_owner"})
+            if st == "active":
+                conclusions.append({
+                    "id": f"c-exec-{o['plan_date']}-{o['code']}", "kind": "discipline_fact",
+                    "claim": f"{o['name']} {o['plan_date']} 强风控 {o['action']} 未执行且条件仍成立"
+                             + (f"，未执行成本 {o['nonexec_cost']:+,.0f} 元"
+                                if o.get("nonexec_cost") else ""),
+                    "based_on": [f"facts.execution.orders[{o['plan_date']}/{o['code']}]"],
+                    "confidence": "high",
+                    "suggested_action": {"type": "owner_ack_or_execute", "requires_owner": True},
+                    "status": "pending_owner"})
+            else:
+                # 熄火留痕（修 2026-08-08）：价格回升熄火≠履约，降级为历史事实、不进待办
+                # （读取规则只取 pending_owner/recurring*，status=lapsed 天然不入队）。
+                conclusions.append({
+                    "id": f"c-exec-lapsed-{o['plan_date']}-{o['code']}",
+                    "kind": "discipline_fact",
+                    "claim": f"{o['name']} {o['plan_date']} 强风控 {o['action']} 未执行，"
+                             "现价已回到止损线上方（熄火原因=价格回升，非执行）",
+                    "based_on": [f"facts.execution.orders[{o['plan_date']}/{o['code']}]"],
+                    "confidence": "high",
+                    "suggested_action": None,
+                    "status": "lapsed"})
     exec_cov = facts.get("execution", {}).get("coverage", {})
     doc = {
-        "schema_version": "1.0.0", "schema_doc": "docs/review_schema.md",
+        # 1.1.0（2026-08-08）：orders.status 新增 no_op、orders 新增 alert_state（语义扩展=minor）；
+        # facts 新增 advisor.by_grade[].n_h10 / holdings.concentration / holdings.snapshot_lag_td /
+        # broad_leverage；conclusions 新增 status=lapsed（不入待办）。详 docs/review_schema.md。
+        "schema_version": "1.1.0", "schema_doc": "docs/review_schema.md",
         "report_date": asof, "period": period,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "engine": {"script": "scripts/review.py", "git_sha": sha, "model_version": VERSION},

@@ -4,10 +4,18 @@ name: ingest-macro
 # 源自陈老师的月度金融数据框架（M1/M2/社融/CPI/PPI/PMI/GDP/LPR/国债/汇率）。
 # **只存数、不择时**——宏观影响买卖决策必须先过 E47 预登记判据。
 # 幂等 upsert（主键 period+series），可反复重跑。
-# 触发：手动 / 改 ops/ingest-macro.trigger 后 push（仅 master）。
-# trigger 文件首行可写 `probe` 只探测接口可得性与列名、不落库。
+# 触发：每周日定时 / 手动 / 改 ops/ingest-macro.trigger 后 push（仅 master）。
+# trigger 文件首行可写 `probe` 只探测接口可得性与列名、不落库（仅对 push 触发生效，
+# 防旧 probe 残留把定时跑永久变成只探测——「机制存在但现实中永不触发」教训的镜像）。
+#
+# ⚠️ cron 是 E47 的时钟（handoff 2026-08-08 §3）：E47 判据要求「数据层连续入库
+# ≥6 个月」方可首评，而此前本 workflow 无 cron、FC JOBS 亦无 ingest_macro——
+# 时钟根本没在走，按原状 2027-02 首评时才会发现序列不存在。宏观是月频数据，
+# Actions schedule 的 2.8~5.8h 延迟在此无关紧要（弃用 schedule 的理由不适用）。
 
 on:
+  schedule:
+    - cron: '30 10 * * 0'   # 周日 UTC 10:30 = 北京 18:30，每周幂等重灌
   workflow_dispatch:
     inputs:
       start_m:
@@ -54,7 +62,9 @@ jobs:
           START="${{ github.event.inputs.start_m || '200501' }}"
           MODE=""
           if [ "${{ github.event.inputs.probe }}" = "true" ]; then MODE="--probe"; fi
-          if [ -f ops/ingest-macro.trigger ] && head -1 ops/ingest-macro.trigger | grep -qi '^probe'; then
+          # trigger 文件的 probe 只在 push 触发时生效：定时跑必须落库（E47 时钟）
+          if [ "${{ github.event_name }}" = "push" ] && [ -f ops/ingest-macro.trigger ] \
+             && head -1 ops/ingest-macro.trigger | grep -qi '^probe'; then
             MODE="--probe"
           fi
           echo "== start_m=$START mode=${MODE:-ingest}"

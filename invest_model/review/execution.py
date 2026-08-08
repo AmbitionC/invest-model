@@ -8,6 +8,12 @@
   executed 已执行 | partial 部分执行 | not_executed 未执行·待确认 | reversed 反向操作
   cond_untriggered 条件未触发（豁免，不进执行率分母） | pre_executed 已执行(前置)
   corporate_action 送转窗跳过 | no_baseline/no_snapshot 无法对账·数据缺口
+  no_op 空指令（计划股数=0/缺失，无事可对账，不进任何执行率分子分母——修 2026-08-08：
+  此前被 1 手容忍带判成 executed 100%，连续三期把买点兑现率 1/2 虚报成 8/9）
+
+强风控告警的熄火（alert_state）：active=未执行且触发条件仍成立（滚动告警）；
+lapsed=未执行但价格已回到止损线上方（**降级留痕不静默**——修 2026-08-08：此前直接从
+复盘消失，熄火由价格驱动而非执行驱动，一笔拖着不卖的单子等到反弹就自动清零）。
 
 纪律呈现哲学：提示不强制——未执行≠违纪，只陈述计划说了什么/实际发生了什么/差异折合
 多少钱；"该止损未止"仅当【强风控条款 + 未执行≥2交易日 + 触发条件事后仍成立】才升告警。
@@ -109,6 +115,12 @@ def reconcile(repo, asof: str) -> dict:
              "actual_shares": None, "executed_ratio": None,
              "delay_td": None, "delay_uncertain": False,
              "status": None, "nonexec_cost": None, "condition_still_valid": None}
+        # 空指令：计划股数=0（或缺失）无事可对账，一等状态 no_op，不进任何执行率。
+        # 不能走 1 手容忍带——planned=0, actual=0 会命中 |0-0|<LOT 被判 executed 100%。
+        if sd == 0 or not np.isfinite(sd):
+            o["status"] = "no_op"
+            orders.append(o)
+            continue
         win = [t for t in cal if t > d0][:WINDOW_TD]
         if not win:
             o["status"] = "too_recent"
@@ -207,6 +219,14 @@ def reconcile(repo, asof: str) -> dict:
                          (snaps["shares"] >= LOT)]["code"].astype(str))
     for o in orders:
         o["still_held"] = o["code"] in held_now
+        # 强风控告警状态机（修 2026-08-08）：熄火不再静默。active=条件仍成立（滚动告警）；
+        # lapsed=价格已回到止损线上方（降级为历史留痕行）。condition_still_valid=None
+        # （无行情可判）沿用旧行为不升告警，属数据缺口另有 no_snapshot 类兜底。
+        if o["strong_risk"] and o["status"] == "not_executed" and o["still_held"]:
+            csv_ = o.get("condition_still_valid")
+            o["alert_state"] = "active" if csv_ else ("lapsed" if csv_ is False else None)
+        else:
+            o["alert_state"] = None
     applicable = [o for o in orders if o["status"] in
                   ("executed", "partial", "not_executed", "reversed")]
     sells = [o for o in applicable if o["action"] in ("sell", "trim")]
@@ -224,6 +244,8 @@ def reconcile(repo, asof: str) -> dict:
         "n_cond_untriggered": sum(o["status"] == "cond_untriggered" for o in orders),
         "n_unreconcilable": sum(o["status"] in ("no_baseline", "no_snapshot")
                                 for o in orders),
+        "n_no_op": sum(o["status"] == "no_op" for o in orders),
+        "n_alert_lapsed": sum(o["alert_state"] == "lapsed" for o in orders),
     }
     coverage = {"trading_days_last10": len(cov_win),
                 "snapshots_last10": sum(d in snap_dates for d in cov_win),

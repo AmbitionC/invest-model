@@ -25,6 +25,9 @@ from invest_model.signals.macro import (  # noqa: E402
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+# ingest_macro → tushare_client → tushare：无 tushare 的环境（如裸 CI）整模块干净跳过，
+# 不再中断 pytest collection（handoff 2026-08-08 §5）。
+pytest.importorskip("tushare")
 from ingest_macro import _q_to_month, melt_frame  # noqa: E402
 
 

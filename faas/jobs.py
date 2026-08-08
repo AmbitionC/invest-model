@@ -789,10 +789,13 @@ def job_weekly_rebuild_review() -> dict:
     # 2b) 套利统一资金账本影子回测 + 记分卡（观察态，不阻断）
     out.update(_build_arb_scorecard_and_backtest())
 
-    # 3) 复盘（纯读 DB）+ 推送
+    # 3) 复盘（纯读 DB）+ 推送。JSON 双轨落 /tmp（FC 代码目录只读，默认 results/review
+    #    会静默 WARN——这正是 latest.json 停在 20260724 的根因，handoff 1.3）
     review_out = "/tmp/review.md"
+    review_json_dir = "/tmp/review_json"
     from scripts.review import main as review_main
-    _run_cli(review_main, ["review.py", "--out", review_out])
+    _run_cli(review_main, ["review.py", "--out", review_out,
+                           "--json-dir", review_json_dir])
     with open(review_out, encoding="utf-8") as f:
         body = f.read()
     today = gh_notify.bj_now().strftime("%Y-%m-%d")
@@ -802,6 +805,30 @@ def job_weekly_rebuild_review() -> dict:
         comment_body=f"## {today} 复盘\n\n{body}",
         dedupe_prefix=f"## {today} 复盘",
     )
+
+    # 4) JSON 双轨回写 master（handoff 1.3）：latest.json + 当期历史文件经 contents API
+    #    提交，保持 docs/review_schema.md 的「固定入口每次复盘覆盖」承诺。失败告警不阻断
+    #    ——token 若仅 Issues RW 会 403，告警会指向补 Contents RW 权限。
+    try:
+        import glob as _glob
+        committed = []
+        for p in sorted(_glob.glob(os.path.join(review_json_dir, "*.json"))):
+            name = os.path.basename(p)
+            with open(p, encoding="utf-8") as f:
+                content = f.read()
+            gh_notify.commit_file(
+                f"results/review/{name}", content,
+                f"复盘产物：机器可读 JSON（FC 周度·{name}） [skip ci]")
+            committed.append(name)
+        out["review_json"] = (f"committed:{','.join(committed)}" if committed
+                              else "no-files")
+    except Exception as e:  # noqa: BLE001 — JSON 回写失败不影响 issue 推送
+        out["review_json"] = f"WARN: {e}"
+        print(f"WARN 复盘 JSON 回写失败（若 403 需给 FC token 加本仓 Contents RW）：{e}")
+        try:
+            gh_notify.alert("weekly_review_json", e)
+        except Exception:  # noqa: BLE001
+            pass
     return out
 
 
