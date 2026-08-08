@@ -1,10 +1,15 @@
 name: us-update
 
-# 美股每日：数据更新（yfinance）+ 三层计划生成 + issue 推送。
+# 美股每日：数据更新（yfinance）+ 三层计划生成。
 # 与 A 股 FC 链路完全隔离：跑在 GitHub runner（美国出口，yfinance 可用），
 # 只写 us_* 表。cron 22:10 UTC = 美东收盘后（EDT 18:10 / EST 17:10）。
 # 手动通道：bump ops/us-invoke.trigger 后 push master（workflow_dispatch 对
 # 集成账号可能 403，与 invoke-invest 同一套约定）。
+#
+# ⚠️ issue/邮件推送已关（owner 2026-08-08：「美股的邮件提醒不要了，美股部分
+# 压根没有做好」）——daily 跑 --no-notify，只更新数据不发计划评论。us_* 序列
+# 继续无声积累，想重启提醒把 --no-notify 去掉即可；连数据日更一起停则删 cron。
+# verify/e13 是手动 bump 才触发的 ops 观测通道，不属日常提醒，保留。
 
 on:
   workflow_dispatch: {}
@@ -52,5 +57,5 @@ jobs:
             python scripts/validation/e13_gamma_squeeze.py --period 15y \
               --out results/e13_gamma_squeeze.md --post-issue
           else
-            python scripts/us_daily.py
+            python scripts/us_daily.py --no-notify
           fi
