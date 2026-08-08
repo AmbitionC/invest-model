@@ -3,6 +3,13 @@
 给 Claude Code / Codex 类 Agent 消费的复盘产物。与 issue #8 的 markdown **同批同源**产出
 （`scripts/review.py` 一次运行同时渲染两版，杜绝数字漂移）。
 
+## 呈现契约（owner 2026-08-08）
+
+**邮件（issue #8 评论）只给人读的要点版**：执行率可视条、需要人决定的告警行、
+留痕行、计划外操作、一句话指路——**逐笔对账明细（状态/延迟/豁免/成本）只进本 JSON**
+（`facts.execution.orders`），不得再把机器级表格倒进邮件。Agent/系统消费一律读 JSON，
+不解析邮件正文。
+
 ## 位置与分发
 
 - **固定入口**：`results/review/latest.json`（每次复盘覆盖）

@@ -488,88 +488,92 @@ def review_discipline(repo: BaseRepository, asof: str) -> list[str]:
 
 
 # ── 6) 计划执行对账 ──────────────────────────────────────────────
-_ST_CN = {"executed": "✅已执行", "partial": "🟡部分执行", "not_executed": "⚠️未执行·待确认",
-          "reversed": "❗反向操作", "cond_untriggered": "⏸条件未触发",
-          "pre_executed": "✅已执行(前置)", "corporate_action": "⏭送转窗跳过",
-          "no_baseline": "—无法对账·缺基线", "no_snapshot": "—无法对账·缺快照",
-          "no_op": "◦空指令(0股·不计)", "too_recent": "…观察中"}
+# 状态中文表已随「邮件要点版」改造移除（2026-08-08 owner：邮件只给人读的要点，
+# 逐笔明细只进 JSON）——状态枚举的权威定义在 docs/review_schema.md。
+
+
+def _rate_bar(num: int, den: int, width: int = 10) -> str:
+    """执行率的可视条（邮件里比表格直观；den=0 给空条）。"""
+    if not den:
+        return "░" * width + " 0/0"
+    filled = round(width * num / den)
+    return "▓" * filled + "░" * (width - filled) + f" {num}/{den}"
 
 
 def review_execution(repo: BaseRepository, asof: str, facts: dict | None = None) -> list[str]:
-    """计划让做的 vs 实际做了没（P0·2026-07-27）。快照差分推断，提示不强制。"""
+    """计划让做的 vs 实际做了没（P0·2026-07-27）。快照差分推断，提示不强制。
+
+    呈现分层（owner 2026-08-08：「邮件触达的必须看得懂、简洁清晰，该有的有就行；
+    系统内消费的单独存」）——**邮件只给要点版**：执行率两条可视条 + 需要人处理的
+    少数几行 + 一句话指路；**逐笔明细只进 JSON**（facts.execution.orders，
+    schema 见 docs/review_schema.md），不再把机器级对账表倒进邮件。
+    """
     from invest_model.review.execution import reconcile
 
-    lines = ["", "## 六、计划执行对账（计划让做的 vs 实际做了没）"]
+    lines = ["", "## 六、计划执行对账（要点）"]
     rec = reconcile(repo, asof)
     if facts is not None:
-        facts["execution"] = rec
+        facts["execution"] = rec        # 逐笔明细（状态/延迟/豁免/成本）全量在此，邮件不重复
     orders = rec["orders"]
     if not orders:
         return lines + ["（暂无可对账指令——action_plan/holding_snapshot 数据不足）"]
     m, cov = rec["metrics"], rec["coverage"]
     n_show = [o for o in orders if o["status"] != "too_recent"]
-    lines.append(f"- 对账指令 {len(n_show)} 条（条件未触发豁免 {m['n_cond_untriggered']}、"
-                 f"无法对账 {m['n_unreconcilable']}、空指令不计 {m.get('n_no_op', 0)}）；"
-                 f"近10交易日快照覆盖 "
-                 f"{cov['snapshots_last10']}/{cov['trading_days_last10']}"
-                 + (f"，缺 {'、'.join(cov['gaps_last10'])}" if cov["gaps_last10"] else ""))
-    lines.append("- 口径：快照股数差分推断（1手容忍/观察窗5交易日/挂单价未触及豁免/送转窗跳过）；"
-                 "盲区：同日买卖做T不可见、无成交流水执行价以次日收盘近似。**未执行≠违纪**——"
-                 "若属主动改判，后续 execution_ack 通道（P1）留档即静默。")
-    lines.append("")
-    lines.append("| 计划日 | 标的 | 指令 | 计划股数 | 实际变动 | 执行率 | 延迟 | 状态 |")
-    lines.append("|---|---|---|---|---|---|---|---|")
-    for o in sorted(n_show, key=lambda x: (x["plan_date"], x["code"])):
-        er = f"{o['executed_ratio']:.0%}" if o["executed_ratio"] is not None else "—"
-        dl = (f"{'≥' if o['delay_uncertain'] else ''}{o['delay_td']}天"
-              if o["delay_td"] is not None else "—")
-        act = f"{o['actual_shares']:+,.0f}" if o["actual_shares"] is not None else "—"
-        lines.append(f"| {o['plan_date'][4:]} | {o['name']} | {o['action']} "
-                     f"| {o['planned_shares']:+,.0f} | {act} | {er} | {dl} "
-                     f"| {_ST_CN.get(o['status'], o['status'])} |")
+    rr, bf = m["risk_exit_exec_rate"], m["buy_fill_rate"]
+    md_ = f"{m['median_delay_td']:.0f} 天" if m["median_delay_td"] is not None else "—"
+    lines.append(f"- 买点兑现　{_rate_bar(bf['num'], bf['den'])} ｜ "
+                 f"风控卖出　{_rate_bar(rr['num'], rr['den'])} ｜ 执行中位延迟 {md_}")
+    lines.append(f"- 未执行的代价：拖着没卖 {m['cum_nonexec_cost_sell']:+,.0f} 元 / "
+                 f"没买错过 {m['cum_nonexec_cost_buy']:+,.0f} 元"
+                 "（正=拖了反而占便宜——该数随行情翻号，只看趋势别当纪律分数；"
+                 "**未执行≠违纪**，主动改判说一声即可）")
+    if cov["gaps_last10"]:
+        lines.append(f"- ⚠️ 近10交易日快照缺 {len(cov['gaps_last10'])} 天"
+                     f"（{'、'.join(g[4:] for g in cov['gaps_last10'])}）——缺的那几天无法对账，"
+                     "补传截图即可回填")
+
+    # 需要人处理的：强风控未执行且条件仍成立（同票只留最新一条）
     alerts = [o for o in n_show if o.get("alert_state") == "active"]
-    seen: set = set()   # 同票多日重复计划只提示最新一条（滚动重申≠N次失败）
+    seen: set = set()
     alerts = [o for o in sorted(alerts, key=lambda x: x["plan_date"], reverse=True)
               if not (o["code"] in seen or seen.add(o["code"]))]
     if alerts:
         lines.append("")
-        lines.append("### 纪律事实（如实呈现，不评判）")
+        lines.append("### ⚠️ 需要你决定的（计划让卖、一直没卖、价格还在止损线下）")
         for o in alerts:
-            cost = f"，折合未执行成本约 {o['nonexec_cost']:+,.0f} 元" if o["nonexec_cost"] else ""
-            lines.append(f"- ⚠️ 强风控条款未执行且条件仍成立：{o['name']} {o['plan_date']} "
-                         f"计划 {o['action']} {o['planned_shares']:+,.0f} 股（{o['reason']}）"
-                         f"{cost}。属主动改判请留档，否则每周滚动提示。")
-    # 熄火留痕（修 2026-08-08）：告警因价格回升熄火时降级为历史行，保留累计计数不静默——
-    # 此前一笔拖着不卖的单子只要等到一次反弹就自动从复盘消失、计数归零（熄火由价格驱动
-    # 而非执行驱动，review_meta_audit 审计 B）。
-    lapsed = [o for o in n_show if o.get("alert_state") == "lapsed"]
+            cost = (f"，拖延成本约 {o['nonexec_cost']:+,.0f} 元"
+                    if o.get("nonexec_cost") else "")
+            lines.append(f"- **{o['name']}**：{o['plan_date'][4:6]}/{o['plan_date'][6:]} 计划"
+                         f"{'清仓' if o['action'] == 'sell' else '减仓'}（{o['reason']}）至今未动"
+                         f"{cost}。要么执行、要么说一声是主动改判")
+    # 曾触发已回落：留痕不催办。同票已有 active 告警的不再列 lapsed 行——
+    # 对人同时说「还得处理」和「已回落」只会困惑，明细 JSON 里两条都在
+    active_codes = {o["code"] for o in alerts}
+    lapsed = [o for o in n_show if o.get("alert_state") == "lapsed"
+              and o["code"] not in active_codes]
     seen_l: set = set()
     lapsed = [o for o in sorted(lapsed, key=lambda x: x["plan_date"], reverse=True)
               if not (o["code"] in seen_l or seen_l.add(o["code"]))]
     if lapsed:
         lines.append("")
-        lines.append("### 曾触发·现已回落（历史留痕，不再滚动告警）")
+        lines.append("### ⏬ 曾拖延未卖、价格已回来了（留痕，不用动）")
         for o in lapsed:
             n_hist = sum(1 for x in n_show if x["code"] == o["code"]
                          and x["strong_risk"] and x["status"] == "not_executed")
-            cost = f"，按次日收盘口径未执行成本 {o['nonexec_cost']:+,.0f} 元" \
-                if o["nonexec_cost"] else ""
-            lines.append(f"- ⏬ {o['name']} {o['plan_date']} 强风控 {o['action']} "
-                         f"{o['planned_shares']:+,.0f} 股未执行，现价已回到止损线上方"
-                         f"（熄火原因=价格回升，非执行）{cost}。"
-                         f"该票累计强风控未执行 {n_hist} 次——回落≠履约，计数保留。")
+            lines.append(f"- {o['name']}：{o['plan_date'][4:6]}/{o['plan_date'][6:]} 的强风控卖出"
+                         f"没执行，靠反弹解套了——这次运气好不等于纪律好（该票累计 {n_hist} 次）")
     if rec["off_plan"]:
         lines.append("")
-        lines.append("### 计划外操作（提示补录信号，非违纪）")
         for p in rec["off_plan"]:
-            lines.append(f"- {p['date']} {p['code']} 变动 {p['shares_delta']:+,.0f} 股，"
-                         f"{p['note']}——若来自投顾口头信号建议补录 advisor CSV")
-    rr, bf = m["risk_exit_exec_rate"], m["buy_fill_rate"]
-    md = f"{m['median_delay_td']:.0f}天" if m["median_delay_td"] is not None else "—"
+            lines.append(f"- 📌 计划外操作：{p['date'][4:6]}/{p['date'][6:]} {p['code']} "
+                         f"变动 {p['shares_delta']:+,.0f} 股、没有对应指令——"
+                         "若来自投顾口头信号，把它补录进 advisor CSV 就能纳入对账")
+    # 机器级明细一律不进邮件（对账口径/逐笔状态/豁免原因），指路即可
+    n_misc = m["n_cond_untriggered"] + m["n_unreconcilable"] + m.get("n_no_op", 0)
     lines.append("")
-    lines.append(f"- 📌 本期执行率：风控卖出 {rr['num']}/{rr['den']} · 买点兑现 {bf['num']}/{bf['den']}"
-                 f" · 中位延迟 {md} · 未执行累计成本 卖类 {m['cum_nonexec_cost_sell']:+,.0f} /"
-                 f" 买类 {m['cum_nonexec_cost_buy']:+,.0f} 元")
+    lines.append(f"> 逐笔明细（{len(n_show)} 条含豁免/缺口/空指令 {n_misc} 条）不进邮件：见 "
+                 "`results/review/latest.json` 的 facts.execution.orders，口径与状态定义见 "
+                 "`docs/review_schema.md`。")
     return lines
 
 
