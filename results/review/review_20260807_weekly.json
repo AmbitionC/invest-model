@@ -1,12 +1,12 @@
 {
- "schema_version": "1.0.0",
+ "schema_version": "1.1.0",
  "schema_doc": "docs/review_schema.md",
  "report_date": "20260807",
  "period": "weekly",
- "generated_at": "2026-08-07T16:30:50.449114+00:00",
+ "generated_at": "2026-08-08T10:56:48.806681+00:00",
  "engine": {
   "script": "scripts/review.py",
-  "git_sha": "e6462381e5564c364070f822a09c138c6dca53e5",
+  "git_sha": "",
   "model_version": "ic_v1"
  },
  "calibers": {
@@ -27,7 +27,7 @@
  "data_quality": {
   "snapshot_coverage": {
    "trading_days_last10": 10,
-   "snapshots_last10": 2,
+   "snapshots_last10": 3,
    "gaps_last10": [
     "20260729",
     "20260730",
@@ -35,8 +35,7 @@
     "20260803",
     "20260804",
     "20260805",
-    "20260806",
-    "20260807"
+    "20260806"
    ]
   },
   "known_biases": [
@@ -69,6 +68,7 @@
      "win_rate": 0.5,
      "mean_ret_h10": 0.2131,
      "win_rate_h10": 0.75,
+     "n_h10": 8,
      "caliber": "adv_ret"
     },
     {
@@ -79,6 +79,7 @@
      "win_rate": 0.162,
      "mean_ret_h10": 0.0184,
      "win_rate_h10": 0.457,
+     "n_h10": 105,
      "caliber": "adv_ret"
     },
     {
@@ -89,57 +90,59 @@
      "win_rate": 0.415,
      "mean_ret_h10": -0.1061,
      "win_rate_h10": 0.268,
+     "n_h10": 142,
      "caliber": "adv_ret"
     }
    ]
   },
   "model": {
-   "spread_mean": -0.0064,
-   "spread_pos_ratio": 0.556,
-   "n_periods": 18,
+   "spread_mean": 0.0076,
+   "spread_pos_ratio": 0.579,
+   "n_periods": 19,
    "recent3": [
-    -0.0964,
     -0.0028,
-    -0.1146
+    -0.1146,
+    0.2598
    ],
    "interval": "monthly-rebuild",
    "caliber": "adv_ret",
    "defense_ref": "strategy_research_202607 附六（大跌日+1.10pp/日·87%正）"
   },
   "holdings": {
-   "snapshot_date": "20260728",
-   "total_mv": 255040.8,
-   "total_pnl": -16043.75,
+   "snapshot_date": "20260807",
+   "snapshot_lag_td": null,
+   "concentration": {
+    "top1_name": "卫星化学",
+    "top1_pct": 0.6557,
+    "top3_pct": 0.9551,
+    "threshold": 0.3
+   },
+   "total_mv": 263406.8,
+   "total_pnl": 0.0,
    "positions": [
     {
      "code": "002648.SZ",
      "name": "卫星化学",
-     "mv": 165088.0,
-     "pnl": -10734.3
+     "mv": 172726.0,
+     "pnl": null
     },
     {
      "code": "300604.SZ",
      "name": "长川科技",
-     "mv": 27640.0,
-     "pnl": -3967.76
+     "mv": 28321.0,
+     "pnl": null
     },
     {
      "code": "301165.SZ",
      "name": "锐捷网络",
-     "mv": 11540.0,
-     "pnl": -1145.13
+     "mv": 11817.0,
+     "pnl": null
     },
     {
      "code": "510880.SH",
      "name": "红利ETF华泰柏瑞",
-     "mv": 49772.8,
-     "pnl": -196.56
-    },
-    {
-     "code": "SG26CB",
-     "name": "曙26发债",
-     "mv": 1000.0,
-     "pnl": 0.0
+     "mv": 50542.8,
+     "pnl": null
     }
    ]
   },
@@ -160,7 +163,8 @@
      "status": "not_executed",
      "nonexec_cost": -11225.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260630",
@@ -177,7 +181,8 @@
      "status": "not_executed",
      "nonexec_cost": 5829.0,
      "condition_still_valid": false,
-     "still_held": true
+     "still_held": true,
+     "alert_state": "lapsed"
     },
     {
      "plan_date": "20260630",
@@ -194,7 +199,8 @@
      "status": "not_executed",
      "nonexec_cost": 423.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260701",
@@ -211,7 +217,8 @@
      "status": "not_executed",
      "nonexec_cost": -10450.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260701",
@@ -228,7 +235,8 @@
      "status": "not_executed",
      "nonexec_cost": -4514.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260701",
@@ -245,7 +253,8 @@
      "status": "not_executed",
      "nonexec_cost": 572.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260702",
@@ -262,7 +271,8 @@
      "status": "not_executed",
      "nonexec_cost": -4644.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260702",
@@ -279,7 +289,8 @@
      "status": "not_executed",
      "nonexec_cost": 807.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260703",
@@ -296,7 +307,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260703",
@@ -313,7 +325,8 @@
      "status": "not_executed",
      "nonexec_cost": 7236.0,
      "condition_still_valid": false,
-     "still_held": true
+     "still_held": true,
+     "alert_state": "lapsed"
     },
     {
      "plan_date": "20260703",
@@ -330,7 +343,8 @@
      "status": "not_executed",
      "nonexec_cost": -5438.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260703",
@@ -340,14 +354,15 @@
      "planned_shares": 0.0,
      "reason": "研报速通·半仓直入：投顾B级推荐",
      "strong_risk": false,
-     "actual_shares": 0.0,
-     "executed_ratio": 1.0,
+     "actual_shares": null,
+     "executed_ratio": null,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "executed",
+     "status": "no_op",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": true
+     "still_held": true,
+     "alert_state": null
     },
     {
      "plan_date": "20260703",
@@ -364,7 +379,8 @@
      "status": "not_executed",
      "nonexec_cost": 1356.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260703",
@@ -381,7 +397,8 @@
      "status": "reversed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260703",
@@ -398,7 +415,8 @@
      "status": "not_executed",
      "nonexec_cost": -4032.0,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260703",
@@ -415,7 +433,8 @@
      "status": "not_executed",
      "nonexec_cost": -2598.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260706",
@@ -432,7 +451,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260706",
@@ -442,14 +462,15 @@
      "planned_shares": 0.0,
      "reason": "研报速通·半仓直入：投顾B级推荐｜定位:成长",
      "strong_risk": false,
-     "actual_shares": 0.0,
-     "executed_ratio": 1.0,
+     "actual_shares": null,
+     "executed_ratio": null,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "executed",
+     "status": "no_op",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260706",
@@ -466,7 +487,8 @@
      "status": "not_executed",
      "nonexec_cost": -385.0,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260706",
@@ -483,7 +505,8 @@
      "status": "not_executed",
      "nonexec_cost": -2515.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260706",
@@ -493,14 +516,15 @@
      "planned_shares": 0.0,
      "reason": "研报速通·半仓直入：投顾B级推荐｜定位:成长",
      "strong_risk": false,
-     "actual_shares": 0.0,
-     "executed_ratio": 1.0,
+     "actual_shares": null,
+     "executed_ratio": null,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "executed",
+     "status": "no_op",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260706",
@@ -517,7 +541,8 @@
      "status": "not_executed",
      "nonexec_cost": 1558.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260706",
@@ -534,7 +559,8 @@
      "status": "reversed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260706",
@@ -551,7 +577,8 @@
      "status": "not_executed",
      "nonexec_cost": -2383.6,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260706",
@@ -568,7 +595,8 @@
      "status": "not_executed",
      "nonexec_cost": -4606.0,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260706",
@@ -578,14 +606,15 @@
      "planned_shares": 0.0,
      "reason": "研报速通·半仓直入：投顾B级推荐",
      "strong_risk": false,
-     "actual_shares": 0.0,
-     "executed_ratio": 1.0,
+     "actual_shares": null,
+     "executed_ratio": null,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "executed",
+     "status": "no_op",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260707",
@@ -602,7 +631,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260707",
@@ -612,14 +642,15 @@
      "planned_shares": 0.0,
      "reason": "研报速通·半仓直入：投顾B级推荐｜定位:成长",
      "strong_risk": false,
-     "actual_shares": 0.0,
-     "executed_ratio": 1.0,
+     "actual_shares": null,
+     "executed_ratio": null,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "executed",
+     "status": "no_op",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260707",
@@ -636,7 +667,8 @@
      "status": "not_executed",
      "nonexec_cost": 19162.0,
      "condition_still_valid": false,
-     "still_held": true
+     "still_held": true,
+     "alert_state": "lapsed"
     },
     {
      "plan_date": "20260707",
@@ -653,7 +685,8 @@
      "status": "not_executed",
      "nonexec_cost": -4136.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260707",
@@ -663,14 +696,15 @@
      "planned_shares": 0.0,
      "reason": "研报速通·半仓直入：投顾B级推荐｜定位:成长",
      "strong_risk": false,
-     "actual_shares": 0.0,
-     "executed_ratio": 1.0,
+     "actual_shares": null,
+     "executed_ratio": null,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "executed",
+     "status": "no_op",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260707",
@@ -687,7 +721,8 @@
      "status": "not_executed",
      "nonexec_cost": 2707.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260707",
@@ -704,7 +739,8 @@
      "status": "not_executed",
      "nonexec_cost": -4488.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260707",
@@ -721,7 +757,8 @@
      "status": "not_executed",
      "nonexec_cost": -3402.0,
      "condition_still_valid": false,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260707",
@@ -731,14 +768,15 @@
      "planned_shares": 0.0,
      "reason": "研报速通·半仓直入：投顾B级推荐",
      "strong_risk": false,
-     "actual_shares": 0.0,
-     "executed_ratio": 1.0,
+     "actual_shares": null,
+     "executed_ratio": null,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "executed",
+     "status": "no_op",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260708",
@@ -755,7 +793,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260708",
@@ -772,7 +811,8 @@
      "status": "not_executed",
      "nonexec_cost": 20368.0,
      "condition_still_valid": false,
-     "still_held": true
+     "still_held": true,
+     "alert_state": "lapsed"
     },
     {
      "plan_date": "20260708",
@@ -789,7 +829,8 @@
      "status": "not_executed",
      "nonexec_cost": -7038.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260708",
@@ -806,7 +847,8 @@
      "status": "not_executed",
      "nonexec_cost": 1257.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260708",
@@ -823,7 +865,8 @@
      "status": "not_executed",
      "nonexec_cost": -5264.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260708",
@@ -840,7 +883,8 @@
      "status": "not_executed",
      "nonexec_cost": -3794.0,
      "condition_still_valid": false,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260709",
@@ -857,7 +901,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260709",
@@ -874,7 +919,8 @@
      "status": "not_executed",
      "nonexec_cost": 3931.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260709",
@@ -891,7 +937,8 @@
      "status": "not_executed",
      "nonexec_cost": -182.0,
      "condition_still_valid": false,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260710",
@@ -908,7 +955,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260710",
@@ -925,7 +973,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260710",
@@ -942,7 +991,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260713",
@@ -959,7 +1009,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260713",
@@ -976,7 +1027,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260713",
@@ -993,7 +1045,8 @@
      "status": "partial",
      "nonexec_cost": -1096.0,
      "condition_still_valid": true,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260713",
@@ -1010,7 +1063,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260714",
@@ -1027,7 +1081,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260714",
@@ -1044,7 +1099,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260714",
@@ -1061,7 +1117,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260714",
@@ -1078,7 +1135,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260714",
@@ -1095,7 +1153,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260714",
@@ -1112,7 +1171,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260715",
@@ -1129,7 +1189,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260715",
@@ -1146,7 +1207,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260715",
@@ -1163,7 +1225,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260715",
@@ -1180,7 +1243,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260715",
@@ -1197,7 +1261,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260715",
@@ -1214,7 +1279,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260716",
@@ -1231,7 +1297,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260716",
@@ -1248,7 +1315,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260716",
@@ -1265,7 +1333,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260716",
@@ -1282,7 +1351,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260716",
@@ -1299,7 +1369,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260716",
@@ -1316,7 +1387,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260717",
@@ -1333,7 +1405,8 @@
      "status": "not_executed",
      "nonexec_cost": 9380.0,
      "condition_still_valid": false,
-     "still_held": true
+     "still_held": true,
+     "alert_state": "lapsed"
     },
     {
      "plan_date": "20260717",
@@ -1350,7 +1423,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260717",
@@ -1367,7 +1441,8 @@
      "status": "pre_executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260717",
@@ -1384,7 +1459,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260717",
@@ -1401,7 +1477,8 @@
      "status": "pre_executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260717",
@@ -1418,7 +1495,8 @@
      "status": "pre_executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260717",
@@ -1435,7 +1513,8 @@
      "status": "pre_executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260717",
@@ -1452,7 +1531,8 @@
      "status": "pre_executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260717",
@@ -1469,7 +1549,8 @@
      "status": "pre_executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260720",
@@ -1486,7 +1567,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260721",
@@ -1503,7 +1585,8 @@
      "status": "not_executed",
      "nonexec_cost": 8710.0,
      "condition_still_valid": false,
-     "still_held": true
+     "still_held": true,
+     "alert_state": "lapsed"
     },
     {
      "plan_date": "20260721",
@@ -1520,7 +1603,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": false
+     "still_held": false,
+     "alert_state": null
     },
     {
      "plan_date": "20260721",
@@ -1537,7 +1621,8 @@
      "status": "executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": true
+     "still_held": true,
+     "alert_state": null
     },
     {
      "plan_date": "20260724",
@@ -1554,7 +1639,8 @@
      "status": "not_executed",
      "nonexec_cost": 7705.0,
      "condition_still_valid": false,
-     "still_held": true
+     "still_held": true,
+     "alert_state": "lapsed"
     },
     {
      "plan_date": "20260728",
@@ -1571,7 +1657,8 @@
      "status": "no_snapshot",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": true
+     "still_held": true,
+     "alert_state": null
     },
     {
      "plan_date": "20260728",
@@ -1588,7 +1675,8 @@
      "status": "no_snapshot",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": true
+     "still_held": true,
+     "alert_state": null
     },
     {
      "plan_date": "20260729",
@@ -1605,7 +1693,8 @@
      "status": "no_snapshot",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": true
+     "still_held": true,
+     "alert_state": null
     },
     {
      "plan_date": "20260729",
@@ -1622,7 +1711,8 @@
      "status": "no_snapshot",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": true
+     "still_held": true,
+     "alert_state": null
     },
     {
      "plan_date": "20260730",
@@ -1639,7 +1729,8 @@
      "status": "no_snapshot",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": true
+     "still_held": true,
+     "alert_state": null
     },
     {
      "plan_date": "20260730",
@@ -1656,7 +1747,8 @@
      "status": "no_snapshot",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": true
+     "still_held": true,
+     "alert_state": null
     },
     {
      "plan_date": "20260731",
@@ -1666,14 +1758,15 @@
      "planned_shares": -100.0,
      "reason": "硬止损(-8%)",
      "strong_risk": true,
-     "actual_shares": null,
-     "executed_ratio": null,
+     "actual_shares": 0.0,
+     "executed_ratio": 0.0,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "no_snapshot",
-     "nonexec_cost": null,
-     "condition_still_valid": null,
-     "still_held": true
+     "status": "not_executed",
+     "nonexec_cost": 5579.0,
+     "condition_still_valid": true,
+     "still_held": true,
+     "alert_state": "active"
     },
     {
      "plan_date": "20260803",
@@ -1683,14 +1776,15 @@
      "planned_shares": -100.0,
      "reason": "硬止损(-8%)",
      "strong_risk": true,
-     "actual_shares": null,
-     "executed_ratio": null,
+     "actual_shares": 0.0,
+     "executed_ratio": 0.0,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "no_snapshot",
-     "nonexec_cost": null,
-     "condition_still_valid": null,
-     "still_held": true
+     "status": "not_executed",
+     "nonexec_cost": 3739.0,
+     "condition_still_valid": true,
+     "still_held": true,
+     "alert_state": "active"
     },
     {
      "plan_date": "20260803",
@@ -1700,14 +1794,15 @@
      "planned_shares": -100.0,
      "reason": "硬止损(-8%)",
      "strong_risk": true,
-     "actual_shares": null,
-     "executed_ratio": null,
+     "actual_shares": 0.0,
+     "executed_ratio": 0.0,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "no_snapshot",
-     "nonexec_cost": null,
-     "condition_still_valid": null,
-     "still_held": true
+     "status": "not_executed",
+     "nonexec_cost": 1058.0,
+     "condition_still_valid": true,
+     "still_held": true,
+     "alert_state": "active"
     },
     {
      "plan_date": "20260804",
@@ -1717,14 +1812,15 @@
      "planned_shares": -100.0,
      "reason": "硬止损(-8%)",
      "strong_risk": true,
-     "actual_shares": null,
-     "executed_ratio": null,
+     "actual_shares": 0.0,
+     "executed_ratio": 0.0,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "no_snapshot",
-     "nonexec_cost": null,
-     "condition_still_valid": null,
-     "still_held": true
+     "status": "not_executed",
+     "nonexec_cost": 1121.0,
+     "condition_still_valid": true,
+     "still_held": true,
+     "alert_state": "active"
     },
     {
      "plan_date": "20260804",
@@ -1734,14 +1830,15 @@
      "planned_shares": -100.0,
      "reason": "硬止损(-8%)",
      "strong_risk": true,
-     "actual_shares": null,
-     "executed_ratio": null,
+     "actual_shares": 0.0,
+     "executed_ratio": 0.0,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "no_snapshot",
-     "nonexec_cost": null,
-     "condition_still_valid": null,
-     "still_held": true
+     "status": "not_executed",
+     "nonexec_cost": 265.0,
+     "condition_still_valid": true,
+     "still_held": true,
+     "alert_state": "active"
     },
     {
      "plan_date": "20260805",
@@ -1751,14 +1848,15 @@
      "planned_shares": -100.0,
      "reason": "硬止损(-8%)",
      "strong_risk": true,
-     "actual_shares": null,
-     "executed_ratio": null,
+     "actual_shares": 0.0,
+     "executed_ratio": 0.0,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "no_snapshot",
-     "nonexec_cost": null,
-     "condition_still_valid": null,
-     "still_held": true
+     "status": "not_executed",
+     "nonexec_cost": 468.0,
+     "condition_still_valid": true,
+     "still_held": true,
+     "alert_state": "active"
     },
     {
      "plan_date": "20260805",
@@ -1768,14 +1866,15 @@
      "planned_shares": -100.0,
      "reason": "硬止损(-8%)",
      "strong_risk": true,
-     "actual_shares": null,
-     "executed_ratio": null,
+     "actual_shares": 0.0,
+     "executed_ratio": 0.0,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "no_snapshot",
-     "nonexec_cost": null,
-     "condition_still_valid": null,
-     "still_held": true
+     "status": "not_executed",
+     "nonexec_cost": -101.0,
+     "condition_still_valid": true,
+     "still_held": true,
+     "alert_state": "active"
     },
     {
      "plan_date": "20260806",
@@ -1785,14 +1884,15 @@
      "planned_shares": -100.0,
      "reason": "硬止损(-8%)",
      "strong_risk": true,
-     "actual_shares": null,
-     "executed_ratio": null,
+     "actual_shares": 0.0,
+     "executed_ratio": 0.0,
      "delay_td": null,
      "delay_uncertain": false,
-     "status": "no_snapshot",
+     "status": "not_executed",
      "nonexec_cost": null,
      "condition_still_valid": null,
-     "still_held": true
+     "still_held": true,
+     "alert_state": null
     }
    ],
    "off_plan": [
@@ -1812,21 +1912,23 @@
    "metrics": {
     "risk_exit_exec_rate": {
      "num": 33,
-     "den": 68
+     "den": 76
     },
     "buy_fill_rate": {
-     "num": 8,
-     "den": 9
+     "num": 1,
+     "den": 2
     },
     "median_delay_td": 1.0,
-    "cum_nonexec_cost_sell": 9195.4,
+    "cum_nonexec_cost_sell": 21324.4,
     "cum_nonexec_cost_buy": -385.0,
     "n_cond_untriggered": 0,
-    "n_unreconcilable": 14
+    "n_unreconcilable": 6,
+    "n_no_op": 7,
+    "n_alert_lapsed": 7
    },
    "coverage": {
     "trading_days_last10": 10,
-    "snapshots_last10": 2,
+    "snapshots_last10": 3,
     "gaps_last10": [
      "20260729",
      "20260730",
@@ -1834,9 +1936,78 @@
      "20260803",
      "20260804",
      "20260805",
-     "20260806",
-     "20260807"
+     "20260806"
     ]
+   }
+  },
+  "broad_leverage": {
+   "window": [
+    "20260803",
+    "20260804",
+    "20260805",
+    "20260806",
+    "20260807"
+   ],
+   "legs": [
+    {
+     "leg": "创业板",
+     "state": "sell",
+     "close": 3563.12,
+     "buy_line": 1685.22,
+     "sell_line": 2677.63,
+     "gap_to_buy": 1.1143,
+     "shares": 0.0,
+     "data_date": null,
+     "stale": false
+    },
+    {
+     "leg": "沪深300",
+     "state": "sell",
+     "close": 4694.44,
+     "buy_line": 3437.45,
+     "sell_line": 4468.68,
+     "gap_to_buy": 0.3657,
+     "shares": 0.0,
+     "data_date": null,
+     "stale": false
+    },
+    {
+     "leg": "科创50",
+     "state": "sell",
+     "close": 1744.02,
+     "buy_line": 1101.01,
+     "sell_line": 1431.32,
+     "gap_to_buy": 0.584,
+     "shares": 0.0,
+     "data_date": null,
+     "stale": false
+    },
+    {
+     "leg": "红利",
+     "state": "sell",
+     "close": 5506.75,
+     "buy_line": 3984.08,
+     "sell_line": 5179.3,
+     "gap_to_buy": 0.3822,
+     "shares": 0.0,
+     "data_date": null,
+     "stale": false
+    }
+   ],
+   "p26": {
+    "close": 4694.44,
+    "median": 3437.45,
+    "above": true,
+    "gap": 0.3657
+   },
+   "week_events": [],
+   "p30": {
+    "week_trigger_dates": [],
+    "total_trigger_days": 0
+   },
+   "p28": {
+    "week_open_dates": [],
+    "total_open_days": 0
    }
   }
  },
@@ -1857,19 +2028,43 @@
    "status": "recurring"
   },
   {
-   "id": "c-model-regime",
-   "kind": "conclusion",
-   "claim": "近3区间模型多空价差显著低于整体——反弹行情高分档跑输（防御画像镜像）",
+   "id": "c-exec-20260805-300604.SZ",
+   "kind": "discipline_fact",
+   "claim": "长川科技 20260805 强风控 sell 未执行且条件仍成立，未执行成本 +468 元",
    "based_on": [
-    "facts.model.recent3"
+    "facts.execution.orders[20260805/300604.SZ]"
    ],
-   "confidence": "medium",
+   "confidence": "high",
    "suggested_action": {
-    "type": "hint_layer",
-    "summary": "P24 已登记：反弹窗口参谋异议行降权附注",
-    "requires_owner": false
+    "type": "owner_ack_or_execute",
+    "requires_owner": true
    },
-   "status": "recurring"
+   "status": "pending_owner"
+  },
+  {
+   "id": "c-exec-20260805-301165.SZ",
+   "kind": "discipline_fact",
+   "claim": "锐捷网络 20260805 强风控 sell 未执行且条件仍成立，未执行成本 -101 元",
+   "based_on": [
+    "facts.execution.orders[20260805/301165.SZ]"
+   ],
+   "confidence": "high",
+   "suggested_action": {
+    "type": "owner_ack_or_execute",
+    "requires_owner": true
+   },
+   "status": "pending_owner"
+  },
+  {
+   "id": "c-exec-lapsed-20260724-002648.SZ",
+   "kind": "discipline_fact",
+   "claim": "卫星化学 20260724 强风控 sell 未执行，现价已回到止损线上方（熄火原因=价格回升，非执行）",
+   "based_on": [
+    "facts.execution.orders[20260724/002648.SZ]"
+   ],
+   "confidence": "high",
+   "suggested_action": null,
+   "status": "lapsed"
   }
  ],
  "calibration_queue": [
@@ -1877,7 +2072,7 @@
    "id": "cq-e18",
    "opened": "20260727",
    "item": "P23 B级速通资格收紧首评",
-   "gate": "policy_shadow 样本≥100（当前~73）",
+   "gate": "policy_shadow 样本≥100 或 2026-10-25 时间兜底（取先到；E18 v2 并列口径已登记 20260808，首评 v1/v2 并读）",
    "state": "waiting_data",
    "requires_owner": true
   },
