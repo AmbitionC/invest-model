@@ -799,11 +799,14 @@ def job_weekly_rebuild_review() -> dict:
     with open(review_out, encoding="utf-8") as f:
         body = f.read()
     today = gh_notify.bj_now().strftime("%Y-%m-%d")
+    # dedupe 前缀带换行（2026-08-08 实案）：同日若有人发过「## <日期> 复盘差分解读」，
+    # 裸前缀 startswith 会把当日正式复盘误判为重复而静默跳过——0808 首个七段新版
+    # 复盘评论正是这样被吞的（JSON 已提交、markdown 没发出）。
     out["review"] = gh_notify.post_issue_comment(
         "🔍 复盘报告",
         seed_body="本 issue 由 FC 定时函数每周追加复盘报告（投顾/模型/持仓/纪律 与真实收益对账）。",
         comment_body=f"## {today} 复盘\n\n{body}",
-        dedupe_prefix=f"## {today} 复盘",
+        dedupe_prefix=f"## {today} 复盘\n",
     )
 
     # 4) JSON 双轨回写 master（handoff 1.3）：latest.json + 当期历史文件经 contents API
