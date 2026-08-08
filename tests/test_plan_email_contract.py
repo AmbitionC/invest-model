@@ -95,6 +95,18 @@ def test_digest_renders_into_email():
         assert gone not in md
 
 
+def test_digest_fear_branches():
+    # fear≥75 但价格闸未开：不得出现「跌到 75 以上才有机会」的自相矛盾措辞
+    sts = [dict(s, fear=80.0) for s in _STS]
+    h = _broad_digest_hint(sts, dict(_LEV_OFF, fear=80.0), "20260807")
+    assert h and "跌到 75 以上" not in h and "抢买窗未开" in h
+    # 有腿真开抢买窗：尾注改说窗开
+    sts2 = [dict(s, fear=80.0) for s in _STS]
+    sts2[3] = dict(sts2[3], state="panic")
+    h2 = _broad_digest_hint(sts2, dict(_LEV_OFF, fear=80.0), "20260807")
+    assert h2 and "恐慌抢买窗开启" in h2
+
+
 def test_bias_hint_only_on_extreme():
     calm = [{"name": "创业板", "bias60": -0.153, "rank_low": 13, "rank_high": 900,
              "win": 2500, "extreme": "", "date": "20260807"}]
@@ -113,6 +125,14 @@ def test_leverage_hint_active_plain():
     h = _and_leverage_hint(st)
     assert h and h.startswith("🚨🚨") and "30%" in h and "手动" in h
     assert "P30" not in h and "AND 共振" not in h
+
+
+def test_etf_watch_notes_no_codes():
+    # ETF 观察表的备注来自 config/watch_etf.txt，会原样进邮件——同受呈现契约约束
+    from pathlib import Path
+    txt = (Path(__file__).resolve().parents[1] / "config" / "watch_etf.txt").read_text(
+        encoding="utf-8")
+    assert not re.findall(r"[PE]\d+", txt)
 
 
 def test_fin_alert_column():

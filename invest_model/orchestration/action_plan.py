@@ -523,8 +523,17 @@ def _broad_digest_hint(sts: list[dict], lev_st: dict | None, dt: str) -> str | N
             seg += f"⚠️价格还停在{d}"
         segs.append(seg)
     fear = next((s.get("fear") for s in sts if s.get("fear") is not None), None)
-    tail = (f"｜恐慌指数 {fear:.0f}（跌到 75 以上才有恐慌抢买机会）" if fear is not None
-            else "｜恐慌指数暂无读数")
+    # 恐慌括注按分支措辞：fear≥75 但价格闸未开时，不能说「跌到 75 以上才有机会」
+    # ——用户会读成系统自相矛盾（恐慌达标了却没有任何腿显示抢买）。
+    if fear is None:
+        tail = "｜恐慌指数暂无读数"
+    elif any(s.get("state") == "panic" for s in sts):
+        tail = f"｜恐慌指数 {fear:.0f}＝恐慌抢买窗开启（见上）"
+    elif fear >= 75:
+        tail = (f"｜恐慌指数 {fear:.0f}：市场已恐慌，但各指数价格还没跌到近5年低位，"
+                f"抢买窗未开")
+    else:
+        tail = f"｜恐慌指数 {fear:.0f}（跌到 75 以上才有恐慌抢买机会）"
     if lev_st is not None and not lev_st.get("active"):
         tail += "｜加杠杆信号未触发（需「跌破长期中枢+极度恐慌」同时出现，历史上极少见）"
     return "宽基指数今天的位置（图表见网站·宽基指数页）：" + "；".join(segs) + tail
@@ -1294,7 +1303,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                     if (not tf_close.empty and top_feature_now(
                             tf_close, tf_vol.reindex(tf_close.index),
                             cost_map.get(c, 0.0), entry_map.get(c) or None)):
-                        tw, reason = cw * 0.5, "顶部特征减半（P16·波动骤放大+放量、浮盈达标）"
+                        tw, reason = cw * 0.5, "顶部特征减半（波动骤放大+放量、浮盈达标）"
                 except Exception:  # noqa: BLE001 — 顶部信号失败不阻断计划
                     pass
 
@@ -1435,33 +1444,62 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     # 由汇总行的逐腿「先不动——跌破 X 买、涨过 Y 减」承接，不沉默）。
     # 🔴 所有落库（broad_leg_state / index_bias_daily / leverage_signal）逐字保留：
     # 网站与复盘第七段吃的是库表，不受邮件瘦身影响（一处计算、多处消费不变）。
+    # 状态计算与落库分离（交叉验证审计条 1）：落库抛错（DB 超时/表锁真实发生过）
+    # 绝不能吞掉已算出的状态——否则 P30 触发日恰逢 upsert 失败会让邮件/issue/digest
+    # 三通道同时静默。计算失败才置 None；persist 失败只丢库表、提示照出。
     _lev_st = None
     try:
         _lev_st = _and_leverage_state(loop, dt)
-        if _lev_st:
-            _persist_leverage_signal(loop, dt, _lev_st)
     except Exception:  # noqa: BLE001
         _lev_st = None
+    if _lev_st:
+        try:
+            _persist_leverage_signal(loop, dt, _lev_st)
+        except Exception:  # noqa: BLE001
+            pass
+    _dg = None
     try:
         _bst = _broad_leg_states(loop, dt)
-        if _bst:
+    except Exception:  # noqa: BLE001
+        _bst = []
+    if _bst:
+        try:
             _persist_broad_leg_state(loop, dt, _bst, shares_map, cost_map, last_close)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             _dg = _broad_digest_hint(_bst, _lev_st, dt)
             if _dg:
                 hints.append(_dg)
-    except Exception:  # noqa: BLE001
-        pass
+        except Exception:  # noqa: BLE001
+            _dg = None
+    # 覆盖缺口兜底（审计条 5）：宽基块整体缺席（基底 CSV 缺失等）时，杠杆未触发状态
+    # 无处并入——退回独立状态行，保住「常驻可见」的 owner 要求。
+    if _dg is None and _lev_st and not _lev_st.get("active"):
+        try:
+            _lv = _and_leverage_hint(_lev_st)
+            if _lv:
+                hints.append(_lv)
+        except Exception:  # noqa: BLE001
+            pass
     # P70 乖离率：落库照旧（前端 /invest/bias），邮件只在进近十年前 4 时出 🚨 行
     # （owner 2026-08-06 拍板的推送条件；未触发的状态行 2026-08-08 起不再进邮件）。
+    # persist 先于 hint（审计条 3）：与宽基块同款，hint 抛错不牺牲落库。
     try:
         _bias = _index_bias_states(loop, dt)
-        if _bias:
+    except Exception:  # noqa: BLE001
+        _bias = []
+    if _bias:
+        try:
+            _persist_index_bias_daily(loop, dt, _bias)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             _p70 = _bias_extreme_hint(_bias, dt)
             if _p70:
                 hints.append(_p70)
-            _persist_index_bias_daily(loop, dt, _bias)
-    except Exception:  # noqa: BLE001
-        pass
+        except Exception:  # noqa: BLE001
+            pass
     # P28 杠杆窗口（三信号取二共振才出现，平时静默；L≤30% 硬顶，E23：50% 已证伪爆仓）
     try:
         _p28 = _leverage_window_hint(loop, dt)
@@ -1592,8 +1630,8 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
                 still_top.append(names.get(c, c))
         if still_top:
             hints.append(
-                f"顶部特征仍在（本周期已自动减半）：{'、'.join(still_top)}——"
-                f"顶部风险未消，可人工考虑进一步兑现（P16，见 model_change_proposals）")
+                f"顶部特征仍在（此前已按纪律自动减半）：{'、'.join(still_top)}——"
+                f"顶部风险未消，可考虑进一步兑现")
     except Exception:  # noqa: BLE001 — 顶部提示失败不阻断计划
         pass
 

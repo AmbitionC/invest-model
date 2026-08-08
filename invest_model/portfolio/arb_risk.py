@@ -60,4 +60,4 @@ def ledger_invariant(sleeve_weights: dict[str, float],
     if total <= 1.0 + tol:
         return True, 1.0, None
     scale = 1.0 / total
-    return False, scale, f"套利账本 Σ={total:.2%}>100%，按零杠杆红线收缩 scale={scale:.3f}"
+    return False, scale, f"套利账本合计 {total:.2%} 超过 100%，已按零杠杆红线整体收缩到 100% 以内"
