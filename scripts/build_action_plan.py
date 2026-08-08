@@ -33,7 +33,11 @@ def main() -> None:
     ap.add_argument("--advisor-led", action="store_true")
     ap.add_argument("--risk", action="store_true")
     ap.add_argument("--hard-stop", type=float, default=0.08)
-    ap.add_argument("--account-dd-stop", type=float, default=0.15)
+    # 默认取 RiskConfig 唯一真源（owner 2026-07-22 定 10%）。此前这里写死 0.15：
+    # FC/plan-notify 不传该参时，argparse 默认值会显式覆盖 dataclass 默认——
+    # 生产实际一直跑在 15%，与 owner 决定不符（2026-08-08 前端交叉验证顺藤发现）。
+    ap.add_argument("--account-dd-stop", type=float, default=None,
+                    help="账户回撤清仓阈值；缺省取 RiskConfig.account_dd_stop")
     ap.add_argument("--no-ma-trailing", action="store_true")
     ap.add_argument("--trail-full", action="store_true")
     ap.add_argument("--trend-filter", action="store_true")
@@ -64,7 +68,8 @@ def main() -> None:
         version=args.version, benchmark=args.benchmark,
         timing_enabled=not args.no_timing,
         risk=RiskConfig(enabled=args.risk, hard_stop_pct=args.hard_stop,
-                        account_dd_stop=args.account_dd_stop,
+                        **({"account_dd_stop": args.account_dd_stop}
+                           if args.account_dd_stop is not None else {}),
                         ma_trailing=not args.no_ma_trailing, trail_full=args.trail_full,
                         trend_filter=args.trend_filter, time_stop_days=args.time_stop_days),
         universe=UniverseConfig(method=args.universe_method),
