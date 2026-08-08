@@ -25,10 +25,15 @@ from invest_model.signals.macro import (  # noqa: E402
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-# ingest_macro → tushare_client → tushare：无 tushare 的环境（如裸 CI）整模块干净跳过，
-# 不再中断 pytest collection（handoff 2026-08-08 §5）。
-pytest.importorskip("tushare")
-from ingest_macro import _q_to_month, melt_frame  # noqa: E402
+# ingest_macro → tushare_client → tushare：无 tushare 的环境只跳过依赖它的 melt/_q 用例，
+# 纯信号层（invest_model.signals.macro，不依赖 tushare）照常跑，collection 不再中断
+# （handoff 2026-08-08 §5；模块级 importorskip 会连带跳掉信号层测试，粒度过粗）。
+try:
+    from ingest_macro import _q_to_month, melt_frame  # noqa: E402
+except ImportError:                                   # pragma: no cover — 缺 tushare
+    _q_to_month = melt_frame = None
+needs_ingest = pytest.mark.skipif(
+    melt_frame is None, reason="缺 tushare（ingest_macro 导入链依赖）")
 
 
 @pytest.fixture()
@@ -40,6 +45,7 @@ def repo(tmp_path):
 
 # ── melt：不写死列名 ────────────────────────────────────────
 
+@needs_ingest
 def test_melt_is_column_name_agnostic():
     """接口返回什么数值列就落什么，文本列自动排除——这是长表设计的全部意义。"""
     df = pd.DataFrame({"month": ["202401", "202402"], "m1_yoy": [5.9, 1.2],
@@ -54,12 +60,14 @@ def test_melt_is_column_name_agnostic():
     assert melt_frame(df2, "cn_m", "M").series.tolist() == ["cn_m.brand_new_metric"]
 
 
+@needs_ingest
 def test_melt_handles_missing_period_key_and_dates():
     assert melt_frame(pd.DataFrame({"a": [1]}), "x", "M").empty      # 无时间键 → 跳过
     d = pd.DataFrame({"trade_date": ["2024-01-02"], "1y": [3.45]})
     assert melt_frame(d, "shibor_lpr", "D").period.iloc[0] == "20240102"
 
 
+@needs_ingest
 def test_quarter_key_maps_to_quarter_end_month():
     assert _q_to_month("2024Q1") == "202403"
     assert _q_to_month("2024Q4") == "202412"

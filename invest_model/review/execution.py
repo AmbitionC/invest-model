@@ -117,7 +117,10 @@ def reconcile(repo, asof: str) -> dict:
              "status": None, "nonexec_cost": None, "condition_still_valid": None}
         # 空指令：计划股数=0（或缺失）无事可对账，一等状态 no_op，不进任何执行率。
         # 不能走 1 手容忍带——planned=0, actual=0 会命中 |0-0|<LOT 被判 executed 100%。
+        # NaN（shares_delta 缺失）须归一为 0.0：裸 NaN 会在报表渲染 '+nan'、并让
+        # latest.json 输出非法 JSON token 使整份文件不可 strict 解析。
         if sd == 0 or not np.isfinite(sd):
+            o["planned_shares"] = 0.0
             o["status"] = "no_op"
             orders.append(o)
             continue

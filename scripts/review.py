@@ -701,9 +701,12 @@ def review_broad_leverage(repo: BaseRepository, asof: str,
             lines.append("|---|---|---|---|---|---|---|---|")
             legs_fx = []
             for _, r in bl.iterrows():
-                stale = (str(r["data_date"]) < td) if r["data_date"] else False
-                dd = (f"⚠️{r['data_date']}(陈旧)" if stale
-                      else (str(r["data_date"]) if r["data_date"] else "—"))
+                # data_date 可为 NULL（pandas 读成 NaN，NaN 为真值）——须 notna 判空，
+                # 否则渲染出字面 'nan' 且陈旧判定失效
+                dd_raw = r["data_date"]
+                dd_ok = pd.notna(dd_raw) and str(dd_raw) not in ("", "None", "nan")
+                stale = dd_ok and str(dd_raw) < td
+                dd = (f"⚠️{dd_raw}(陈旧)" if stale else (str(dd_raw) if dd_ok else "—"))
                 gap = (float(r["close"]) / float(r["buy_line"]) - 1.0
                        if np.isfinite(r["close"]) and np.isfinite(r["buy_line"])
                        and r["buy_line"] else float("nan"))
@@ -723,7 +726,7 @@ def review_broad_leverage(repo: BaseRepository, asof: str,
                                 "gap_to_buy": round(gap, 4) if np.isfinite(gap) else None,
                                 "shares": float(r["shares"])
                                 if np.isfinite(r["shares"]) else 0.0,
-                                "data_date": str(r["data_date"]) if r["data_date"] else None,
+                                "data_date": str(dd_raw) if dd_ok else None,
                                 "stale": bool(stale)})
             fx["legs"] = legs_fx
             # P26 指数贵贱（沪深300 收盘 vs expanding 中位线；四腿锚同源）
@@ -902,12 +905,17 @@ def _write_json(asof: str, period: str, facts: dict, json_dir: str) -> None:
                                  "summary": "P24 已登记：反弹窗口参谋异议行降权附注",
                                  "requires_owner": False},
             "status": "recurring"})
-    _seen_a: set = set()
+    # active 与 lapsed 各自独立去重（与 review_execution 的 markdown 渲染同构）。
+    # 共用一个集合会让同票较新的 lapsed 行吞掉仍 active 的告警——机器可读通道
+    # 重现 1.4 要修的「价格驱动的告警静默消失」（0808 交叉评审实证）。
+    _seen_active: set = set()
+    _seen_lapsed: set = set()
     for o in sorted(facts.get("execution", {}).get("orders", []),
                     key=lambda x: x.get("plan_date", ""), reverse=True):
         st = o.get("alert_state")
+        _seen = _seen_active if st == "active" else _seen_lapsed
         if st in ("active", "lapsed") \
-                and o["code"] not in _seen_a and not _seen_a.add(o["code"]):
+                and o["code"] not in _seen and not _seen.add(o["code"]):
             if st == "active":
                 conclusions.append({
                     "id": f"c-exec-{o['plan_date']}-{o['code']}", "kind": "discipline_fact",

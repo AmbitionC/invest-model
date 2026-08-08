@@ -809,21 +809,30 @@ def job_weekly_rebuild_review() -> dict:
     # 4) JSON 双轨回写 master（handoff 1.3）：latest.json + 当期历史文件经 contents API
     #    提交，保持 docs/review_schema.md 的「固定入口每次复盘覆盖」承诺。失败告警不阻断
     #    ——token 若仅 Issues RW 会 403，告警会指向补 Contents RW 权限。
+    #    「产出失败」（/tmp 无 JSON＝_write_json 挂了）与「未提交」（缺凭证）同样告警：
+    #    这两条正是 latest.json 静默停更两周的同类路径，不能只覆盖「提交抛错」。
     try:
         import glob as _glob
-        committed = []
+        committed, uncommitted = [], []
         for p in sorted(_glob.glob(os.path.join(review_json_dir, "*.json"))):
             name = os.path.basename(p)
             with open(p, encoding="utf-8") as f:
                 content = f.read()
-            gh_notify.commit_file(
+            res = gh_notify.commit_file(
                 f"results/review/{name}", content,
                 f"复盘产物：机器可读 JSON（FC 周度·{name}） [skip ci]")
-            committed.append(name)
-        out["review_json"] = (f"committed:{','.join(committed)}" if committed
-                              else "no-files")
+            (committed if res.get("committed") else uncommitted).append(name)
+        if committed:
+            out["review_json"] = "committed:" + ",".join(committed) + \
+                (f";uncommitted:{','.join(uncommitted)}" if uncommitted else "")
+        else:
+            reason = ("json-missing（/tmp/review_json 无产物，_write_json 失败？）"
+                      if not uncommitted else
+                      f"uncommitted:{','.join(uncommitted)}（缺凭证/未提交）")
+            out["review_json"] = reason
+            raise RuntimeError(f"复盘 JSON 回写未完成：{reason}")
     except Exception as e:  # noqa: BLE001 — JSON 回写失败不影响 issue 推送
-        out["review_json"] = f"WARN: {e}"
+        out.setdefault("review_json", f"WARN: {e}")
         print(f"WARN 复盘 JSON 回写失败（若 403 需给 FC token 加本仓 Contents RW）：{e}")
         try:
             gh_notify.alert("weekly_review_json", e)
