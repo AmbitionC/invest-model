@@ -208,6 +208,8 @@ def _hs300_median_hint(loop: ClosedLoop, dt: str) -> str | None:
 
     基底 results/index_dump_000300_SH.csv（tushare 2005 起全历史，E21 同源数据），
     基底末日之后的收盘从 index_daily 增量补齐；任何一步失败返回 None 不影响计划。
+    ⚠️ 2026-08-08 起不再进邮件（owner 呈现契约：并入 `_broad_digest_hint` 人话汇总行）；
+    函数保留＝双锚口径与 E21 出处留痕，网站/复盘按库表口径各自呈现。
     """
     from pathlib import Path
     base = Path(__file__).resolve().parents[2] / "results" / "index_dump_000300_SH.csv"
@@ -293,6 +295,7 @@ def _p31_sell_hint(loop: ClosedLoop, dt: str) -> str | None:
     bootstrap（B=2000）冠军为 flat5/flat10。定义无关上界：卖 5% 与卖 10% 夏普同为 0.61、
     年化仅差 0.45pp ⇒ 任何在两档间切换的规则贡献上限 0.45pp。
     **卖出机制本身保留**——在锚上方持续减仓是全套最大单一贡献（回撤 −50%→−22%）。
+    ⚠️ 2026-08-08 起不再进邮件（并入 `_broad_digest_hint` 的逐腿「每月减5%」说法）。
     """
     hs = _index_hist_by(loop, dt, "index_dump_000300_SH.csv", "000300.SH")
     if hs is None:
@@ -442,7 +445,9 @@ _BROAD_STATE_TXT = {"buy": "🟢买入窗开", "panic": "🟢恐慌抢买窗",
 
 def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
     """P27 v2：独立宽基账户·四腿窗口状态（owner 2026-08-01 拍板：废除 25% 总资产目标、
-    两账户独立决策、多指数配置）。各腿独立触发；恐慌≥75 时任何腿均可抢买池 50%。"""
+    两账户独立决策、多指数配置）。各腿独立触发；恐慌≥75 时任何腿均可抢买池 50%。
+    ⚠️ 2026-08-08 起不再进邮件（owner 呈现契约：术语长行换成 `_broad_digest_hint`
+    人话汇总）；函数保留＝口径留痕，落库与网站不受影响。"""
     sts = _broad_leg_states(loop, dt)
     if not sts:
         return None
@@ -470,6 +475,59 @@ def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
                 "修复路径＝update.BENCHMARKS 已于 20260807 补齐四腿+七腿指数日更，"
                 "待下一次 data-update 跑完即自愈；若本行持续出现说明日更未生效")
     return txt
+
+
+def _broad_digest_hint(sts: list[dict], lev_st: dict | None, dt: str) -> str | None:
+    """宽基指数「人话汇总」行（owner 2026-08-08 呈现契约）：只说三件事——
+    ①各指数现在处于什么位置 ②要不要动（不动也说清楚） ③离下一个动作点还有多远。
+    策略编号、验证论证、口径术语一律不出现；图表与完整口径在网站「宽基指数」页。
+    数据与判定同 `_broad_leg_states`（一处计算），只是换成用户能直接读懂的说法；
+    恐慌与 P30 未触发状态并入行尾，取代原先各占一行的状态行。
+    """
+    if not sts:
+        return None
+    segs = []
+    for s in sts:
+        last = s["last"]
+        if s.get("dd") is not None:            # 阶梯腿（科创50）：决策量是距历史峰回撤
+            if s["state"] == "buy":
+                seg = (f"🟢{s['name']} {last:.0f}：距历史最高点 {s['dd']:+.0%}＝跌到位了，"
+                       f"按档分批买")
+            elif s["state"] == "panic":
+                seg = f"🟢{s['name']} {last:.0f}：市场恐慌+价格在低位＝可动用池内一半现金抢买"
+            elif s["state"] == "sell":
+                seg = (f"🔴{s['name']} {last:.0f}：已高于减仓线 "
+                       f"{s['med'] * s['sell_mul']:.0f}＝只卖不买，持仓每月减 5%")
+            else:
+                seg = (f"⚪{s['name']} {last:.0f}：先不动——现在距历史最高点 {s['dd']:+.0%}，"
+                       f"跌破 {s['ladder_line']:.0f} 再开始分批补")
+        else:
+            buy_line = s["med"] * s["buy_mul"]
+            sell_line = s["med"] * s["sell_mul"]
+            if s["state"] == "buy":
+                seg = f"🟢{s['name']} {last:.0f}：已低于买点 {buy_line:.0f}＝买入窗口开着，可分批买"
+            elif s["state"] == "panic":
+                seg = f"🟢{s['name']} {last:.0f}：市场恐慌+价格在近5年低位＝可动用池内一半现金抢买"
+            elif s["state"] == "sell":
+                seg = (f"🔴{s['name']} {last:.0f}：已高于减仓线 {sell_line:.0f}"
+                       f"（超 {last / sell_line - 1:+.0%}）＝只卖不买，持仓每月减 5%")
+            else:
+                # 观望：给两条动作线，再点一句离哪条更近（人最关心的是"接下来先碰到哪个"）
+                near = (f"再涨 {sell_line / last - 1:.0%} 到减仓线"
+                        if sell_line / last - 1 < 1 - buy_line / last
+                        else f"再跌 {1 - buy_line / last:.0%} 到买点")
+                seg = (f"⚪{s['name']} {last:.0f}：先不动——跌破 {buy_line:.0f} 才买、"
+                       f"涨过 {sell_line:.0f} 才减（{near}）")
+        d = str(s.get("data_date") or "")
+        if d and d < str(dt):
+            seg += f"⚠️价格还停在{d}"
+        segs.append(seg)
+    fear = next((s.get("fear") for s in sts if s.get("fear") is not None), None)
+    tail = (f"｜恐慌指数 {fear:.0f}（跌到 75 以上才有恐慌抢买机会）" if fear is not None
+            else "｜恐慌指数暂无读数")
+    if lev_st is not None and not lev_st.get("active"):
+        tail += "｜加杠杆信号未触发（需「跌破长期中枢+极度恐慌」同时出现，历史上极少见）"
+    return "宽基指数今天的位置（图表见网站·宽基指数页）：" + "；".join(segs) + tail
 
 
 # ── P70 乖离率读数层（提示-only·零仓位主张） ──────────────────────
@@ -561,20 +619,18 @@ def _bias_extreme_hint(sts: list[dict], dt: str | None = None) -> str | None:
         return f"⚠️价格截至{d}" if dt and d and d < str(dt) else ""
 
     hit = [s for s in sts if s["extreme"]]
-    if hit:
-        seg = "；".join(
-            f"{s['name']} 乖离率 {s['bias60']:+.1%}＝近十年第 "
-            f"{s['rank_low'] if s['extreme'] == 'low' else s['rank_high']} "
-            f"{'低' if s['extreme'] == 'low' else '高'}（{s['win']}日窗）{_stale(s)}"
-            for s in sorted(hit, key=lambda x: min(x["rank_low"], x["rank_high"])))
-        return ("🚨 乖离率极值：" + seg
-                + "。⚠️ 这是读数不是信号——乖离率已在六个口径上全部验证失败"
-                  "（E37/E56/E57/E58/E59/E60），不构成买卖依据，"
-                  "尤其涨到极值后历史上是继续涨（E37/E57）。仓位仍只由中位线锚决定。")
-    near = sorted(sts, key=lambda s: min(s["rank_low"], s["rank_high"]))[:3]
-    seg = "；".join(f"{s['name']} {s['bias60']:+.1%}（第{s['rank_low']}低/第{s['rank_high']}高）"
-                   f"{_stale(s)}" for s in near)
-    return f"乖离率（读数·不接买卖闸）：最接近极值的三条 {seg}｜前 {BIAS_TOPK} 才推送"
+    if not hit:
+        # 未进前 4 不进邮件（owner 2026-08-08：状态行撤下）；网站 /invest/bias 仍有全量读数
+        return None
+    seg = "；".join(
+        f"{s['name']} 现在比自己近 60 天的均线{'低' if s['extreme'] == 'low' else '高'} "
+        f"{abs(s['bias60']):.1%}，拉开的幅度是近十年第 "
+        f"{s['rank_low'] if s['extreme'] == 'low' else s['rank_high']} "
+        f"{'低' if s['extreme'] == 'low' else '高'}{_stale(s)}"
+        for s in sorted(hit, key=lambda x: min(x["rank_low"], x["rank_high"])))
+    return ("🚨 罕见读数提醒：" + seg
+            + "。注意：这只是「偏离均线太远」的读数、不是买卖信号——历史检验反复表明按它"
+              "交易并不赚钱（涨到极端后往往还继续涨），买卖仍按各指数的买卖点纪律执行")
 
 
 def _persist_index_bias_daily(loop: ClosedLoop, dt: str, sts: list[dict]) -> None:
@@ -684,6 +740,8 @@ def _fault_tolerance_hint(loop: ClosedLoop, dt: str, cost_map: dict,
     三问（答不上就是没有容错，不该按那个仓位买）：
       ①还要再跌多少我才扛不住 ②均价会到哪 ③还需多少后备资金
     这条行不产生任何买卖指令，只把三问的答案先算出来摆在决策前面。
+    ⚠️ 2026-08-08 起不再进邮件（owner 呈现契约）；算式与口径留痕于此，
+    首笔上限逻辑仍由 `_first_lot_cap` 承载、可随时回接。
     """
     rows = []
     for st in _broad_anchor_states(loop, dt):
@@ -721,6 +779,8 @@ def _broad_no_action_hint(loop: ClosedLoop, dt: str, shares_map: dict) -> str | 
 
     源自他的实盘表述习惯——对"不动"分别给出**为何不卖**与**为何不买**两条理由，
     而不是沉默跳过。沉默会让人把"系统没说话"读成"系统失灵"或"可以随便动"。
+    ⚠️ 2026-08-08 起不再进邮件——「不沉默」原则由 `_broad_digest_hint` 的逐腿
+    「先不动——跌破 X 才买、涨过 Y 才减」承接（每腿都给出不动的理由与动作线）。
     """
     sts = _broad_anchor_states(loop, dt)
     if not sts:
@@ -806,16 +866,16 @@ def _leverage_window_hint(loop: ClosedLoop, dt: str) -> str | None:
     fear = _fear_score(loop, dt)
     sigs = []
     if last < med * 0.90:
-        sigs.append(f"①中位线下方≥10%（{last / med - 1:+.1%}）")
+        sigs.append(f"指数比长期中枢低了 {abs(last / med - 1):.0%}（超过10%）")
     if last / peak - 1 <= -0.40:
-        sigs.append(f"②距历史峰回撤≥40%（{last / peak - 1:+.1%}）")
+        sigs.append(f"距历史最高点已回撤 {abs(last / peak - 1):.0%}（超过40%）")
     if fear is not None and fear >= 85:
-        sigs.append(f"③深度恐慌（{fear:.0f}≥85）")
+        sigs.append(f"市场极度恐慌（恐慌指数 {fear:.0f}，85 以上）")
     if len(sigs) < 2:
         return None
-    return (f"🚨 杠杆窗口（P28·提示-only）：{len(sigs)}/3 信号共振——" + "、".join(sigs)
-            + "＝极高确定性底部窗口开启。规则：仅宽基指数、债务比例 L≤30% 硬顶"
-              "（E23：50% 历史爆仓证伪）、owner 手动执行、系统不自动交易")
+    return (f"🚨 罕见的大底信号：3 个深危机信号里有 {len(sigs)} 个同时出现——" + "、".join(sigs)
+            + "。历史上这种共振只在真正的大底附近出现过（近12年仅3次、无一误报）。"
+              "规则：只买宽基指数、借入资金不超过本金的 30%、由你手动执行——系统不会自动下单")
 
 
 def _and_leverage_state(loop: ClosedLoop, dt: str) -> dict | None:
@@ -842,18 +902,20 @@ def _and_leverage_state(loop: ClosedLoop, dt: str) -> dict | None:
 
 
 def _and_leverage_hint(st: dict | None) -> str | None:
+    """P30 提示行。2026-08-08 起邮件只出触发分支（🚨🚨）；未触发状态并入宽基汇总行，
+    未触发分支保留仅供调试打印，生产不再调用。"""
     if st is None:
         return None
     fear_txt = f"{st['fear']:.0f}" if st["fear"] is not None else "—"
     if st["active"]:
-        return (f"🚨🚨 加杠杆信号（P30·AND 共振）触发：沪深300 {st['close']:.0f} 低于全历史中位线"
-                f"（{st['gap']:+.1%}）且恐慌 {fear_txt}≥75——十一年半仅在 2024-02 微盘崩出现过一段"
-                f"（其后一年 +21%~+25%）＝极高确定性窗口。规则：仅宽基指数、债务 L≤30% 硬顶、"
-                f"融资成本≤6%/年、owner 手动执行、系统不自动交易。本提醒在信号存续期每日重复")
+        return (f"🚨🚨 加杠杆信号触发：沪深300 {st['close']:.0f} 已低于长期中枢（{st['gap']:+.1%}）"
+                f"且市场极度恐慌（恐慌指数 {fear_txt}）——这个组合十一年半只在 2024 年初出现过一段，"
+                f"其后一年指数涨了 21%~25%。规则：只买宽基指数、借入资金不超过本金的 30%、"
+                f"融资成本每年不超过 6%、由你手动执行——系统不会自动下单。信号存续期间本提醒每日重复")
     lo = "✓低价" if st["low"] else f"✗价格（中位线上方 {st['gap']:+.1%}）"
     pa = "✓恐慌" if st["panic"] else f"✗恐慌（{fear_txt}<75）"
-    return (f"杠杆信号（P30·AND 共振）：未触发——{lo} × {pa}"
-            f"｜P28 深危机窗 {st['p28_count']}/3。两者任一触发将强提醒")
+    return (f"杠杆信号：未触发——{lo} × {pa}"
+            f"｜深危机窗 {st['p28_count']}/3。两者任一触发将强提醒")
 
 
 def _persist_leverage_signal(loop: ClosedLoop, dt: str, st: dict,
@@ -1360,48 +1422,37 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
 
     # 账户级风险提示：执行对账（上一日计划的清仓是否执行）/ 行业与单票集中度 / 仓位 vs 目标
     hints: list[str] = []
-    if adv_stance_line:
-        gate_note = ""
-        if (adv_stance == "reduce"
-                and os.getenv("ADVISOR_STANCE_GATE", "1").lower() not in ("0", "false")):
-            gate_note = "。大盘看空占多，新买入更谨慎（要仓位更低才开新仓）"
-        hints.append(f"投顾观点：{adv_stance_line}{gate_note}")
-    # P26 指数贵贱提示行（提示-only，E21 4/4 过判据上线）：沪深300 相对全历史 expanding 中位线位置。
-    # 全历史基底用仓内静态 CSV（2005 起），决策日后缺口从 index_daily 补——库内只有 2015 起故必须带基底。
+    # 投顾风向汇总行 2026-08-08 owner 撤下（「103个主题看多79个」式计数对用户无决策价值，
+    # 个股观点已在观察池表格逐票呈现）；P20 环境闸逻辑原样保留，仅在闸真正收紧时提示一句人话。
+    if (adv_stance == "reduce"
+            and os.getenv("ADVISOR_STANCE_GATE", "1").lower() not in ("0", "false")):
+        hints.append("大盘方向投顾看空的居多，今天开新仓的门槛比平时更高（要求仓位更低才买）")
+    # ── 宽基指数块（owner 2026-08-08 呈现契约）：邮件只出一条「人话汇总」行——
+    # 各指数现在处于什么位置、要不要动、离下一个动作点还有多远；策略编号（P26/P51 等）、
+    # 验证论证、口径说明一律不进邮件，图表与完整口径在网站「宽基指数」页。
+    # 原 P26 指数贵贱 / P31 卖出纪律 / P27 v2 四腿长行 / P51 容错自检 / P52 不动说明 /
+    # P30 未触发状态行同批撤出邮件（函数保留＝口径留痕；P52 的「不动也要说清正反理由」
+    # 由汇总行的逐腿「先不动——跌破 X 买、涨过 Y 减」承接，不沉默）。
+    # 🔴 所有落库（broad_leg_state / index_bias_daily / leverage_signal）逐字保留：
+    # 网站与复盘第七段吃的是库表，不受邮件瘦身影响（一处计算、多处消费不变）。
+    _lev_st = None
     try:
-        _p26 = _hs300_median_hint(loop, dt)
-        if _p26:
-            hints.append(_p26)
+        _lev_st = _and_leverage_state(loop, dt)
+        if _lev_st:
+            _persist_leverage_signal(loop, dt, _lev_st)
     except Exception:  # noqa: BLE001
-        pass
-    # P31 卖出分层（E25 双指数过关·2026-08-01）：相对高位强度 H 调卖出节奏，替换旧"上方月卖5%"。
-    try:
-        _p31 = _p31_sell_hint(loop, dt)
-        if _p31:
-            hints.append(_p31)
-    except Exception:  # noqa: BLE001
-        pass
-    # P27 指数底仓提示行（owner 2026-07-30 拍板：五层能力圈一二层直接进系统）：
-    # 底仓＝沪深300ETF，目标占比 BASE_SLEEVE_TARGET（默认25%）；建仓窗口只认两个已验证信号
-    # （P26 中位线下方 / E17 恐慌≥75），上方不追——执行始终由 owner 手动。
-    # P27 v2（2026-08-01 owner 拍板）：独立宽基账户四腿窗口状态取代旧"25% 底仓目标"行。
-    try:
-        _p27 = _broad_legs_hint(loop, dt)
-        if _p27:
-            hints.append(_p27)
-    except Exception:  # noqa: BLE001
-        pass
-    # 同一份四腿读数落库 broad_leg_state，供 `/invest/broad` 与前端「宽基指数」板块——
-    # 提示行与网站因此不可能出现两套数（P58 之后的一贯做法：一处计算、多处消费）。
+        _lev_st = None
     try:
         _bst = _broad_leg_states(loop, dt)
         if _bst:
             _persist_broad_leg_state(loop, dt, _bst, shares_map, cost_map, last_close)
+            _dg = _broad_digest_hint(_bst, _lev_st, dt)
+            if _dg:
+                hints.append(_dg)
     except Exception:  # noqa: BLE001
         pass
-    # P70 乖离率读数（owner 2026-08-06）：一处计算、三处消费——提示行进 issue #9（→邮件）、
-    # 落库 index_bias_daily、前端 `/invest/bias` 透出。**近十年前 4 才出 🚨 行**，否则只给
-    # 一行状态。**零仓位主张**：它不改任何目标仓位、不产生操作项，仓位仍只由中位线锚决定。
+    # P70 乖离率：落库照旧（前端 /invest/bias），邮件只在进近十年前 4 时出 🚨 行
+    # （owner 2026-08-06 拍板的推送条件；未触发的状态行 2026-08-08 起不再进邮件）。
     try:
         _bias = _index_bias_states(loop, dt)
         if _bias:
@@ -1411,37 +1462,19 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
             _persist_index_bias_daily(loop, dt, _bias)
     except Exception:  # noqa: BLE001
         pass
-    # P51 容错自检行 / P52「不动也是决策」行（2026-08-04 内化审计产物，提示-only）：
-    # 不做收益主张、不改仓位，故不走 E 系列超额判据；验收只有"算术可复核 + 零自动交易"。
-    try:
-        _p51 = _fault_tolerance_hint(loop, dt, cost_map, shares_map, last_close)
-        if _p51:
-            hints.append(_p51)
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        _p52 = _broad_no_action_hint(loop, dt, shares_map)
-        if _p52:
-            hints.append(_p52)
-    except Exception:  # noqa: BLE001
-        pass
-    # P28 杠杆窗口提示行（提示-only·平时静默）：三信号取二共振才出现——
-    # ①中位线下方≥10% ②距历史峰回撤≥40% ③恐慌≥85；L≤30% 硬顶（E23：50% 已证伪爆仓）。
+    # P28 杠杆窗口（三信号取二共振才出现，平时静默；L≤30% 硬顶，E23：50% 已证伪爆仓）
     try:
         _p28 = _leverage_window_hint(loop, dt)
         if _p28:
             hints.append(_p28)
     except Exception:  # noqa: BLE001
         pass
-    # P30 加杠杆信号（AND 共振·低价×恐慌，owner 2026-08-01 拍板上线）：常驻状态行，
-    # 触发时🚨🚨每日重复提醒；状态同步落库 leverage_signal 供前端强透出。
+    # P30 加杠杆信号：触发时🚨🚨每日重复；未触发状态已并入宽基汇总行，不再单列
     try:
-        _p30_st = _and_leverage_state(loop, dt)
-        if _p30_st:
-            _p30 = _and_leverage_hint(_p30_st)
+        if _lev_st and _lev_st.get("active"):
+            _p30 = _and_leverage_hint(_lev_st)
             if _p30:
                 hints.append(_p30)
-            _persist_leverage_signal(loop, dt, _p30_st)
     except Exception:  # noqa: BLE001
         pass
     # 参谋异议（提示层）：持仓中模型排位后 20%（rank_pct≤0.2）者单列——风控未触发不强制卖，供人工复核
@@ -1515,15 +1548,17 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     if invested - gross > 0.10:
         hints.append(f"仓位偏高：实际 {invested:.0%} 高于目标 {gross:.0%}，先留点现金缓冲、补足前不开新仓")
 
-    # 排雷影子提示（提案 P7）：持仓/目标命中 ≥2 面红旗 → 建议深挖财报（不自动动仓）
+    # 排雷影子（提案 P7）：财务预警 2026-08-08 起并入表格「财务预警」列（owner：不再单独
+    # 占提示行，在持仓/观察池列表里就地列清楚）。观察池票也查（此前只查持仓∪目标）。
+    # 时效性强的戴维斯双杀快报预警仍走提示行（下方 _express_alerts）。
+    fin_map: dict[str, str] = {}
     try:
         from invest_model.universe.quality_screen import latest_flags
-        qf = latest_flags(engine, dt, list(set(held_codes) | set(targets)))
-        for c, (nfl, fls) in sorted(qf.items(), key=lambda kv: -kv[1][0]):
+        _fin_codes = list(set(held_codes) | set(targets) | {r["code"] for r in watch_rows})
+        qf = latest_flags(engine, dt, _fin_codes)
+        for c, (nfl, fls) in qf.items():
             head = fls[0].split("（")[0] if fls else ""
-            hints.append(
-                f"财务预警：{names.get(c, c)} 有 {nfl} 项异常（{head} 等），可能财报有水分，"
-                f"建议自己核对财报——只是提醒、不自动因此卖出")
+            fin_map[str(c)] = f"⚠️{nfl}项：{head}"
     except Exception:  # noqa: BLE001 — 影子提示失败不阻断计划
         pass
 
@@ -1618,6 +1653,10 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     }
 
     rows = rows + arb_rows + watch_rows
+    # 财务预警标注进行级（渲染层「财务预警」列用；不落库——action_plan 列集不变）
+    for r in rows:
+        if str(r.get("code")) in fin_map:
+            r["fin_alert"] = fin_map[str(r.get("code"))]
     try:
         etf_watch = _etf_watch_rows(loop, dt, set(held_codes))
     except Exception:  # noqa: BLE001 — ETF 观察段失败不阻断计划
@@ -1810,17 +1849,28 @@ def _fmt_attr(top_factors) -> str:
 
 
 def _table(lines: list[str], rows: list[dict]) -> None:
-    lines.append("| 代码 | 名称 | 动作 | 现权重→目标 | 约股数 | 买点/挂单价 | 理由 | 止损价 | 现价 | 分级 | 模型研判 |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    # 「财务预警」列（owner 2026-08-08：不再单独占提示行，在表格里就地列清楚）——
+    # 本表内任一行有预警才加列，无预警的表保持 11 列不加空列。
+    fin = any(r.get("fin_alert") for r in rows)
+    head = "| 代码 | 名称 | 动作 | 现权重→目标 | 约股数 | 买点/挂单价 | 理由 | 止损价 | 现价 | 分级 | 模型研判 |"
+    sep = "|---|---|---|---|---|---|---|---|---|---|---|"
+    if fin:
+        head += " 财务预警 |"
+        sep += "---|"
+    lines.append(head)
+    lines.append(sep)
     for r in rows:
         sd = int(r["shares_delta"])
         sd_s = f"+{sd}" if sd > 0 else (str(sd) if sd < 0 else "—")
-        lines.append(
+        row = (
             f"| {r['code']} | {r['name']} | {_ACTION_CN.get(r['action'], r['action'])} | "
             f"{r['cur_weight']:.1%}→{r['tgt_weight']:.1%} | {sd_s} | {r.get('trigger', '—')} | {r['reason']} | "
             f"{r['stop_price'] if r['stop_price'] is not None else '—'} | "
             f"{r['ref_price'] if r['ref_price'] is not None else '—'} | {r['grade'] or '—'} | "
             f"{r.get('model_view', '—')} |")
+        if fin:
+            row += f" {r.get('fin_alert') or '—'} |"
+        lines.append(row)
 
 
 def render_markdown(plan: ActionPlan) -> str:
@@ -1832,11 +1882,9 @@ def render_markdown(plan: ActionPlan) -> str:
     lines.append(
         f"- 持仓数: {a.get('n_holdings')} | 整体浮盈亏: {a.get('unrealized_pnl_pct', 0):+.1%} | "
         f"账户风控: {'⚠️ 账户回撤超限，建议降仓' if a.get('risk_off') else '正常'}")
-    mir = a.get("model_ic_ir")
-    if mir is not None:
-        lines.append(f"- 🔬 模型置信度: **{a.get('model_conf_label')}**（★越多越可信）")
-    lines.append("- 标的由投顾定，模型只做参谋+时机+风控；名词解释与规则出处见 `docs/rulebook.md`。")
-    # 提示行（投顾风向/参谋异议/集中度/清仓未执行等）——此前只落库(action_plan_account.risk_hints)
+    # 「模型置信度」与「标的由投顾定…」两行 2026-08-08 owner 撤下（对用户无决策价值）；
+    # model_conf_label 仍计算并落库（action_plan_account），网站/表格「模型研判」列不受影响。
+    # 提示行（参谋异议/集中度/清仓未执行等）——此前只落库(action_plan_account.risk_hints)
     # 供网站读、却漏渲染进 issue 计划；2026-07-20 修复：逐条随计划头输出，issue 与网站口径一致。
     for _h in (a.get("risk_hints") or "").split(" | "):
         if _h.strip():
