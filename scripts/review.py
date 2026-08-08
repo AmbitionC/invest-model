@@ -875,7 +875,8 @@ def _write_json(asof: str, period: str, facts: dict, json_dir: str) -> None:
         sha = "unknown"
     conclusions, queue = [], [
         {"id": "cq-e18", "opened": "20260727", "item": "P23 B级速通资格收紧首评",
-         "gate": "policy_shadow 样本≥100（当前~73）", "state": "waiting_data",
+         "gate": "policy_shadow 样本≥100 或 2026-10-25 时间兜底（取先到；E18 v2 并列口径"
+                 "已登记 20260808，首评 v1/v2 并读）", "state": "waiting_data",
          "requires_owner": True},
         {"id": "cq-e19", "opened": "20260727", "item": "P24 反弹期参谋降权附注",
          "gate": "实现后积累3个月记录复核", "state": "waiting_impl",

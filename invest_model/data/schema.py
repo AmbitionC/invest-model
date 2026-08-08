@@ -535,6 +535,23 @@ macro_series = Table(
     _created_at(),
 )
 
+# P64-A（2026-08-05 登记 / 2026-08-08 落地·E47 前置）：上表主键 (period, series)+upsert
+# 会让统计局的回溯修订**直接覆盖旧值、不留 vintage 轨迹**——库里存的是「今天所知的历史」
+# 不是「当时所知的历史」，E47 判据①「只用发布日后可得值防前视」在上表上无法执行
+# （与 2026-07-25 复盘取数前视同一类坑）。本表 append-only 修订留痕：每次入库只在
+# 「该 (period, series) 与 vintage 表内最新已知值不同（或首次出现）」时插一行。
+# point-in-time 读数 = 各键 vintage_date ≤ 观察日的最新一行。
+# ⚠️ vintage_date 是**入库所知日**不是官方发布日——E47 时钟为每周日 cron，二者误差
+# ≤7 天；做发布日级前视判据时必须按周颗粒度保守处理（把可得日后推整周）。
+macro_series_vintage = Table(
+    "macro_series_vintage", metadata,
+    Column("period", String(8), primary_key=True),
+    Column("series", String(64), primary_key=True),
+    Column("vintage_date", String(8), primary_key=True),   # 入库所知日 YYYYMMDD
+    Column("value", Numeric(20, 4)),
+    _created_at(),
+)
+
 
 fear_daily = Table(
     "fear_daily", metadata,

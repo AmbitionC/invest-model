@@ -41,17 +41,19 @@ def test_theme_of_keywords():
 
 def test_crowding_hints_holdings_by_weight():
     # 三只票同属两个行业、权重集中 → 触发持仓行业拥挤
+    # （断言随 20260805 白话文案改写同步：「持仓行业拥挤」→「仓位太集中」）
     weights = {"600000.SH": 0.4, "600001.SH": 0.35, "600002.SH": 0.2}
     imap = {"600000.SH": "半导体", "600001.SH": "半导体", "600002.SH": "算力"}
     hints = crowding_hints(weights, imap, advisor_catalysts=None)
-    assert any("持仓行业拥挤" in h for h in hints)
+    assert any("仓位太集中" in h for h in hints)
 
 
 def test_crowding_hints_advisor_theme_pileup():
     # 投顾 long 信号全扎堆半导体+算力 → 触发信号扎堆预警
+    # （断言随 20260805 白话文案改写同步：「投顾信号扎堆」→「投顾推荐扎堆」）
     cats = ["存储链HBM", "芯片封测", "光模块算力", "液冷服务器", "先进制程晶圆"]
     hints = crowding_hints(held_weights={}, industry_map={}, advisor_catalysts=cats)
-    assert any("投顾信号扎堆" in h for h in hints)
+    assert any("投顾推荐扎堆" in h for h in hints)
 
 
 def test_crowding_hints_diversified_silent():

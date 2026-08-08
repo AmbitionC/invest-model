@@ -29,9 +29,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 # 纯信号层（invest_model.signals.macro，不依赖 tushare）照常跑，collection 不再中断
 # （handoff 2026-08-08 §5；模块级 importorskip 会连带跳掉信号层测试，粒度过粗）。
 try:
-    from ingest_macro import _q_to_month, melt_frame  # noqa: E402
+    from ingest_macro import _q_to_month, melt_frame, persist_vintage  # noqa: E402
 except ImportError:                                   # pragma: no cover — 缺 tushare
-    _q_to_month = melt_frame = None
+    _q_to_month = melt_frame = persist_vintage = None
 needs_ingest = pytest.mark.skipif(
     melt_frame is None, reason="缺 tushare（ingest_macro 导入链依赖）")
 
@@ -71,6 +71,32 @@ def test_melt_handles_missing_period_key_and_dates():
 def test_quarter_key_maps_to_quarter_end_month():
     assert _q_to_month("2024Q1") == "202403"
     assert _q_to_month("2024Q4") == "202412"
+
+
+# ── P64-A vintage 修订留痕（E47 前置，2026-08-08）──────────────
+
+@needs_ingest
+def test_vintage_baseline_idempotent_and_revision(repo):
+    df = pd.DataFrame([
+        {"period": "202401", "series": "cn_m.m1_yoy", "value": 5.9},
+        {"period": "202402", "series": "cn_m.m1_yoy", "value": 1.2},
+    ])
+    # 首跑=全量基线；同日/同值重跑幂等（append-only 不覆盖）
+    assert persist_vintage(repo, df, "20260808") == 2
+    assert persist_vintage(repo, df, "20260808") == 0
+    assert persist_vintage(repo, df, "20260815") == 0      # 换日重跑、值未变也不加行
+    # 统计局回溯修订 202401：5.9 → 5.4 ⟹ 追加新 vintage，旧行保留
+    rev = pd.DataFrame([{"period": "202401", "series": "cn_m.m1_yoy", "value": 5.4}])
+    assert persist_vintage(repo, rev, "20260901") == 1
+    hist = repo.read_sql(
+        "SELECT vintage_date, value FROM macro_series_vintage "
+        "WHERE period='202401' ORDER BY vintage_date")
+    assert [str(x) for x in hist["vintage_date"]] == ["20260808", "20260901"]
+    # point-in-time：观察日 20260820 所知的 202401 值应是修订前的 5.9
+    pit = repo.read_sql(
+        "SELECT value FROM macro_series_vintage WHERE period='202401' "
+        "AND vintage_date<='20260820' ORDER BY vintage_date DESC LIMIT 1")
+    assert float(pit["value"].iloc[0]) == pytest.approx(5.9)
 
 
 # ── 读数还原 ────────────────────────────────────────────────

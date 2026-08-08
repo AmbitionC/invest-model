@@ -14,11 +14,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# 2026-08-08 修（handoff §5）：此前指向 scratchpad 时代的临时文件（hs300.csv 等），
+# scratchpad 清空后本脚本一直跑不起来——而 E37 是网站上引用的裁决，复现脚本不能是死的。
+# 改为仓内 results/ 正式落地文件（同 long_window_backtest 2026-08-05 的修法）。
 SRC = {
-    "沪深300": ("hs300.csv", "close", None),
-    "创业板": ("spread_full.csv", "chinext", None),
-    "科创50": ("star50.csv", "close", None),
-    "红利": ("000922_csi.csv", "close", "000922_tr.csv"),
+    "沪深300": ("index_dump_000300_SH.csv", "close", None),
+    "创业板": ("spread_full_history.csv", "chinext", None),
+    "科创50": ("index_dump_000688_SH.csv", "close", None),
+    "红利": ("index_dump_000922_CSI.csv", "close", "index_dump_H00922_CSI.csv"),
 }
 
 
@@ -67,7 +70,7 @@ def episodes(idx: np.ndarray, gap: int = 60) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default=".")
+    ap.add_argument("--data", default="results")
     args = ap.parse_args()
     root = Path(args.data)
     frames = {nm: prep(root, nm) for nm in SRC}

@@ -26,16 +26,23 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 
+import sys as _sys  # noqa: E402
+
+# 裸跑引导 + 阶梯常量唯一真源（handoff 2026-08-08 §5：此前文件名指 scratchpad 时代
+# 临时文件、脚本一直跑不起来；改仓内 results/ 正式落地文件，阶梯档位改引 broad_gates）
+_sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from invest_model.broad_gates import LADDER_FRAC, LADDER_RUNG  # noqa: E402
+
 FONT = "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"
 RF, CASH = 0.02, 0.02
 D0, D1 = "20150601", "20260729"
-RUNG, FRAC = [0.50, 0.55, 0.60, 0.65], [0.30, 0.35, 0.40, 0.50]
+RUNG, FRAC = list(LADDER_RUNG), list(LADDER_FRAC)
 SIZE_K = 4.0          # 全图统一：点面积 = 30 + 金额 × SIZE_K
 LEGS = [
-    ("沪深300", "hs300.csv", "close", None, "510300", D0, "anchor"),
-    ("创业板", "spread_full.csv", "chinext", None, "159915", D0, "anchor"),
-    ("科创50", "star50.csv", "close", None, "588000", "20200601", "ladder"),
-    ("红利", "000922_csi.csv", "close", "000922_tr.csv", "515080", D0, "anchor"),
+    ("沪深300", "index_dump_000300_SH.csv", "close", None, "510300", D0, "anchor"),
+    ("创业板", "spread_full_history.csv", "chinext", None, "159915", D0, "anchor"),
+    ("科创50", "index_dump_000688_SH.csv", "close", None, "588000", "20200601", "ladder"),
+    ("红利", "index_dump_000922_CSI.csv", "close", "index_dump_H00922_CSI.csv", "515080", D0, "anchor"),
 ]
 
 
@@ -128,7 +135,7 @@ def run(df: pd.DataFrame, ret: pd.Series | None, fmap: dict, nm: str, d0: str, m
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default=".")
+    ap.add_argument("--data", default="results")
     ap.add_argument("--out", default="results/broad_trades.png")
     args = ap.parse_args()
     root = Path(args.data)

@@ -1,0 +1,46 @@
+name: pytest
+
+# 测试回归闸（handoff 2026-08-08 §5：此前 51 个 workflow 零 pytest，本地 213 个用例
+# 从没在 CI 里跑过——量尺修复靠回归护栏，护栏得有人跑）。
+# 只在 Python 代码/依赖变化时触发，advisor CSV、trigger bump 等日常 push 不受影响。
+# 基线：全绿（2 个 crowding 断言已于 2026-08-08 随白话文案同步；xgboost 未装 1 skip 属预期）。
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '**.py'
+      - 'requirements.txt'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - '.github/workflows/pytest.yml'
+  pull_request:
+    paths:
+      - '**.py'
+      - 'requirements.txt'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - '.github/workflows/pytest.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: pytest-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: pip install -e . && pip install pytest
+      - name: Run tests
+        run: python -m pytest tests/ -q --tb=short

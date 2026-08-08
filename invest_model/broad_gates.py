@@ -64,7 +64,17 @@ SELL_MUL: dict[str, float] = {
     "红利": 1.30,
 }
 
+# 科创50 深回撤阶梯（P27 v2·E28 简化篮子）：距全历史峰 −50/−55/−60/−65 四档，
+# 各档一轮只买一次，投当前现金 30/35/40/50%；episode 在距峰收复到 −RUNG[0]×0.5（−25%）
+# 时复位重新武装。peak=cummax 自数据首日起、无预热（2026-08-04 红队 F1 修正）。
+# 生产状态机（action_plan._broad_leg_states）与回测引擎（long_window_backtest）共用
+# 这一份定义——2026-08-08 前生产侧该腿谓词写死 False（阶梯只存在于文案与图表里，
+# 价格真跌到第一档不会触发任何东西），handoff §2.1.1 补齐。
+LADDER_RUNG: tuple[float, ...] = (0.50, 0.55, 0.60, 0.65)
+LADDER_FRAC: tuple[float, ...] = (0.30, 0.35, 0.40, 0.50)
+
 # 回测引擎里腿名到本表键的映射（两边命名一致时为恒等，留作显式契约）
 LEG_NAMES: tuple[str, ...] = ("沪深300", "创业板", "科创50", "红利")
 
 assert set(BUY_MUL) == set(SELL_MUL) == set(LEG_NAMES), "四腿键必须一致"
+assert len(LADDER_RUNG) == len(LADDER_FRAC), "阶梯档位与资金比例必须一一对应"

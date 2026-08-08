@@ -17,6 +17,7 @@ owner 2026-08-02：「策略周期放大到十年的周期再看看」。
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import matplotlib
@@ -26,11 +27,19 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 
-from invest_model.broad_gates import SELL_MUL  # noqa: E402  卖出闸唯一真源（P58）
+# 裸跑引导（handoff 2026-08-08 §5：此前缺这两行，不带 PYTHONPATH 直接跑必
+# ModuleNotFoundError——「唯一回测引擎跑不起来」第二次同款）
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from invest_model.broad_gates import (  # noqa: E402  闸位/阶梯唯一真源（P58）
+    LADDER_FRAC,
+    LADDER_RUNG,
+    SELL_MUL,
+)
 
 FONT = "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"
 RF, CASH, WARM = 0.02, 0.02, 500
-RUNG, FRAC = [0.50, 0.55, 0.60, 0.65], [0.30, 0.35, 0.40, 0.50]
+RUNG, FRAC = list(LADDER_RUNG), list(LADDER_FRAC)
 # (名称, 信号CSV, 列, 全收益CSV, 起点=None 表示按锚预热完成日自动对齐, 模式)
 # 2026-08-04 红队 M1：此前用硬编码起点（如 20070101），但 expanding 锚要到第 WARM=500 个
 # 交易日才可用 —— 中间那段基准全额吃到、策略一股买不了。红利腿实测那 18 个交易日全收益

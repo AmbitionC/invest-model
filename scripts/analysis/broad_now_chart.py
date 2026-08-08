@@ -18,7 +18,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from matplotlib import font_manager  # noqa: E402
 
-from invest_model.broad_gates import BUY_MUL, SELL_MUL  # noqa: E402
+from invest_model.broad_gates import BUY_MUL, LADDER_RUNG, SELL_MUL  # noqa: E402
 from long_window_backtest import FONT, LEGS, prep  # noqa: E402
 
 COL = {"沪深300": "#c0392b", "创业板": "#2980b9", "科创50": "#8e44ad", "红利": "#1e8449"}
@@ -54,7 +54,7 @@ def main() -> None:
                      exp=exp, r1250=r1250, peak=peak,
                      buy=exp * bm if exp == exp else float("nan"),
                      sell=exp * sm if exp == exp else float("nan"),
-                     rung1=peak * 0.50)
+                     rung1=peak * (1 - LADDER_RUNG[0]))   # 阶梯第一档：唯一真源 broad_gates
 
     print("=" * 96)
     print(f"当前买卖点（恐慌 EOD {f_now:.0f} @ {f_date}）")

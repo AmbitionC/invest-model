@@ -26,7 +26,7 @@ import pandas as pd
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[1]))
-from invest_model.broad_gates import BUY_MUL, SELL_MUL  # noqa: E402
+from invest_model.broad_gates import BUY_MUL, LADDER_RUNG, SELL_MUL  # noqa: E402
 from long_window_backtest import LEGS, first_tradable, prep, run  # noqa: E402
 from bias_rank_extremes import extreme_episodes  # noqa: E402
 
@@ -116,7 +116,8 @@ def main() -> None:
             "buy_line": ([None if pd.isna(df.exp.iloc[i]) else
                           round(float(df.exp.iloc[i]) * BUY_MUL[nm], 2) for i in keep]
                          if mode[nm] != "ladder" else
-                         [round(float(df.peak.iloc[i]) * 0.50, 2) for i in keep]),
+                         [round(float(df.peak.iloc[i]) * (1 - LADDER_RUNG[0]), 2)
+                          for i in keep]),
             "sell_line": [None if pd.isna(df.exp.iloc[i]) else
                           round(float(df.exp.iloc[i]) * SELL_MUL[nm], 2) for i in keep],
             # 仓位与净值（回测口径，起点＝该腿首个可交易日）

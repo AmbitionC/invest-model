@@ -168,11 +168,42 @@ def main() -> None:
     repo = BaseRepository(engine)
     n = repo.upsert("macro_series", df[["period", "series", "value", "freq", "source"]],
                     ["period", "series"])
+    nv = persist_vintage(repo, df, today.strftime("%Y%m%d"))
     per_src = df.groupby("source").agg(行数=("value", "size"),
                                        指标数=("series", "nunique"),
                                        起=("period", "min"), 止=("period", "max"))
     print(per_src.to_string())
-    print(f"\nupsert macro_series {n} 行（共 {df['series'].nunique()} 条指标）")
+    print(f"\nupsert macro_series {n} 行（共 {df['series'].nunique()} 条指标）；"
+          f"vintage 留痕新增 {nv} 行（首跑=全量基线，此后仅回溯修订/新键）")
+
+
+def persist_vintage(repo: BaseRepository, df: pd.DataFrame, vintage_date: str) -> int:
+    """P64-A 修订留痕（E47 前置）：与 vintage 表内各键**最新已知值**比较，值变化或新键
+    才插行（append-only，绝不覆盖旧 vintage）。首跑时表为空 ⟹ 全量记为当日基线，
+    此后统计局回溯修订会以新 vintage_date 追加而非覆盖——「当时所知的历史」从此可查。
+    同日重跑幂等（主键含 vintage_date，upsert 同键同值无副作用）。"""
+    rows = df[["period", "series", "value"]].dropna(subset=["value"]).copy()
+    if rows.empty:
+        return 0
+    rows["period"] = rows["period"].astype(str)
+    rows["series"] = rows["series"].astype(str)
+    rows["value"] = pd.to_numeric(rows["value"], errors="coerce").round(4)
+    rows = rows.dropna(subset=["value"]).drop_duplicates(["period", "series"], keep="last")
+    latest = repo.read_sql(
+        "SELECT v.period, v.series, v.value FROM macro_series_vintage v JOIN ("
+        "SELECT period, series, MAX(vintage_date) md FROM macro_series_vintage "
+        "GROUP BY period, series) t ON v.period=t.period AND v.series=t.series "
+        "AND v.vintage_date=t.md")
+    known = {(str(r["period"]), str(r["series"])): round(float(r["value"]), 4)
+             for _, r in latest.iterrows() if r["value"] is not None} if not latest.empty else {}
+    changed = rows[[known.get((p, s)) != v for p, s, v in
+                    zip(rows["period"], rows["series"], rows["value"])]].copy()
+    if changed.empty:
+        return 0
+    changed["vintage_date"] = vintage_date
+    return repo.upsert("macro_series_vintage",
+                       changed[["period", "series", "vintage_date", "value"]],
+                       ["period", "series", "vintage_date"])
 
 
 if __name__ == "__main__":

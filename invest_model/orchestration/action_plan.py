@@ -306,7 +306,11 @@ def _p31_sell_hint(loop: ClosedLoop, dt: str) -> str | None:
 
 # 宽基四腿买卖闸：唯一定义在 invest_model/broad_gates.py（P58，2026-08-05）。
 # 那里同时记着「为什么是 1.30」「代价是什么」「为什么这不算 E51 通过」。
-from invest_model.broad_gates import BUY_MUL as _BUY_MUL, SELL_MUL as _SELL_MUL  # noqa: E402
+from invest_model.broad_gates import (  # noqa: E402
+    BUY_MUL as _BUY_MUL,
+    LADDER_RUNG as _LADDER_RUNG,
+    SELL_MUL as _SELL_MUL,
+)
 
 
 def _sell_above(name: str):
@@ -315,24 +319,35 @@ def _sell_above(name: str):
     return lambda c, m, r: c > m * mul
 
 
+def _buy_below(name: str):
+    """买入闸判定：收盘 < 中位线 × 该腿倍数（handoff §2.1.3，2026-08-08：此前谓词是
+    字面量、只有展示层引用 BUY_MUL——正是 P58 要根除的那类"显示一套、判定一套"漂移；
+    改后判定与展示同取唯一真源，字面量已逐值核对相等＝行为零变化）。"""
+    mul = _BUY_MUL[name]
+    return lambda c, m, r: c < m * mul
+
+
 _BROAD_LEGS = [
     # (名称, 基底CSV, 列, DB代码, ETF, 买规则, 卖规则)——E28 简化篮子（owner 2026-08-01：
     # 只做沪深300/创业板/科创50/红利；中证500/1000 配置记档保留可随时恢复）
+    # 买规则="ladder" 表示走深回撤阶梯（peak 口径），不走中位线锚买。
     ("沪深300", "index_dump_000300_SH.csv", "close", "000300.SH", "510300",
-     lambda c, m, r: c < m, "＜全量中位线（周频·池20%）",
+     _buy_below("沪深300"), "＜全量中位线（周频·池20%）",
      _sell_above("沪深300"), "＞中位线×1.30（月减5%）"),
     ("创业板", "spread_full_history.csv", "chinext", "399006.SZ", "159915",
-     lambda c, m, r: c < m * 0.90, "＜中位线−10%带（周频·池20%）",
+     _buy_below("创业板"), "＜中位线−10%带（周频·池20%）",
      _sell_above("创业板"), "＞中位线×1.43（月减5%）"),
     # 2026-08-02 回滚：此前部署的「长持不设卖出」不是 E31 验证过的配置。实测同窗口
     # 含卖出 13.00%/夏普0.59/回撤−17.2%/卡玛0.76 vs 不卖 13.21%/0.55/−22.6%/0.58
     # ＝多赚 0.21pp 换 5.4pp 回撤，风险调整后严格更差 ⇒ 与其余三腿统一，按月减 5%。
+    # 阶梯谓词 2026-08-08 补实现（handoff §2.1.1）：此前写死 False，文案与图表声明的
+    # 「阶梯第一档」价格真跌到也不会触发任何东西，该腿生产买入实际只剩恐慌腿。
     ("科创50", "index_dump_000688_SH.csv", "close", "000688.SH", "588000",
-     lambda c, m, r: False, "深回撤阶梯 L50（距全历史峰 −50/−55/−60/−65 四档，各档一轮只买一次，"
+     "ladder", "深回撤阶梯 L50（距全历史峰 −50/−55/−60/−65 四档，各档一轮只买一次，"
      "投当前现金 30/35/40/50%）+ 恐慌抢买",
      _sell_above("科创50"), "＞中位线×1.30（月减5%）"),
     ("红利", "index_dump_000922_CSI.csv", "close", "000922.CSI", "515080",
-     lambda c, m, r: c < m, "＜全量中位线（周频·池20%·临时价格锚，E26 估值锚待验）",
+     _buy_below("红利"), "＜全量中位线（周频·池20%·临时价格锚，E26 估值锚待验）",
      _sell_above("红利"), "＞中位线×1.30（月减5%）"),
 ]
 
@@ -341,7 +356,9 @@ def _broad_leg_states(loop: ClosedLoop, dt: str) -> list[dict]:
     """四腿的窗口判定读数——提示行 `_broad_legs_hint` 与落库 `_persist_broad_leg_state`
     共用同一份计算，保证 issue #9 的计划、库表、前端板块三处永远是同一个数。
 
-    state：buy=买入窗开 ｜ panic=恐慌抢买窗（价格未到但恐慌≥75）｜ sell=卖出区 ｜ hold=持有区。
+    state：buy=买入窗开 ｜ sell=卖出区 ｜ panic=恐慌抢买窗（价格未到买入闸、未过卖出闸
+    且恐慌≥75）｜ hold=持有区。判定顺序 buy→sell→panic→hold（2026-08-08 起卖出闸优先
+    于恐慌——panic 不覆盖既有闸门，与 P22/E17「独立成腿」约束一致）。
     """
     fear = _fear_score(loop, dt)
     out: list[dict] = []
@@ -367,20 +384,34 @@ def _broad_leg_states(loop: ClosedLoop, dt: str) -> list[dict]:
                     if len(bs) >= 250:
                         bias_pct = float((bs <= bias).mean())
                         bias_rank = int((bs < bias).sum()) + 1   # 1＝历史最低
-            price_buy = bool(fbuy(last, med, r1250))
+            # 阶梯腿（科创50）：peak=cummax 自数据首日、无预热（红队 F1 口径）；
+            # 窗口开＝距峰回撤触及第一档（handoff §2.1.1 补实现，常量取唯一真源）。
+            peak = dd = ladder_line = None
+            if fbuy == "ladder":
+                peak = float(c.max())
+                dd = last / peak - 1.0 if peak > 0 else None
+                ladder_line = peak * (1.0 - _LADDER_RUNG[0])
+                price_buy = dd is not None and dd <= -_LADDER_RUNG[0]
+            else:
+                price_buy = bool(fbuy(last, med, r1250))
             panic = fear is not None and fear >= 75
+            # 顺序：买入窗 → 卖出闸 → 恐慌 → 持有（handoff §2.1.2，2026-08-08 修）。
+            # panic 的定义是「价格未到但恐慌≥75」（见本函数 docstring），此前 panic 排在
+            # 卖出闸前面，fear≥75 时价格已过卖出闸也显示 🟢恐慌抢买窗——与 P22/E17
+            # 「独立成腿、不覆盖既有闸门」的约束直接冲突。
             if price_buy:
                 state = "buy"
-            elif panic:
-                state = "panic"
             elif fsell(last, med, r1250):
                 state = "sell"
+            elif panic:
+                state = "panic"
             else:
                 state = "hold"
             out.append({
                 "name": name, "etf": etf, "code": code,
                 "last": last, "med": med, "r1250": r1250,
                 "anchor": med if "中位线" in buy_txt else (r1250 or med),
+                "peak": peak, "dd": dd, "ladder_line": ladder_line,
                 "buy_mul": _BUY_MUL[name], "sell_mul": _SELL_MUL[name],
                 "buy_txt": buy_txt, "sell_txt": sell_txt,
                 "state": state, "fear": fear,
@@ -411,8 +442,13 @@ def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
     stale = [s for s in sts if str(s.get("data_date") or "") and str(s["data_date"]) < str(dt)]
     rows = []
     for s in sts:
-        r = (f"{s['name']}({s['etf']}) {s['last']:.0f} 距锚{s['last'] / s['anchor'] - 1:+.0%} "
-             f"{_BROAD_STATE_TXT[s['state']]}")
+        # 阶梯腿的决策量是距峰回撤，不是距锚——把它和第一档触发价一并写进提示行
+        if s.get("dd") is not None:
+            pos = (f"距峰{s['dd']:+.0%}·L{int(_LADDER_RUNG[0] * 100)}档"
+                   f"{s['ladder_line']:.0f}")
+        else:
+            pos = f"距锚{s['last'] / s['anchor'] - 1:+.0%}"
+        r = f"{s['name']}({s['etf']}) {s['last']:.0f} {pos} {_BROAD_STATE_TXT[s['state']]}"
         if str(s.get("data_date") or "") and str(s["data_date"]) < str(dt):
             r += f"⚠️价格截至{s['data_date']}"
         rows.append(r)
@@ -551,10 +587,13 @@ def _persist_broad_leg_state(loop: ClosedLoop, dt: str, sts: list[dict],
         etf = _BROAD_ETF.get(s["name"], etf)
         sh = float(shares_map.get(etf, 0) or 0)
         px = float(last_close.get(etf, 0) or 0)
+        # 阶梯腿的买入线是「峰×(1−第一档)」不是「中位线×buy_mul」——此前落库/前端
+        # 一直写 med×1.00，与图表声明的「阶梯第一档」价格对不上（handoff §2.1.1）。
+        buy_line = s["ladder_line"] if s.get("ladder_line") else s["med"] * s["buy_mul"]
         rows.append({
             "trade_date": str(dt), "leg": s["name"], "etf": etf,
             "close": round(s["last"], 4), "median": round(s["med"], 4),
-            "buy_line": round(s["med"] * s["buy_mul"], 4),
+            "buy_line": round(buy_line, 4),
             "sell_line": round(s["med"] * s["sell_mul"], 4),
             "buy_mul": s["buy_mul"], "sell_mul": s["sell_mul"],
             "state": s["state"], "fear": s["fear"],
