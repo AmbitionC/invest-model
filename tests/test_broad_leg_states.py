@@ -52,18 +52,37 @@ def test_ladder_closed_above_first_rung(monkeypatch):
     assert st["科创50"]["ladder_line"] is not None   # 阶梯线常年可见，供图表/落库
 
 
-def test_sell_gate_beats_panic(monkeypatch):
-    # 中位≈100、现价 140 > 卖出闸 130，且 fear=80：必须 sell，不得 panic（§2.1.2）
-    vals = [100.0] * 299 + [140.0]
+def test_fear_alone_never_shows_panic(monkeypatch):
+    # 历史不足 1250 天 ⟹ r1250 无值＝价格闸结构性关闭：fear=80 也不显示 panic
+    # （XV-2 引擎对齐；修复前科创50 在 r1250 存在前照样显示抢买窗）。
+    # 现价 140 已过卖出闸 130 ⟹ sell；105 在闸间 ⟹ hold（不再是 panic）。
+    hi = [100.0] * 299 + [140.0]
+    mid = [100.0] * 299 + [105.0]
+    st = _states(monkeypatch, {"index_dump_000300_SH.csv": _series(hi)}, fear=80.0)
+    assert st["沪深300"]["state"] == "sell"
+    st = _states(monkeypatch, {"index_dump_000300_SH.csv": _series(mid)}, fear=80.0)
+    assert st["沪深300"]["state"] == "hold"
+
+
+def test_panic_requires_price_below_r1250(monkeypatch):
+    # 早期低价拖低 expanding 中位（=50），近5年高位（r1250=300）：
+    # 现价 150 ＝ 引擎 B2 腿真买区（fear≥75 且 150<300），即便已过 expanding 卖出闸
+    # （150>65）也显示 panic——红利 2018-10/2024-01 真底场景，卖出优先会把它藏掉。
+    vals = [50.0] * 1300 + [300.0] * 1250 + [150.0]
     st = _states(monkeypatch, {"index_dump_000300_SH.csv": _series(vals)}, fear=80.0)
+    assert st["沪深300"]["state"] == "panic"
+    # 同一序列 fear<75 ⟹ 回到卖出区（价格闸单独不够）
+    st = _states(monkeypatch, {"index_dump_000300_SH.csv": _series(vals)}, fear=40.0)
     assert st["沪深300"]["state"] == "sell"
 
 
-def test_panic_between_gates(monkeypatch):
-    # 现价 105 在买卖闸之间、fear=80 ⟹ panic（恐慌窗语义=价格未到、未过卖出闸）
-    vals = [100.0] * 299 + [105.0]
+def test_no_flying_knife_above_r1250(monkeypatch):
+    # 现价 350 在近5年中位线（300）上方：fear=80 也不显示抢买窗——2022-04 创业板
+    # 在 5 年中位线上方 15~24% 的高位恐慌日＝E36 判「接飞刀」要挡的场景（XV-2 主修）。
+    vals = [50.0] * 1300 + [300.0] * 1250 + [350.0]
     st = _states(monkeypatch, {"index_dump_000300_SH.csv": _series(vals)}, fear=80.0)
-    assert st["沪深300"]["state"] == "panic"
+    assert st["沪深300"]["state"] == "sell"   # 350 > expanding中位50×1.30
+
 
 
 def test_broad_legs_hint_renders_ladder(monkeypatch):

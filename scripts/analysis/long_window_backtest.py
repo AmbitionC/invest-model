@@ -32,6 +32,7 @@ from matplotlib import font_manager  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from invest_model.broad_gates import (  # noqa: E402  闸位/阶梯唯一真源（P58）
+    BUY_MUL,
     LADDER_FRAC,
     LADDER_RUNG,
     SELL_MUL,
@@ -149,7 +150,7 @@ def run(df, ret, fmap, nm, d0, d1, mode, init=100.0):
                     sig.append(("B", FRAC[j], f"深回撤阶梯L{int(RUNG[j]*100)}(距峰{dd:+.0%})"))
             elif in_ep and dd >= -RUNG[0] * 0.5:
                 in_ep, armed[:] = False, True
-        elif r.we and r.exp == r.exp and ci < r.exp * (0.90 if nm == "创业板" else 1.0):
+        elif r.we and r.exp == r.exp and ci < r.exp * BUY_MUL[nm]:   # XV-5：买入闸同走真源
             sig.append(("B", 0.20, f"锚买(收盘/中位线={ci / r.exp:.2f})"))
         mul = SELL_MUL[nm]            # P58：唯一真源 invest_model/broad_gates.py
         if r.me and r.exp == r.exp and ci > r.exp * mul and units > 0:

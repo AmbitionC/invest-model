@@ -118,7 +118,11 @@ jobs:
                 core.info(`决策日 ${planDate} 的计划已发过且非当日（盘中旧数据重算），跳过。`);
                 return;
               }
-              const stripHead = s => (s || '').split('\n').slice(1).join('\n').trim();
+              // 比对前剥掉头行 + 末尾 cc 提及（XV-3，2026-08-08）：FC 通道（gh_notify）
+              // 发的评论带「cc @xxx」尾巴，此前不剥＝同内容 bump 永远比对不相等，
+              // 每次都以「·修订N」重发一封一模一样的计划邮件。
+              const stripHead = s => (s || '').split('\n').slice(1).join('\n')
+                .replace(/\n+cc @\S+\s*$/, '').trim();
               const fresh = stripHead(`${header}\n\n${body}`);
               if (prior.some(c => stripHead(c.body) === fresh)) {
                 core.info(`决策日 ${planDate} 内容无变化，跳过（防重复）。`);
@@ -126,8 +130,10 @@ jobs:
               }
               header2 = `## ${today} 盘后操作计划（决策日 ${planDate}·修订${prior.length + 1}）`;
             }
+            // cc 提及触发「Participating」通道邮件（与 FC 通道 gh_notify._mention 对齐；
+            // 此前 Actions 通道不带提及，Watch 级别不是 All Activity 时修订版静默不发邮件）
             await github.rest.issues.createComment({
               owner, repo, issue_number: issue.number,
-              body: `${header2}\n\n${body}`,
+              body: `${header2}\n\n${body}\n\ncc @${owner}`,
             });
             core.info(`已在 issue #${issue.number} 追加 ${today} 计划评论${prior.length ? '（修订版）' : ''}。`);

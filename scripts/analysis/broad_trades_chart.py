@@ -31,7 +31,7 @@ import sys as _sys  # noqa: E402
 # 裸跑引导 + 阶梯常量唯一真源（handoff 2026-08-08 §5：此前文件名指 scratchpad 时代
 # 临时文件、脚本一直跑不起来；改仓内 results/ 正式落地文件，阶梯档位改引 broad_gates）
 _sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from invest_model.broad_gates import LADDER_FRAC, LADDER_RUNG  # noqa: E402
+from invest_model.broad_gates import BUY_MUL, LADDER_FRAC, LADDER_RUNG, SELL_MUL  # noqa: E402
 
 FONT = "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"
 RF, CASH = 0.02, 0.02
@@ -110,9 +110,9 @@ def run(df: pd.DataFrame, ret: pd.Series | None, fmap: dict, nm: str, d0: str, m
                     sig.append(("B", FRAC[j], "ladder"))
             elif in_ep and dd >= -RUNG[0] * 0.5:
                 in_ep, armed[:] = False, True
-        elif r.we and r.exp == r.exp and ci < r.exp * (0.90 if nm == "创业板" else 1.0):
+        elif r.we and r.exp == r.exp and ci < r.exp * BUY_MUL[nm]:   # XV-5：真源
             sig.append(("B", 0.20, "anchor"))
-        mul = 1.30 * 1.10 if nm == "创业板" else 1.30
+        mul = SELL_MUL[nm]   # XV-5：此前硬编码 1.30*1.10=1.4300…02，与真源 1.43 差浮点尾数
         if r.me and r.exp == r.exp and ci > r.exp * mul and units > 0:
             sig.append(("S", 0.05, "sell"))
         for k, fr, tag in sig:

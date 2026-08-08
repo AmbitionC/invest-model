@@ -687,11 +687,15 @@ def _p30_and_alert(engine, score: float, ts: str, day: str, hhmm: str) -> list[t
     if px >= med:
         return []
     bucket = f"{hhmm[:2]}{'00' if hhmm[2:] < '30' else '30'}"   # 30 分钟桶 → 存续期重复提醒
+    # P28 三腿全算（XV-7，2026-08-08：此前盘中漏「距峰回撤≥40%」腿，EOD 计划缺席日
+    # 复盘第七段会按 MAX(p28_count) 漏记开窗）
+    peak = float(hist["close"].max())
     # 状态落库（前端强透出数据源；best-effort）
     try:
         repo.upsert("leverage_signal", pd.DataFrame([{
             "trade_date": day, "snapshot_ts": f"{day[:4]}-{day[4:6]}-{day[6:]} {ts}:00",
-            "and_active": 1, "p28_count": int(score >= 85) + int(px < med * 0.90),
+            "and_active": 1, "p28_count": (int(score >= 85) + int(px < med * 0.90)
+                                           + int(px <= peak * 0.60)),
             "close": round(px, 2), "median": round(med, 2), "fear": score,
             "detail": _json.dumps({"intraday": True, "gap": round(px / med - 1, 4)},
                                   ensure_ascii=False),

@@ -41,6 +41,22 @@ cp "$ROOT/config/config.yaml" "$BUILD/config/"
 for f in watch_etf.txt; do
   [ -f "$ROOT/config/$f" ] && cp "$ROOT/config/$f" "$BUILD/config/"
 done
+# 指数基底 CSV（2026-08-08 交叉验证 XV-1 修复）：P26 指数贵贱行、P27 宽基四腿、
+# P70 乖离率七指数、P30 盘中 AND 共振全部硬依赖 results/ 下这些 2005 起的全历史基底
+# （库内 index_daily 只有 2015 起），且代码全是「文件不存在→静默 return None」——
+# 此前不打包＝这一整层在 FC 通道静默失效（17:00 计划缺 P26/P27/P70 行、
+# broad_leg_state/index_bias_daily 不落库、盘中 P30 提醒哑火），只有 Actions bump
+# 通道（全量 checkout）能出完整计划，故一直没暴露。共 ~700K，体积可忽略。
+mkdir -p "$BUILD/results"
+for f in index_dump_000300_SH.csv index_dump_000688_SH.csv index_dump_000922_CSI.csv \
+         index_dump_000016_SH.csv index_dump_000905_SH.csv index_dump_000852_SH.csv \
+         spread_full_history.csv; do
+  if [ -f "$ROOT/results/$f" ]; then
+    cp "$ROOT/results/$f" "$BUILD/results/"
+  else
+    echo "⚠️ 缺基底 CSV results/$f（该腿提示层将静默跳过）" >&2
+  fi
+done
 
 if [ "$BUILD" = "$ROOT/dist/faas-build" ]; then
   ( cd "$BUILD" && zip -qr "$ROOT/dist/invest-faas.zip" . )

@@ -656,6 +656,11 @@ index_bias_daily = Table(
     Column("rank_high", Integer),                            # 窗口内第几高（1＝最高）
     Column("pct_low", Numeric(8, 6)),                        # 窗口内分位（0＝最低）
     Column("extreme", String(8)),                            # low / high / ""（前 4 才置位）
+    # 该指数价格的真实截止日（可能早于 trade_date）。2026-08-08 交叉验证 XV-4 补：
+    # 此前落库把陈旧价格盖决策日戳（同 broad_leg_state 2026-08-07 修过的坑，P70 新表
+    # 没带上）——index_daily 单腿滞后时排名/🚨推送基于旧价、且逐日复制同一旧价把前端
+    # 历史趋势画成假平线。⚠️ 消费端必须在 data_date < trade_date 时显式标注。
+    Column("data_date", String(8)),
     _created_at(),
 )
 
@@ -956,6 +961,8 @@ _COLUMN_PATCHES: dict[str, dict[str, str]] = {
                         "bias_rank": "INT",
                         # 2026-08-07：既有表需在线加列，否则 upsert 会因未知列报错
                         "data_date": "VARCHAR(8)"},
+    # 2026-08-08 XV-4：同款陈旧可见性修复（P70 表建于 0806，未带 data_date）
+    "index_bias_daily": {"data_date": "VARCHAR(8)"},
     "action_plan_account": {
         "risk_hints": "TEXT",
         "defense_pct": "DECIMAL(12,6)",

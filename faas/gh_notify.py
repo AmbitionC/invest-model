@@ -145,15 +145,22 @@ def alert(job: str, err: BaseException) -> None:
     """任务失败告警：追加到「⚠️ FaaS 定时任务告警」issue → GitHub 邮件。
 
     对应 GitHub Actions 时代的「workflow 失败邮件」。尽力而为，自身失败只打日志。
+    **同 (job, 日) 去重**（XV-5，2026-08-08）：多日数据卡死时同一根因每天最多 1 封
+    （此前 fear 落后 ×3 + 哨兵 ×2 同一天可发 5 封相同邮件，持续到修复为止）；
+    次日仍坏会再发一封＝保留「还没好」的日频心跳，不静默。
     """
     try:
-        now = bj_now().strftime("%Y-%m-%d %H:%M")
+        bj = bj_now()
+        day, hm = bj.strftime("%Y-%m-%d"), bj.strftime("%H:%M")
+        head = f"## {day} {_JOB_CN.get(job, job)}（{job}）告警"
         post_issue_comment(
             "⚠️ FaaS 定时任务告警",
             seed_body="本 issue 由 FC 定时函数在任务失败时追加告警评论（原 Actions 失败邮件的替代）。",
-            comment_body=(f"## {now} {_JOB_CN.get(job, job)}（`{job}`）告警\n\n"
+            comment_body=(f"{head}\n\n{hm} 触发：\n"
                           f"```\n{type(err).__name__}: {err}\n```\n"
-                          "详情见阿里云 FC 函数日志（invest-scheduler / invest-live-watch）。"),
+                          "详情见阿里云 FC 函数日志（invest-scheduler / invest-live-watch）。"
+                          "同任务当日仅首条入档，后续重试的细节看 FC 日志。"),
+            dedupe_prefix=head,
         )
     except Exception as e:  # noqa: BLE001 — 告警本身失败不再级联
         print(f"  (告警推送失败：{e})")

@@ -44,8 +44,8 @@ def gates(df: pd.DataFrame, nm: str, mode: str) -> dict:
     last = float(df.c.iloc[-1])
     exp = float(df.exp.iloc[-1]) if df.exp.notna().any() else float("nan")
     peak = float(df.peak.iloc[-1])
-    bm = 0.90 if nm == "创业板" else 1.00
-    sm = 1.43 if nm == "创业板" else 1.30
+    from invest_model.broad_gates import BUY_MUL, SELL_MUL   # XV-5：闸位唯一真源
+    bm, sm = BUY_MUL[nm], SELL_MUL[nm]
     return {"date": str(df.trade_date.iloc[-1]), "last": last, "exp": exp, "peak": peak,
             "buy_line": exp * bm, "sell_line": exp * sm, "bm": bm, "sm": sm,
             "dd_peak": last / peak - 1, "mode": mode}

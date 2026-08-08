@@ -252,7 +252,9 @@ def _hs300_median_hint(loop: ClosedLoop, dt: str) -> str | None:
             streak = f"；该口径自 {last_below[:6]} 起连续约 {months} 个月处上方＝慢变量防御态、非即期卖出指令"
     except Exception:  # noqa: BLE001
         streak = ""
-    return (f"指数贵贱（P26·提示）：沪深300 {last:.0f} 处全历史中位线 {med:.0f} **{side}**"
+    # hint 文案不写 markdown（P70 落地时写死的纪律：前端把 risk_hints 当纯文本渲染，
+    # ** 会原样显示——XV-5 修，用「」替代强调）
+    return (f"指数贵贱（P26·提示）：沪深300 {last:.0f} 处全历史中位线 {med:.0f}「{side}」"
             f"（{dev:+.1%}）＝{act}{roll_txt}；口径 E21（下方日未来3年年化+13.8% vs 上方-1.1%）{streak}")
 
 
@@ -356,9 +358,17 @@ def _broad_leg_states(loop: ClosedLoop, dt: str) -> list[dict]:
     """四腿的窗口判定读数——提示行 `_broad_legs_hint` 与落库 `_persist_broad_leg_state`
     共用同一份计算，保证 issue #9 的计划、库表、前端板块三处永远是同一个数。
 
-    state：buy=买入窗开 ｜ sell=卖出区 ｜ panic=恐慌抢买窗（价格未到买入闸、未过卖出闸
-    且恐慌≥75）｜ hold=持有区。判定顺序 buy→sell→panic→hold（2026-08-08 起卖出闸优先
-    于恐慌——panic 不覆盖既有闸门，与 P22/E17「独立成腿」约束一致）。
+    state：buy=买入窗开 ｜ panic=恐慌抢买窗 ｜ sell=卖出区 ｜ hold=持有区。
+
+    panic 口径（2026-08-08 交叉验证 XV-2 对齐已验证引擎）：**fear≥75 且 收盘<近5年
+    滚动中位线（r1250）**——与 long_window_backtest 恐慌买腿（B2）的价格闸同源。
+    此前只看 fear≥75：牛市高位的恐慌日也显示抢买窗（实测 43 天误报，含 2022-04
+    创业板在 5 年中位线上方 15~24% 整段＝E36 判「接飞刀」要挡的场景）。
+    判定顺序 buy→panic→sell→hold：价格闸后 panic 亮起的日子就是引擎真实出手的日子
+    （红利 2018-10/2024-01 等底部：收盘同时在 expanding 卖出闸上方、r1250 下方，
+    引擎边月度减持边恐慌抢买——显示以稀有强信号 panic 为准，卖出线仍在表格里）。
+    r1250 不足 1250 交易日（如科创50 2025-03 前）＝价格闸结构性关闭，不显示 panic
+    （引擎同款行为）。引擎另有 20 日冷却属执行节奏，窗口显示不建模。
     """
     fear = _fear_score(loop, dt)
     out: list[dict] = []
@@ -394,17 +404,16 @@ def _broad_leg_states(loop: ClosedLoop, dt: str) -> list[dict]:
                 price_buy = dd is not None and dd <= -_LADDER_RUNG[0]
             else:
                 price_buy = bool(fbuy(last, med, r1250))
-            panic = fear is not None and fear >= 75
-            # 顺序：买入窗 → 卖出闸 → 恐慌 → 持有（handoff §2.1.2，2026-08-08 修）。
-            # panic 的定义是「价格未到但恐慌≥75」（见本函数 docstring），此前 panic 排在
-            # 卖出闸前面，fear≥75 时价格已过卖出闸也显示 🟢恐慌抢买窗——与 P22/E17
-            # 「独立成腿、不覆盖既有闸门」的约束直接冲突。
+            # 恐慌抢买窗＝已验证引擎 B2 腿的两条 AND：fear≥75 + 收盘<近5年滚动中位线
+            # （XV-2，2026-08-08：此前无价格闸、43 天高位误报；r1250 无值＝闸结构性关闭）
+            panic = (fear is not None and fear >= 75
+                     and r1250 is not None and last < r1250)
             if price_buy:
                 state = "buy"
-            elif fsell(last, med, r1250):
-                state = "sell"
             elif panic:
                 state = "panic"
+            elif fsell(last, med, r1250):
+                state = "sell"
             else:
                 state = "hold"
             out.append({
@@ -421,7 +430,6 @@ def _broad_leg_states(loop: ClosedLoop, dt: str) -> list[dict]:
                 # 吃 CSV 末行却被当作当日价用（创业板落后 8 个交易日），而计划口径行标的是
                 # 决策日 ⟹ 必须逐腿把真实数据日期透出来，让陈旧无法隐身。
                 "data_date": str(s.index[-1]),
-                "stale_td": None,   # 由 _broad_legs_hint 按交易日历回填
             })
         except Exception:  # noqa: BLE001
             continue
@@ -454,11 +462,12 @@ def _broad_legs_hint(loop: ClosedLoop, dt: str) -> str | None:
         rows.append(r)
     txt = ("宽基账户（P27 v2·独立决策·四腿）：" + " ｜ ".join(rows)
             + "。买入：" + "；".join(f"{n}{bt}" for n, _, _, _, _, _, bt, _, _ in _BROAD_LEGS)
-            + "；恐慌≥75 任意腿抢买池 50%；月度入金四腿各 25%、池内现金放货基")
+            + "；恐慌≥75 且该腿价格在近5年中位线下方时抢买池 50%（B2 价格闸，防高位接飞刀）；"
+              "月度入金四腿各 25%、池内现金放货基")
     if stale:
         txt += ("。🔴 数据陈旧告警：" + "、".join(f"{s['name']}止于{s['data_date']}" for s in stale)
                 + f"（决策日 {dt}）——该腿的窗口判定与容错自检行建立在过期价格上，"
-                "修复路径＝`update.BENCHMARKS` 已于 20260807 补齐四腿+七腿指数日更，"
+                "修复路径＝update.BENCHMARKS 已于 20260807 补齐四腿+七腿指数日更，"
                 "待下一次 data-update 跑完即自愈；若本行持续出现说明日更未生效")
     return txt
 
@@ -538,19 +547,25 @@ def _index_bias_states(loop: ClosedLoop, dt: str) -> list[dict]:
     return out
 
 
-def _bias_extreme_hint(sts: list[dict]) -> str | None:
+def _bias_extreme_hint(sts: list[dict], dt: str | None = None) -> str | None:
     """P70 提示行：近十年前 4 才触发 🚨（→ issue #9 评论 → 邮件）；否则给一行状态。
 
     **提示-only：这一行不改任何仓位、不产生任何操作项。**
+    价格陈旧（该指数真实数据日 < 决策日）时逐条标注（XV-4）——排名基于旧价必须可见。
     """
     if not sts:
         return None
+
+    def _stale(s: dict) -> str:
+        d = str(s.get("date") or "")
+        return f"⚠️价格截至{d}" if dt and d and d < str(dt) else ""
+
     hit = [s for s in sts if s["extreme"]]
     if hit:
         seg = "；".join(
             f"{s['name']} 乖离率 {s['bias60']:+.1%}＝近十年第 "
             f"{s['rank_low'] if s['extreme'] == 'low' else s['rank_high']} "
-            f"{'低' if s['extreme'] == 'low' else '高'}（{s['win']}日窗）"
+            f"{'低' if s['extreme'] == 'low' else '高'}（{s['win']}日窗）{_stale(s)}"
             for s in sorted(hit, key=lambda x: min(x["rank_low"], x["rank_high"])))
         return ("🚨 乖离率极值：" + seg
                 + "。⚠️ 这是读数不是信号——乖离率已在六个口径上全部验证失败"
@@ -558,7 +573,7 @@ def _bias_extreme_hint(sts: list[dict]) -> str | None:
                   "尤其涨到极值后历史上是继续涨（E37/E57）。仓位仍只由中位线锚决定。")
     near = sorted(sts, key=lambda s: min(s["rank_low"], s["rank_high"]))[:3]
     seg = "；".join(f"{s['name']} {s['bias60']:+.1%}（第{s['rank_low']}低/第{s['rank_high']}高）"
-                   for s in near)
+                   f"{_stale(s)}" for s in near)
     return f"乖离率（读数·不接买卖闸）：最接近极值的三条 {seg}｜前 {BIAS_TOPK} 才推送"
 
 
@@ -570,7 +585,9 @@ def _persist_index_bias_daily(loop: ClosedLoop, dt: str, sts: list[dict]) -> Non
              "close": round(s["close"], 4), "ma60": round(s["ma60"], 4),
              "bias60": round(s["bias60"], 6), "win_days": s["win"],
              "rank_low": s["rank_low"], "rank_high": s["rank_high"],
-             "pct_low": round(s["pct_low"], 6), "extreme": s["extreme"]} for s in sts]
+             "pct_low": round(s["pct_low"], 6), "extreme": s["extreme"],
+             # 真实价格截止日（XV-4）：陈旧不可再盖决策日戳隐身
+             "data_date": s.get("date")} for s in sts]
     loop.repo.upsert("index_bias_daily", pd.DataFrame(rows), ["trade_date", "code"])
 
 
@@ -689,7 +706,7 @@ def _fault_tolerance_hint(loop: ClosedLoop, dt: str, cost_map: dict,
                         f"按现价还需后备 {need:,.0f} 元才能压回安全线")
         else:
             rows.append(f"{st['name']} 均价≈{cost_idx:.0f}点 ⚠高于中位线 {med:.0f}，"
-                        f"且现价也在线上＝**这个价位买不回容错，只能等**")
+                        f"且现价也在线上＝这个价位买不回容错，只能等")
     if not rows:
         return None
     return ("容错自检（P51·提示）：" + " ｜ ".join(rows)
@@ -722,7 +739,7 @@ def _broad_no_action_hint(loop: ClosedLoop, dt: str, shares_map: dict) -> str | 
                 if held else "为何不卖：本账户暂无宽基持仓，无可卖")
     return (f"宽基不动（P52·提示）：四腿今日均未触发买卖闸——{gaps}。"
             f"{why_hold}；为何不买：价格在买入闸上方，此时买入会抬高均价、压低容错，"
-            f"而容错是一票否决项。**不动是本日的决策结果，不是系统没跑**")
+            f"而容错是一票否决项。不动是本日的决策结果，不是系统没跑")
 
 
 def _hs300_hist(loop: ClosedLoop, dt: str) -> pd.DataFrame | None:
@@ -1388,7 +1405,7 @@ def build_action_plan(engine, cfg: LoopConfig | None = None, dt: str | None = No
     try:
         _bias = _index_bias_states(loop, dt)
         if _bias:
-            _p70 = _bias_extreme_hint(_bias)
+            _p70 = _bias_extreme_hint(_bias, dt)
             if _p70:
                 hints.append(_p70)
             _persist_index_bias_daily(loop, dt, _bias)

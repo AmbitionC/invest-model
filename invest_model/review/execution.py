@@ -57,9 +57,11 @@ def reconcile(repo, asof: str) -> dict:
     for t in ("action_plan", "holding_snapshot"):
         if not repo.table_exists(t):
             return empty
+    # asset_type 为 NULL 的行也要保留（XV-7：NOT IN 的 SQL 三值逻辑会连带丢 NULL 行，
+    # 该持仓从对账里消失、已执行卖出被误判 pre_executed）
     snaps = repo.read_sql(
         "SELECT snapshot_date, code, shares FROM holding_snapshot "
-        "WHERE LOWER(asset_type) NOT IN ('cash')")
+        "WHERE asset_type IS NULL OR LOWER(asset_type) NOT IN ('cash')")
     if snaps.empty:
         return empty
     snaps["shares"] = pd.to_numeric(snaps["shares"], errors="coerce").fillna(0.0)
@@ -96,9 +98,11 @@ def reconcile(repo, asof: str) -> dict:
         for c in ("close", "low", "high"):
             px[c] = pd.to_numeric(px[c], errors="coerce")
         px["trade_date"] = px["trade_date"].astype(str)
+    # ORDER BY 显式排序（XV-7：送转窗检测取 fa.iloc[0]/[-1]，此前依赖引擎默认返回顺序，
+    # 乱序读会漏检送转、快照差分被当真实交易）
     adj = repo.read_sql(
         "SELECT code, trade_date, adj_factor FROM stock_adj "
-        "WHERE trade_date>=:s AND trade_date<=:e",
+        "WHERE trade_date>=:s AND trade_date<=:e ORDER BY trade_date",
         {"s": s0_date, "e": asof}) if repo.table_exists("stock_adj") else pd.DataFrame()
     if not adj.empty:
         adj["adj_factor"] = pd.to_numeric(adj["adj_factor"], errors="coerce")
